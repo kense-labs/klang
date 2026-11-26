@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run K Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "${workspaceFolder}/.."
+      ],
+      "preLaunchTask": "bundle"
+    },
+    {
+      "name": "Test K Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--extensionTestsPath=${workspaceFolder}/test/extension-host.js",
+        "--disable-workspace-trust",
+        "${workspaceFolder}/../build/klang-extension-fixture"
+      ],
+      "preLaunchTask": "bundle"
+    }
+  ]
+}

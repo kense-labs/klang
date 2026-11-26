@@ -1,0 +1,106 @@
+{
+  "name": "klang-language",
+  "displayName": "K Language",
+  "description": "Syntax highlighting, the K language server (diagnostics as you type, hover, go to definition, symbols, semantic highlighting, signature help) and tasks for K.",
+  "version": "0.4.0",
+  "publisher": "kense-labs",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/kense-labs/klang.git", "directory": "vscode" },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Snippets"],
+  "keywords": ["klang"],
+  "main": "./dist/extension.js",
+  "activationEvents": ["onLanguage:klang", "onTaskType:klang", "onDebugResolve:klang", "onDebugInitialConfigurations", "onDebugDynamicConfigurations:klang"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Syntax highlighting, snippets and the outline work in Restricted Mode. Running the compiler requires a trusted workspace.",
+      "restrictedConfigurations": ["klang.compilerPath", "klang.entryFile", "klang.stdlibPath", "klang.runArguments"]
+    },
+    "virtualWorkspaces": { "supported": false, "description": "K uses a compiler and source files on the extension host's filesystem." }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "bundle": "esbuild src/extension.js --bundle --platform=node --format=cjs --external:vscode --outfile=dist/extension.js",
+    "package": "npm run bundle && vsce package --no-dependencies --out klang-language.vsix",
+    "vscode:prepublish": "npm test"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.6.2",
+    "esbuild": "^0.28.2",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.2.0"
+  },
+  "contributes": {
+    "languages": [{ "id": "klang", "aliases": ["K", "klang"], "icon": { "dark": "./fileicons/klang-light-icon.svg", "light": "./fileicons/klang-dark-icon.svg" }, "extensions": [".k"], "configuration": "./language-configuration.json" }],
+    "grammars": [
+      { "language": "klang", "scopeName": "source.klang", "path": "./syntaxes/klang.tmLanguage.json" },
+      { "scopeName": "markdown.klang.codeblock", "path": "./syntaxes/klang.markdown.json", "injectTo": ["text.html.markdown"], "embeddedLanguages": { "meta.embedded.block.klang": "klang" } }
+    ],
+    "snippets": [{ "language": "klang", "path": "./snippets/klang.json" }],
+    "commands": [
+      { "command": "klang.check", "title": "Check Program", "category": "K", "enablement": "editorLangId == klang && isWorkspaceTrusted" },
+      { "command": "klang.run", "title": "Run with JIT", "category": "K", "icon": "$(play)", "enablement": "editorLangId == klang && isWorkspaceTrusted" },
+      { "command": "klang.build", "title": "Build Executable", "category": "K", "enablement": "editorLangId == klang && isWorkspaceTrusted" },
+      { "command": "klang.generateC", "title": "Generate C", "category": "K", "enablement": "editorLangId == klang && isWorkspaceTrusted" },
+      { "command": "klang.showOutput", "title": "Show Compiler Output", "category": "K" },
+      { "command": "klang.restartServer", "title": "Restart Language Server", "category": "K", "enablement": "isWorkspaceTrusted" }
+    ],
+    "menus": {
+      "editor/title": [{ "command": "klang.run", "when": "editorLangId == klang && isWorkspaceTrusted", "group": "navigation" }]
+    },
+    "keybindings": [
+      { "command": "klang.run", "key": "ctrl+shift+b", "mac": "cmd+shift+b", "when": "editorLangId == klang && editorTextFocus && isWorkspaceTrusted && config.klang.useRunKeybindings" },
+      { "command": "klang.run", "key": "ctrl+f5", "when": "editorLangId == klang && editorTextFocus && isWorkspaceTrusted && config.klang.useRunKeybindings && debugState == inactive" },
+      { "command": "klang.run", "key": "f5", "when": "editorLangId == klang && editorTextFocus && isWorkspaceTrusted && config.klang.useRunKeybindings && debugState == inactive" }
+    ],
+    "debuggers": [{
+      "type": "klang",
+      "label": "K: Run with JIT",
+      "languages": ["klang"],
+      "configurationAttributes": {
+        "launch": {
+          "required": [],
+          "properties": {
+            "program": { "type": "string", "description": "Entry file. Defaults to klang.entryFile or the active K file.", "default": "${file}" }
+          }
+        }
+      },
+      "initialConfigurations": [{ "type": "klang", "request": "launch", "name": "K: Run with JIT", "noDebug": true }],
+      "configurationSnippets": [{
+        "label": "K: Run with JIT",
+        "description": "Run K in a task terminal using the compiler's JIT (no debugger).",
+        "body": { "type": "klang", "request": "launch", "name": "K: Run with JIT", "noDebug": true }
+      }]
+    }],
+    "configuration": {
+      "title": "K",
+      "properties": {
+        "klang.compilerPath": { "type": "string", "default": "", "scope": "resource", "description": "Compiler executable or command on PATH. Empty searches klang and build/{Release,Debug}/klang in the workspace, then PATH. Relative paths use the workspace folder. Supports ${workspaceFolder}." },
+        "klang.entryFile": { "type": "string", "default": "", "scope": "resource", "description": "Program entry file, relative to the workspace folder. Empty checks/runs the current file. Set this when editing imported modules. Supports ${workspaceFolder}." },
+        "klang.stdlibPath": { "type": "string", "default": "", "scope": "resource", "description": "Standard-library directory passed as --stdlib. Empty uses the compiler's default lookup (including KLANG_STDLIB). Supports ${workspaceFolder}." },
+        "klang.useLanguageServer": { "type": "boolean", "default": true, "scope": "window", "description": "Start the compiler's language server (klang lsp) for diagnostics as you type, hover, go to definition, symbols, semantic highlighting and signature help. A compiler without it, or this off, checks saved files instead (klang.checkOnSave)." },
+        "klang.checkOnSave": { "type": "boolean", "default": true, "scope": "resource", "description": "Without the language server: check saved K files on open and save. Checks wait until open K files in the same workspace folder are saved." },
+        "klang.useRunKeybindings": { "type": "boolean", "default": true, "description": "Run with JIT on Ctrl+Shift+B (Cmd+Shift+B on macOS), F5, and Ctrl+F5 while editing K. Disable to use VS Code's usual task/debug keybindings." },
+        "klang.checkTimeout": { "type": "number", "default": 15000, "minimum": 1000, "maximum": 300000, "scope": "resource", "description": "Maximum time in milliseconds for a background compiler check." },
+        "klang.runArguments": { "type": "array", "items": { "type": "string" }, "default": [], "scope": "resource", "description": "Program arguments passed after -- by Run Program. Each item is one argument." }
+      }
+    },
+    "taskDefinitions": [{
+      "type": "klang", "required": ["action"],
+      "properties": {
+        "action": { "type": "string", "enum": ["run", "check", "build", "generateC"], "description": "Compiler operation. Run uses the JIT and is the contributed build task; build makes an executable beside the source with `klang build`." },
+        "file": { "type": "string", "description": "Source file relative to the workspace folder. Defaults to klang.entryFile or the active file. Supports ${workspaceFolder} and ${file}." },
+        "output": { "type": "string", "description": "C output file for generateC; defaults to the source basename with .c." }
+      }
+    }],
+    "problemMatchers": [{
+      "name": "klang", "owner": "klang-task", "source": "K", "fileLocation": ["autoDetect", "${workspaceFolder}"],
+      "pattern": { "regexp": "^(.+?):(\\d+): (error|warning): (.*)$", "file": 1, "line": 2, "severity": 3, "message": 4 }
+    }],
+    "configurationDefaults": { "[klang]": { "editor.tabSize": 4, "editor.insertSpaces": true } }
+  }
+}

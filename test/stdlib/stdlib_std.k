@@ -1,0 +1,524 @@
+// runtime-debug: stdlib/std.k, one function group per section; the
+// expected values are worked out by hand in the comments. Valid input trips
+// none of GS_DEBUG's checks inside std.
+import std;
+
+fn scalars() {
+    print(min(3, 7), " ", max(3, 7), " ", clamp(15, 0, 10), " ", clamp(-2, 0, 10));   // 3 7 10 0
+    print(abs(-4), " ", abs(-2.5), " ", abs(1.5));                                     // 4 2.5 1.5
+    let nz: f64 = -0.0;
+    let nzf: f32 = -0.0;
+    print(abs(nz), " ", abs(nzf), " ", 1.0 / abs(nz), " ", 1.0 / abs(nzf));              // 0.0 0.0 inf inf
+    print(sign(-9), " ", sign(0), " ", sign(4), " ", sign(-0.5), " ", sign(2.0));        // -1 0 1 -1.0 1.0
+    print(lerp(0.0, 10.0, 0.25));                                                      // 2.5
+    let max_pow2: i64 = 1 << 62;
+    print(next_pow2(-10), " ", next_pow2(0), " ", next_pow2(1), " ", next_pow2(5), " ",
+          next_pow2(64));                                                              // 1 1 1 8 64
+    print(next_pow2(max_pow2 - 1) == max_pow2, " ", next_pow2(max_pow2) == max_pow2);  // true true
+    print(popcount(255), " ", popcount(0), " ", clz(1), " ", ctz(8), " ", clz(0));      // 8 0 63 3 64
+    let top: u64 = 0x8000000000000000;
+    let ones: u64 = 0xffffffffffffffff;
+    print(popcount(ones), " ", clz(top), " ", ctz(top), " ", ctz(0), " ", clz(ones));  // 64 0 63 64 0
+    var a = 1;
+    var b = 2;
+    swap(a, b);
+    print(a, " ", b);                                                                  // 2 1
+}
+
+fn hashing() {
+    print(hash(1) != hash(2), " ", hash(7) == hash(7), " ", hash("abc") == hash("abc"), " ",
+          hash("abc") != hash("abd"));                                          // true true true true
+    print(hash_combine(hash(1), hash(2)) != hash_combine(hash(2), hash(1)));   // true
+    print(hash(true) != hash(false), " ", hash(1.5) == hash(1.5));             // true true
+    let n8: i8 = -1;
+    let n16: i16 = -1;
+    let n32: i32 = -1;
+    print(hash(n8) != hash(1), " ", hash(n16) != hash(1), " ", hash(n32) != hash(1), " ",
+          hash(-1) != hash(1));                                                 // true true true true
+    print(hash(0.1) == hash(0.1), " ", hash(-1.5) != hash(1.5));               // true true
+    let q: f32 = 0.1;
+    print(hash(q) == hash(q), " ", hash(q) != hash(-q));                       // true true
+    // Floats: -0.0 equals 0.0 and hashes so, an f32 hashes as the f64 of its
+    // value, and keys that only scaling by 65536 used to tell apart (tiny or
+    // huge ones) spread over the slots of a 16384-slot table as random
+    // values would, about 7490 of them for 10000 keys.
+    let z = 0.0;
+    let one: f32 = 1.0;
+    print(hash(z) == hash(-z), " ", hash(one) == hash(1.0), " ", hash(1e-6) != hash(2e-6));   // true true true
+    for scale in [1.0, 1e-9, 1e200] {
+        var seen: bool[>..] = [];
+        push_n(seen, false, 16384);
+        var slots = 0;
+        for i in 10000 {
+            let k = (hash(i * scale) & 16383) as i64;
+            if !seen[k] { seen[k] = true; slots += 1; }
+        }
+        print(slots > 7000);                                                    // true
+    }
+    // Bytes: the same bytes hash the same wherever they lie, every prefix
+    // of a text (each length the hash reads its own way) hashes differently,
+    // and the low 12 bits, which a 4096-slot dictionary uses, spread 4096
+    // keys that differ in their last digits over as many buckets as random
+    // values would: 2594 on average, where the bound 2450 is far below and
+    // a byte-at-a-time FNV-1a, at 2360 for item_N, would already miss it.
+    let text = "the quick brown fox jumps over the lazy dog";
+    var buf: u8[>..] = [];
+    buf.append(text);
+    var same = true;
+    var distinct = true;
+    for i in text.len + 1 {
+        if hash(text[0..i]) != hash(buf[0..i]) || hash(text[i..]) != hash(buf[i..]) { same = false; }
+        for j in i { if hash(text[0..i]) == hash(text[0..j]) { distinct = false; } }
+    }
+    let inline: u8[..16] = "item_17";
+    print(same, " ", distinct, " ", hash(inline) == hash("item_17"));          // true true true
+    print(buckets("item_") > 2450, " ", buckets("v") > 2450, " ",
+          buckets("key number ") > 2450);                                      // true true true
+    // Longer keys, which the hash reads in two lanes, numbered at the end
+    // and at the start.
+    print(buckets("a key long enough to be read in two lanes, number ") > 2450, " ",
+          buckets_front(" is the number in front of this long key") > 2450);   // true true
+}
+
+// How many of 4096 buckets the low 12 bits of the hashes of prefix0 ..
+// prefix4095 fill.
+fn buckets(prefix: u8[:]) -> i64 {
+    var seen: bool[>..] = [];
+    for b in 4096 { seen.push(false); }
+    var key: u8[>..] = [];
+    var n = 0;
+    for i in 4096 {
+        key.clear();
+        format(key, prefix, i);
+        let b = (hash(key) & 4095) as i64;
+        if !seen[b] { n++; }
+        seen[b] = true;
+    }
+    return n;
+}
+
+fn buckets_front(suffix: u8[:]) -> i64 {
+    var seen: bool[>..] = [];
+    for b in 4096 { seen.push(false); }
+    var key: u8[>..] = [];
+    var n = 0;
+    for i in 4096 {
+        key.clear();
+        format(key, i, suffix);
+        let b = (hash(key) & 4095) as i64;
+        if !seen[b] { n++; }
+        seen[b] = true;
+    }
+    return n;
+}
+
+fn random() {
+    var r = rng { 42 };
+    let a = rand_u64(r);
+    let b = rand_u64(r);
+    print(a != b);                                    // true
+    var r2 = rng { 42 };
+    print(rand_u64(r2) == a);                         // true
+    var ok = true;
+    for i in 100 {
+        let v = r.rand_int(6);
+        if v < 0 || v >= 6 { ok = false; }
+        let f = r.rand_flt();
+        if f < 0.0 || f >= 1.0 { ok = false; }
+    }
+    print(ok);                                        // true
+    var xs = [1, 2, 3, 4, 5, 6, 7, 8];
+    shuffle(xs, r);
+    sort(xs);
+    assert(xs == [1, 2, 3, 4, 5, 6, 7, 8]);  // Check the entire permutation.
+    print(xs[0], " ", xs[7], " ", xs.len);            // 1 8 8
+    // n = 3 * 2^61: x % n gives each result below 2^62 from three values
+    // of x and the rest from two, 3/4 of all draws where 2/3 is fair.
+    let n = 3 * 2305843009213693952;
+    var low = 0;
+    for i in 30000 { if r.rand_int(n) < 4611686018427387904 { low += 1; } }
+    print(low > 19400 && low < 20600);                // true
+}
+
+// The fixed-seed draws follow splitmix64 and rand_int's rejection by hand
+// (or in a few lines of Python with 64-bit masks).
+fn random_helpers() {
+    var r = rng { 1 };
+    var a: i64[8];
+    for i in 8 { a[i] = r.rand_range(-10, 21); }
+    // -8 -3 5 4 2 -8 -10 -7
+    print(a[0], " ", a[1], " ", a[2], " ", a[3], " ", a[4], " ", a[5], " ", a[6], " ", a[7]);
+    // Without lo, rand_range starts at 0 and draws as rand_int does.
+    var b = rng { 2 };
+    var c = rng { 2 };
+    var same_int = true;
+    for i in 100 { if b.rand_range(7) != c.rand_int(7) { same_int = false; } }
+    print(same_int);                                  // true
+    // rand_f32 is the top 24 bits over 2^24, exactly.
+    var f = rng { 3 };
+    let f0 = (f.rand_f32() * 16777216.0) as i64;
+    let f1 = (f.rand_f32() * 16777216.0) as i64;
+    let f2 = (f.rand_f32() * 16777216.0) as i64;
+    print(f0, " ", f1, " ", f2);                      // 1903380 11748975 10284008
+    var g = rng { 4 };
+    print(g.rand_range(-4611686018427387904, 9223372036854775807));   // 3347269030627216074
+
+    // Bounds: a negative lo, a size of 1, the top of i64, a huge size.
+    var ok = true;
+    var seen = [false, false, false];
+    for i in 1000 {
+        let v = r.rand_range(-5, 3);
+        if v < -5 || v > -3 { ok = false; } else { seen[v + 5] = true; }
+        if r.rand_range(-7, 1) != -7 { ok = false; }
+        let t = r.rand_range(9223372036854775806, 2);
+        if t < 9223372036854775806 { ok = false; }
+        let h = r.rand_range(-9223372036854775807 - 1, 9223372036854775807);
+        if h == 9223372036854775807 { ok = false; }
+        let x = r.rand_f32();
+        if x < 0.0 || x >= 1.0 { ok = false; }
+        if x * 16777216.0 != (x * 16777216.0) as i64 { ok = false; }
+    }
+    print(ok, " ", seen[0] && seen[1] && seen[2]);   // true true
+    var low_ok = true;
+    for i in 1000 {
+        let v = r.rand_range(3);
+        if v < 0 || v > 2 { low_ok = false; }
+    }
+    print(low_ok);                                    // true
+
+    // rand_gaussian: the same seed gives the same draws, and 100000 of them
+    // have mean 0 and variance 1 (standard errors 0.0032 and 0.0045), with
+    // 68.3% inside one standard deviation.
+    var n1 = rng { 99 };
+    var n2 = rng { 99 };
+    var same = true;
+    for i in 10 { if n1.rand_gaussian() != n2.rand_gaussian() { same = false; } }
+    print(same);                                      // true
+    let n = 100000;
+    var sum = 0.0;
+    var sum_sq = 0.0;
+    var inside = 0;
+    for i in n {
+        let z = n1.rand_gaussian();
+        sum += z;
+        sum_sq += z * z;
+        if z > -1.0 && z < 1.0 { inside += 1; }
+    }
+    let mean = sum / n;
+    let variance = sum_sq / n - mean * mean;
+    print(abs(mean) < 0.02, " ", abs(variance - 1.0) < 0.03, " ",
+          inside > 67300 && inside < 69300);          // true true true
+}
+
+fn searching() {
+    let xs = [5, 3, 9, 1, 7];
+    var s = 0;
+    each_rev(xs) { s = s * 10 + it; };
+    print(s);                                                                  // 71935
+    var chunks = 0;
+    var tot = 0;
+    each_chunk(xs, 2) { c, i => chunks += 1; tot += c.len * (i + 1); };
+    print(chunks, " ", tot);                                                   // 3 9
+    var big_chunks = 0; // chunk size larger than slice, 1 chunk containing all elements
+    each_chunk(xs, 10) { c, i => big_chunks += 1; assert(c.len == xs.len); };
+    assert(big_chunks == 1);
+    var empty_chunks = 0; // empty slice, run 0 times
+    each_chunk(xs[..0], 2) { c, i => empty_chunks += 1; };
+    assert(empty_chunks == 0);
+    let f = find(xs) { it > 6 };
+    if f { print(f); }                                                         // 9
+    print(find_index(xs) { it == 1 }, " ", find_index(xs) { it == 2 });        // 3 -1
+    print(position(xs, 7), " ", position(xs, 8), " ", contains(xs, 3), " ", contains(xs, 4));   // 4 -1 true false
+    print(any(xs) { it > 8 }, " ", all(xs) { it > 0 }, " ", all(xs) { it > 1 }, " ",
+          count(xs) { it > 4 });                                               // true true false 3
+    print(min(xs), " ", max(xs), " ", min(xs) { a, b => b < a }, " ", max(xs) { a, b => b < a });   // 1 9 9 1
+    print(min_by(xs) { -it }, " ", max_by(xs) { -it }, " ", last(xs));         // 2 3 7
+    let sorted = [1, 3, 5, 7, 9];
+    print(lower_bound(sorted) { it < 6 });                                     // 3
+    let p, found = binary_search(sorted, 7);
+    print(p, " ", found);                                                      // 3 true
+    let q, found2 = binary_search(sorted, 4);
+    print(q, " ", found2);                                                     // 2 false
+    let desc = [10, 8, 6, 4, 2];
+    let r, found3 = binary_search(desc, 8) {a, b => b < a};
+    let s, found4 = binary_search(desc, 5) { a, b => b < a };
+    print(r, " ", found3, " ", s, " ", found4);                                // 1 true 3 false
+    print(find("hello world", "o w"), " ", rfind("hello world", "o"), " ", find("abc", "x"));   // 4 7 -1
+    print(find("aab", "ab"), " ", rfind("abab", "ab"), " ", find("ab", ""), " ", rfind("ab", ""),
+          " ", find("a", "ab"));                                               // 1 2 0 2 -1
+    let digits = [3, 1, 4, 1, 5, 9];
+    print(find(digits, [1, 5]), " ", rfind(digits, [1]), " ", find(digits, [9, 9]));   // 3 3 -1
+    print(starts_with("hello", "he"), " ", ends_with("hello", "lo"), " ", starts_with("hi", "hello"));   // true true false
+}
+
+fn transforming() {
+    let xs = [1, 2, 3, 4];
+    let ys = map(xs) { it * it };
+    print(ys.len, " ", ys[3]);                                                 // 4 16
+    let ev = filter(xs) { it % 2 == 0 };
+    print(ev.len, " ", ev[0], " ", ev[1]);                                     // 2 2 4
+    print(fold(xs, 100) { a, x => a + x }, " ", sum(xs), " ", sum([1.5, 2.5]));   // 110 10 4.0
+    let c = concat(xs, ev);
+    print(c.len, " ", c[5]);                                                   // 6 4
+    var words: u8[][>..] = ["bb", "a", "ccc"];
+    let lens = map(words) { it.len };
+    print(lens[0], lens[1], lens[2]);                                          // 213
+}
+
+struct SortItem { key: i64, order: i64 }
+
+fn inplace() {
+    var xs = [3, 1, 2];
+    fill(xs, 7);
+    print(xs[0], xs[1], xs[2]);                                                // 777
+    var d = [0, 0, 0];
+    copy_from(d, [4, 5, 6]);
+    print(d[2]);                                                               // 6
+    var r = [1, 2, 3, 4];
+    reverse(r);
+    print(r[0], r[3]);                                                         // 41
+    var big: i64[>..] = [];
+    var g = rng { 7 };
+    for i in 100 { big.push(g.rand_int(1000)); }
+    sort(big);
+    var ok = true;
+    for i in 99 { if big[i + 1] < big[i] { ok = false; } }
+    print(ok, " ", big.len);                                                   // true 100
+    var ss = [5, 2, 8, 1];
+    sort(ss) { a, b => b < a };
+    print(ss[0], ss[3]);                                                       // 81
+    var st = [3, 1, 2, 1, 3];
+    stable_sort(st);
+    print(st[0], st[1], st[4]);                                                // 113
+    var tagged = [SortItem { 2, 0 }, SortItem { 1, 1 }, SortItem { 2, 2 }, SortItem { 1, 3 }];
+    stable_sort(tagged) { a, b => a.key < b.key };
+    assert(tagged == [SortItem { 1, 1 }, SortItem { 1, 3 }, SortItem { 2, 0 }, SortItem { 2, 2 }]);
+    var lo: u8[>..] = [];
+    lo.append("Hello World");
+    to_lower(lo);
+    print(lo);                                                                 // hello world
+    to_upper(lo);
+    print(lo);                                                                 // HELLO WORLD
+    var lower: u8[258] = [0; 258];
+    var upper: u8[258] = [0; 258];
+    for i in 256 { lower[i + 1] = i as u8; upper[i + 1] = i as u8; }
+    lower[0] = 'A'; lower[257] = 'Z';
+    upper[0] = 'a'; upper[257] = 'z';
+    to_lower(lower[1..257]);
+    to_upper(upper[1..257]);
+    for i in 256 {
+        assert(lower[i + 1] == (if i >= 65 && i <= 90 { i + 32 } else { i }) as u8);
+        assert(upper[i + 1] == (if i >= 97 && i <= 122 { i - 32 } else { i }) as u8);
+    }
+    assert(lower[0] == 'A' && lower[257] == 'Z');
+    assert(upper[0] == 'a' && upper[257] == 'z');
+    to_lower(lower[1..1]);
+    to_upper(upper[1..1]);
+}
+
+fn lengths() {
+    var xs: i64[>..<] = [1, 2, 3];
+    push_n(xs, 9, 2);
+    print(xs.len, " ", xs[4]);                                                 // 5 9
+    insert_at(xs, 1, 7);
+    print(xs[1], xs[2], xs.len);                                               // 726
+    print(remove_at(xs, 1), " ", xs[1], " ", xs.len);                          // 7 2 5
+    print(swap_remove(xs, 0), " ", xs[0], " ", xs.len);                        // 1 9 4
+    retain(xs) { it != 9 };
+    print(xs.len, " ", xs[0], xs[1]);                                          // 2 23
+    var dd: i64[>..<] = [1, 1, 2, 2, 2, 3];
+    dedup(dd);
+    print(dd.len, " ", dd[0], dd[1], dd[2]);                                   // 3 123
+    var h: i64[>..<] = [];
+    heap_push(h, 5);
+    heap_push(h, 1);
+    heap_push(h, 4);
+    heap_push(h, 2);
+    print(heap_pop(h), heap_pop(h), heap_pop(h), heap_pop(h));                 // 1245
+    var mh: i64[>..<] = [9, 3, 7, 1, 5];
+    make_heap(mh);
+    print(heap_pop(mh), heap_pop(mh));                                         // 13
+    var mx: i64[>..<] = [2, 9, 4];
+    make_heap(mx) { a, b => b < a };
+    print(heap_pop(mx) { a, b => b < a });                                     // 9
+    var lim: i64[..4] = [1];
+    push_n(lim, 2, 2);
+    print(lim.len, lim[2]);                                                    // 32
+}
+
+fn strings() {
+    var o: u8[>..] = [];
+    format_int(o, 255, 16, 6, ' ');
+    o.push('|');
+    format_int(o, -42, 10, 5, '0');
+    o.push('|');
+    format_uint(o, 5, 2, 8, '0');
+    print(o);                                                                  //     ff|-0042|00000101
+    var small: u8[..16] = [];
+    format_int(small, -7, 10, 4, '0');
+    small.push('|');
+    format_uint(small, 255, 16, 0, ' ');
+    print(small);                                                              // -007|ff
+    var f: u8[>..] = [];
+    format_flt(f, 3.14159, 2);
+    f.push(' ');
+    format_flt(f, -2.5, 0);
+    f.push(' ');
+    format_flt(f, 0.005, 2);
+    print(f);                                                                  // 3.14 -3 0.01
+    // The exact value rounds, not x * 10^d: 0.49999999999999994 is below a
+    // half, 1e19 and 1.8e19 scale past 2^63, 0.1 has its binary digits at
+    // 25 places, and 5e-324 is the smallest subnormal.
+    var g: u8[>..] = [];
+    format_flt(g, 0.49999999999999994, 0);
+    g.push(' ');
+    format_flt(g, 1e19, 1);
+    g.push(' ');
+    format_flt(g, -1.8e19, 0);
+    g.push(' ');
+    format_flt(g, 0.1, 25);
+    g.push(' ');
+    format_flt(g, 9.995, 2);
+    g.push(' ');
+    format_flt(g, 999.9996, 3);
+    g.push(' ');
+    format_flt(g, 5e-324, 2);
+    print(g);   // 0 10000000000000000000.0 -18000000000000000000 0.1000000000000000055511151 9.99 1000.000 0.00
+    var h: u8[>..] = [];
+    format_flt(h, 5e-324, 330);
+    print(h.len, " ", h[h.len - 7..]);                                         // 332 4940656
+    h.resize(0);
+    format_flt(h, 1.7976931348623157e308, 0);
+    print(h.len, " ", h[..10]);                                                // 309 1797693134
+    let negzero: f64 = -0.0;
+    h.resize(0);
+    format_flt(h, negzero, 0);
+    h.push(' ');
+    format_flt(h, negzero, 2);
+    h.push(' ');
+    format_flt(h, negzero, 20);
+    h.push(' ');
+    format_flt(h, 0.0, 2);
+    print(h);                                                                  // -0 -0.00 -0.00000000000000000000 0.00
+    let v, ok = parse_int("-123");
+    print(v, " ", ok);                                                         // -123 true
+    let v2, ok2 = parse_int("12x");
+    print(v2, " ", ok2);                                                       // 0 false
+    let v3, ok3 = parse_int("ff", 16);
+    print(v3, " ", ok3);                                                       // 255 true
+    let u, oku = parse_uint("18446744073709551615");
+    print(u, " ", oku);                                                        // 18446744073709551615 true
+    let u2, oku2 = parse_uint("-1");
+    print(u2, " ", oku2);                                                      // 0 false
+    let fl, okf = parse_flt("-1.5e2");
+    print(fl, " ", okf);                                                       // -150.0 true
+    let fl2, okf2 = parse_flt("abc");
+    print(okf2);                                                               // false
+    // 2^53 + 1 takes 54 bits: the mantissa rounds (to even) as it converts.
+    let fl3, okf3 = parse_flt("9007199254740993");
+    print(fl3 == 9007199254740992.0, " ", okf3);                               // true true
+    // print and format write the non-finite values as inf, -inf and nan, and
+    // parse_flt reads exactly those spellings back.
+    let pinf, piok = parse_flt("inf");
+    let ninf, niok = parse_flt("-inf");
+    let pnan, pnok = parse_flt("nan");
+    print(pinf, " ", ninf, " ", pnan, " ", piok, " ", niok, " ", pnok);        // inf -inf nan true true true
+    let ri, riok = parse_flt(str(pinf));
+    let rni, rniok = parse_flt(str(ninf));
+    let rn, rnok = parse_flt(str(pnan));
+    print(riok, " ", rniok, " ", rnok, " ", ri == pinf, " ", rni == ninf,
+          " ", rn != rn);                                                      // true true true true true true
+    var fb: u8[>..] = [];
+    format(fb, pinf);
+    let fi, fiok = parse_flt(fb);
+    fb.resize(0);
+    format(fb, ninf);
+    let fni, fniok = parse_flt(fb);
+    fb.resize(0);
+    format(fb, pnan);
+    let fnan, fnanok = parse_flt(fb);
+    print(fiok, " ", fniok, " ", fnanok, " ", fi == pinf, " ", fni == ninf,
+          " ", fnan != fnan);                                                  // true true true true true true
+    // Only the spellings above, not strtod's wider set.
+    for bad in ["in", "infx", "infinity", "Inf", "-nan", "nanx", "nan(x)"] {
+        let bv, bok = parse_flt(bad);
+        assert(!bok && bv == 0.0);
+    }
+    print(compare("abc", "abd"), " ", compare("b", "a"), " ", compare("a", "a"), " ",
+          compare("ab", "abc"));                                               // -1 1 0 -1
+    print(trim("  hi \n"), "|", trim_start("  x"), "|", trim_end("y  "), "|");   // hi|x|y|
+    print(trim("\x0bX\x0c").len, " ", words("a\x0bb\x0cc").len);               // 1 3
+    let parts = split("a,b,,c", ',');
+    print(parts.len, " ", parts[0], parts[3], " ", parts[2].len);              // 4 ac 0
+    var n = 0;
+    each_split("one two three", ' ') { n += it.len; };
+    print(n);                                                                  // 11
+    var m = 0;
+    each_split("a--b--c", "--") { m += 1; };
+    print(m);                                                                  // 3
+    let fields = split("::x::y::::z", "::");
+    print(fields.len, " ", fields[1], fields[2], fields[4], " ", fields[0].len,
+          fields[3].len);                                                      // 5 xyz 00
+    let over = split("aaa", "aa");
+    print(over.len, " ", over[0].len, " ", over[1]);                           // 2 0 a
+    let whole = split("a b", "");
+    print(whole.len, " ", whole[0]);                                           // 1 a b
+    let key, value, kv = split_once("k=v=w", '=');
+    print(key, "|", value, "|", kv);                                           // k|v=w|true
+    let ka, va, okc = split_once("a::b::c", "::");
+    print(ka, "|", va, "|", okc);                                              // a|b::c|true
+    let nf, nfa, nfok = split_once("abc", "x");
+    print(nf, "|", nfa.len, "|", nfok);                                        // abc|0|false
+    let nb, nba, nbok = split_once("abc", 'x');
+    print(nb, "|", nba.len, "|", nbok);                                        // abc|0|false
+    let lead, rest, lok = split_once("=x", '=');
+    print(lead.len, "|", rest, "|", lok);                                      // 0|x|true
+    let body, tail, tok = split_once("ab--", "--");
+    print(body, "|", tail.len, "|", tok);                                      // ab|0|true
+    let es, esa, esok = split_once("", ',');
+    let es2, esa2, esok2 = split_once("", "--");
+    print(es.len, esa.len, esok, " ", es2.len, esa2.len, esok2);               // 00false 00false
+    let eb, ea, eok = split_once("ab", "");
+    print(eb, "|", ea.len, "|", eok);                                          // ab|0|false
+    let lng, lnga, lngok = split_once("ab", "abc");
+    print(lng, "|", lnga.len, "|", lngok);                                     // ab|0|false
+    var buf: u8[>..] = [];
+    format(buf, "name: goose");
+    let bk, bv, bok = split_once(buf, ": ");
+    print(bk, "|", bv, "|", bok);                                              // name|goose|true
+    var line: u8[>..] = [];
+    format(line, "  take \t the\r\nsword  ");
+    let cmd = words(line);
+    print(cmd.len, " ", cmd[0], "|", cmd[1], "|", cmd[2]);                     // 3 take|the|sword
+    print(cmd[0] == "take", " ", words("").len, " ", words(" \t\r\n ").len);   // true 0 0
+    var wl = 0;
+    each_word(" go north\n") { wl = wl * 10 + it.len; };
+    print(wl);                                                                 // 25
+    var j: u8[>..] = [];
+    join(j, parts, "+");
+    print(j);                                                                  // a+b++c
+    var rp: u8[>..] = [];
+    format_replaced(rp, "the cat sat", "at", "og");
+    print(rp);                                                                 // the cog sog
+    var cps = 0;
+    var last_cp = 0;
+    each_utf8("héllo€") { cps += 1; last_cp = it; };
+    print(cps, " ", last_cp);                                                  // 6 8364
+    var u: u8[>..] = [];
+    push_utf8(u, 8364);
+    push_utf8(u, 233);
+    push_utf8(u, 65);
+    print(u.len, " ", u[0], " ", u[3], " ", u[5]);                             // 6 226 195 65
+}
+
+fn main() {
+    scalars();
+    hashing();
+    random();
+    random_helpers();
+    searching();
+    transforming();
+    inplace();
+    lengths();
+    strings();
+}

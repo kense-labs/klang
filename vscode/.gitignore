@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.vsix
+!klang-language.vsix
+.vscode-test/

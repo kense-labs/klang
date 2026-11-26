@@ -1,0 +1,144 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
+const textmate = require('vscode-textmate');
+const oniguruma = require('vscode-oniguruma');
+
+const grammarPath = path.resolve(__dirname, '../syntaxes/klang.tmLanguage.json');
+const grammarPromise = (async () => {
+    const wasm = fs.readFileSync(require.resolve('vscode-oniguruma/release/onig.wasm'));
+    await oniguruma.loadWASM(wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength));
+    const registry = new textmate.Registry({
+        onigLib: Promise.resolve({ createOnigScanner: patterns => new oniguruma.OnigScanner(patterns), createOnigString: value => new oniguruma.OnigString(value) }),
+        loadGrammar: async () => textmate.parseRawGrammar(fs.readFileSync(grammarPath, 'utf8'), grammarPath)
+    });
+    return registry.loadGrammar('source.klang');
+})();
+
+async function tokenize(source) {
+    const grammar = await grammarPromise;
+    let state = textmate.INITIAL;
+    return source.split('\n').map(line => {
+        const result = grammar.tokenizeLine(line, state);
+        state = result.ruleStack;
+        return result.tokens.map(token => ({ text: line.slice(token.startIndex, token.endIndex), scopes: token.scopes }));
+    });
+}
+const has = (tokens, text, scope) => tokens.some(token => token.text === text && token.scopes.some(item => item.startsWith(scope)));
+
+test('TextMate highlights nested comments and recovers after closing them', async () => {
+    const lines = await tokenize('/* outer\n /* inner */ still outer\n*/ fn main() {}');
+    assert.ok(lines[1].every(token => token.scopes.includes('comment.block.klang')));
+    assert.ok(has(lines[2], 'main', 'entity.name.function'));
+});
+
+test('numeric ranges, hex floats and string escapes have correct scopes', async () => {
+    const [numbers, string] = await tokenize('1..2 0x1.8p3 0x1p-2 2.5e-3 18446744073709551615\n"ok\\n\\x41 bad\\q"');
+    assert.ok(has(numbers, '1', 'constant.numeric.integer'));
+    assert.ok(has(numbers, '..', 'keyword.operator'));
+    for (const value of ['0x1.8p3', '0x1p-2', '2.5e-3']) assert.ok(has(numbers, value, 'constant.numeric.float'), value);
+    assert.ok(has(string, '\\n', 'constant.character.escape'));
+    assert.ok(has(string, '\\x41', 'constant.character.escape'));
+    assert.ok(has(string, '\\q', 'invalid.illegal.escape'));
+});
+
+test('numeric separators are highlighted as part of each literal', async () => {
+    const [line] = await tokenize('1_000 0xFF_AA 3.141_592 1_000e3 0x1.A_Bp3 0x1.8p1_0 1e1_0 1_0..2_0');
+    const scopeOf = text => line.find(token => token.text === text)?.scopes ?? [];
+    for (const value of ['1_000', '1_0', '2_0']) assert.ok(scopeOf(value).includes('constant.numeric.integer.klang'), value);
+    assert.ok(scopeOf('0xFF_AA').includes('constant.numeric.integer.hex.klang'));
+    for (const value of ['3.141_592', '1_000e3', '1e1_0']) assert.ok(scopeOf(value).includes('constant.numeric.float.klang'), value);
+    for (const value of ['0x1.A_Bp3', '0x1.8p1_0']) assert.ok(scopeOf(value).includes('constant.numeric.float.hex.klang'), value);
+    assert.ok(scopeOf('..').includes('keyword.operator.klang'));
+});
+
+test('every compiler keyword is recognized without treating from as reserved', async () => {
+    const lexer = fs.readFileSync(path.resolve(__dirname, '../../src/lexer.h'), 'utf8');
+    const table = lexer.split('#define TOKENS_KEYWORDS')[1].split('enum TType')[0];
+    const keywords = [...table.matchAll(/F\(\w+,\s*"(\w+)"\)/g)].map(match => match[1]);
+    for (const word of keywords) {
+        const [line] = await tokenize(word);
+        assert.ok(line[0].scopes.length > 1, word);
+    }
+    const [line] = await tokenize('from');
+    assert.deepEqual(line[0].scopes, ['source.klang']);
+});
+
+test('all builtin calls and namespace declarations highlight', async () => {
+    const builtins = fs.readFileSync(path.resolve(__dirname, '../../src/builtins.h'), 'utf8');
+    const names = [...builtins.matchAll(/F\(B_\w+,\s*"(\w+)"/g)].map(match => match[1]).filter(name => !['len', 'cap'].includes(name));
+    for (const name of names) {
+        const [line] = await tokenize(`${name}()`);
+        assert.ok(has(line, name, 'support.function'), name);
+    }
+    const [line] = await tokenize('thread_fn image::worker(n: i64) {}');
+    assert.ok(has(line, 'image::worker', 'entity.name.function'));
+    const [alias] = await tokenize('namespace im = image;');
+    assert.ok(has(alias, 'im', 'entity.name.namespace'));
+    assert.ok(has(alias, 'image', 'entity.name.namespace'));
+});
+
+test('deprecated is a modifier only before a function declaration', async () => {
+    const [decl] = await tokenize('deprecated "use copy_from" fn copy_into() {}');
+    assert.ok(has(decl, 'deprecated', 'storage.modifier'));
+    assert.ok(has(decl, 'fn', 'storage.type.function'));
+    assert.ok(has(decl, 'copy_into', 'entity.name.function'));
+    const [name] = await tokenize('let deprecated = 1;');
+    assert.ok(!has(name, 'deprecated', 'storage.modifier'));
+});
+
+test('export modifier and exported function declaration highlight', async () => {
+    const [line] = await tokenize('export fn CUSTOM_FUNCTION_0() -> const u8[:] {');
+    assert.ok(has(line, 'export', 'storage.modifier.klang'));
+    assert.ok(has(line, 'fn', 'storage.type.function.klang'));
+    assert.ok(has(line, 'CUSTOM_FUNCTION_0', 'entity.name.function.klang'));
+});
+
+test('""" strings are raw, span lines, and code resumes after them', async () => {
+    const lines = await tokenize('let s = """\n    fn fake() { \\n "quoted"\n    """; fn next() {}\n"""one "line" \\t"""; fn after() {}');
+    assert.ok(lines[1].every(token => token.scopes.includes('string.quoted.triple.klang')));
+    assert.ok(!has(lines[1], '\\n', 'constant.character.escape'));
+    assert.ok(has(lines[2], 'next', 'entity.name.function'));
+    assert.ok(!has(lines[3], '\\t', 'constant.character.escape'));
+    assert.ok(has(lines[3], 'after', 'entity.name.function'));
+});
+
+test('unterminated strings stop at the newline', async () => {
+    const [, line] = await tokenize('"unterminated\nfn next() {}');
+    assert.ok(has(line, 'next', 'entity.name.function'));
+});
+
+test('K fenced code blocks in Markdown are highlighted and other fences are left alone', async () => {
+    const onigLib = Promise.resolve({ createOnigScanner: patterns => new oniguruma.OnigScanner(patterns), createOnigString: value => new oniguruma.OnigString(value) });
+    const injectionPath = path.resolve(__dirname, '../syntaxes/klang.markdown.json');
+    const read = file => textmate.parseRawGrammar(fs.readFileSync(file, 'utf8'), file);
+    const registry = new textmate.Registry({
+        onigLib,
+        getInjections: scope => scope === 'text.html.markdown' ? ['markdown.klang.codeblock'] : undefined,
+        loadGrammar: async scope => ({
+            'source.klang': () => read(grammarPath),
+            'markdown.klang.codeblock': () => read(injectionPath),
+            'text.html.markdown': () => ({ scopeName: 'text.html.markdown', patterns: [] })
+        })[scope]?.()
+    });
+    const markdown = await registry.loadGrammar('text.html.markdown');
+    const source = ['Text with fn main.', '```klang', 'fn main() {', '    let x = 1;', '}', '```', '', '```c', 'fn main() {}', '```', '', '~~~ klang', 'fn tilde() {}', '~~~', 'fn after() {}'];
+    let state = textmate.INITIAL;
+    const lines = source.map(line => {
+        const result = markdown.tokenizeLine(line, state);
+        state = result.ruleStack;
+        return result.tokens.map(token => ({ text: line.slice(token.startIndex, token.endIndex), scopes: token.scopes }));
+    });
+    assert.ok(has(lines[2], 'main', 'entity.name.function'));
+    assert.ok(has(lines[3], 'let', 'storage.type'));
+    assert.ok(lines[2].every(token => token.scopes.includes('meta.embedded.block.klang')));
+    assert.ok(has(lines[1], 'klang', 'fenced_code.block.language'));
+    assert.ok(!lines[0].some(token => token.scopes.includes('source.klang')));
+    assert.ok(!lines[8].some(token => token.scopes.includes('source.klang')));
+    assert.ok(has(lines[12], 'tilde', 'entity.name.function'));
+    assert.ok(!lines[14].some(token => token.scopes.includes('source.klang')));
+
+});

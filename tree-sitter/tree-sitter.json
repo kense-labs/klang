@@ -1,0 +1,32 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "klang",
+      "camelcase": "Klang",
+      "title": "K",
+      "scope": "source.klang",
+      "path": ".",
+      "file-types": ["k"],
+      "highlights": "queries/highlights.scm",
+      "tags": "queries/tags.scm",
+      "injection-regex": "^klang$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "Apache-2.0",
+    "description": "K grammar for tree-sitter",
+    "authors": [{ "name": "Patrick Doane" }],
+    "links": { "repository": "https://github.com/kense-labs/klang" }
+  },
+  "bindings": {
+    "c": false,
+    "go": false,
+    "node": false,
+    "python": false,
+    "rust": false,
+    "swift": false,
+    "zig": false
+  }
+}

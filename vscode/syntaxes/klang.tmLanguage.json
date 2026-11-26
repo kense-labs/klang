@@ -1,0 +1,57 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "K",
+  "scopeName": "source.klang",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "match": "\\broot\\b(?=\\s+struct\\b)", "name": "storage.modifier.klang" },
+    { "match": "\\bdeprecated\\b(?=\\s+(\"[^\"]*\"\\s+)?(checkfree|inline|simd|recursive|export|extern|fn|thread_fn)\\b)", "name": "storage.modifier.klang" },
+    { "include": "#declarations" },
+    { "match": "\\b(?:bool|varint|[iu](?:8|16|32|64)|f(?:32|64))\\b", "name": "storage.type.klang" },
+    { "match": "\\b(?:true|false|null)\\b", "name": "constant.language.klang" },
+    { "match": "\\bself\\b", "name": "variable.language.klang" },
+    { "match": "\\b(?:if|else|while|for|in|loop|block|guard|defer|match|return|break|continue)\\b", "name": "keyword.control.klang" },
+    { "match": "\\b(?:import|namespace|as)\\b", "name": "keyword.other.klang" },
+    { "match": "\\b(?:struct|enum|type|fn|thread_fn|let|var|const)\\b", "name": "storage.type.klang" },
+    { "match": "\\b(?:export|extern|simd|recursive|pad|reusable)\\b", "name": "storage.modifier.klang" },
+    { "include": "#numbers" },
+    { "match": "\\b(?:print|str|format|assert|abort|exit|hardware_threads|thread_spawn|thread_spawn_contained|thread_wait|qput|qget|qpoll|qlimit|default|copy|move_from|to_bytes|bytes_of|from_bytes|embed_shader|embed_file|src_file|src_line|index_of|range_index|check_length|push|append|pop|pop_n|resize|clear|alloc_index|alloc_ref|free|alloc_slice|realloc_slice|free_slice)\\b(?=\\s*[<(])", "name": "support.function.klang" },
+    { "match": "(?<=\\.)\\b(?:len|cap)\\b", "name": "support.variable.property.klang" },
+    { "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*::)", "name": "entity.name.namespace.klang" },
+    { "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()", "name": "entity.name.function.klang" },
+    { "match": "\\b[A-Z][A-Z0-9_]*\\b", "name": "constant.other.klang" },
+    { "match": "\\b[A-Z][A-Za-z0-9_]*\\b", "name": "entity.name.type.klang" },
+    { "match": "\\.==|\\.!=|\\.=|\\.\\.|::|->|=>|<<=?|>>=?|[+*/%=&|^!<>-]=?|[?~]", "name": "keyword.operator.klang" },
+    { "match": "[{}\\[\\]()]", "name": "punctuation.section.klang" },
+    { "match": "[.,;:]", "name": "punctuation.separator.klang" }
+  ],
+  "repository": {
+    "comments": { "patterns": [
+      { "name": "comment.line.double-slash.k", "begin": "//", "end": "$" },
+      { "include": "#block-comment" }
+    ] },
+    "block-comment": { "name": "comment.block.klang", "begin": "/\\*", "end": "\\*/", "patterns": [{ "include": "#block-comment" }] },
+    "strings": { "patterns": [
+      { "name": "string.quoted.triple.klang", "begin": "\"\"\"", "end": "\"\"\"" },
+      { "name": "string.quoted.double.klang", "begin": "\"", "end": "\"|$", "patterns": [{ "include": "#escapes" }] },
+      { "name": "string.quoted.single.klang", "begin": "'", "end": "'|$", "patterns": [{ "include": "#escapes" }] }
+    ] },
+    "escapes": { "patterns": [
+      { "match": "\\\\(?:[ntr0\\\\\"']|x[0-9a-fA-F]{2})", "name": "constant.character.escape.klang" },
+      { "match": "\\\\.", "name": "invalid.illegal.escape.klang" }
+    ] },
+    "declarations": { "patterns": [
+      { "match": "\\b(fn|thread_fn)\\s+((?:::)?(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "storage.type.function.klang" }, "2": { "name": "entity.name.function.klang" } } },
+      { "match": "\\b(struct|enum|type)\\s+((?:::)?(?:[A-Za-z_][A-Za-z0-9_]*::)*[A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "storage.type.klang" }, "2": { "name": "entity.name.type.klang" } } },
+      { "match": "\\b(namespace)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)\\s*([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "keyword.other.klang" }, "2": { "name": "entity.name.namespace.klang" }, "3": { "name": "keyword.operator.klang" }, "4": { "name": "entity.name.namespace.klang" } } },
+      { "match": "\\b(namespace)\\s+([A-Za-z_][A-Za-z0-9_]*)", "captures": { "1": { "name": "keyword.other.klang" }, "2": { "name": "entity.name.namespace.klang" } } }
+    ] },
+    "numbers": { "patterns": [
+      { "match": "\\b0[xX][0-9a-fA-F]+(?:_[0-9a-fA-F]+)*(?:\\.[0-9a-fA-F]+(?:_[0-9a-fA-F]+)*)?[pP][+-]?[0-9]+(?:_[0-9]+)*", "name": "constant.numeric.float.hex.klang" },
+      { "match": "\\b0[xX][0-9a-fA-F]+(?:_[0-9a-fA-F]+)*", "name": "constant.numeric.integer.hex.klang" },
+      { "match": "\\b[0-9]+(?:_[0-9]+)*(?:\\.[0-9]+(?:_[0-9]+)*(?:[eE][+-]?[0-9]+(?:_[0-9]+)*)?|[eE][+-]?[0-9]+(?:_[0-9]+)*)", "name": "constant.numeric.float.klang" },
+      { "match": "\\b[0-9]+(?:_[0-9]+)*", "name": "constant.numeric.integer.klang" }
+    ] }
+  }
+}

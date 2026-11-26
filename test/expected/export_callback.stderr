@@ -1,0 +1,1 @@
+klang runtime error: export fn on_callback was called by C that K code called, before it returned

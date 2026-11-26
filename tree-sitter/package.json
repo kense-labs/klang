@@ -1,0 +1,12 @@
+{
+  "name": "tree-sitter-klang",
+  "private": true,
+  "description": "Pins the tree-sitter CLI that build.py generates the K parser with",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "tree-sitter-cli": "0.25.8"
+  },
+  "allowScripts": {
+    "tree-sitter-cli@0.25.8": true
+  }
+}
