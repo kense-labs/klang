@@ -69,27 +69,27 @@ fn next_pow2(x: i64) -> i64 {
 
 // The bits set, and the leading / trailing zero bits, 64 for zero: the
 // runtime's (src/runtime/runtime_ext.h), one instruction where it can.
-extern fn popcount(x: u64) -> i64 = "gs_popcount";
-extern fn clz(x: u64) -> i64 = "gs_clz";
-extern fn ctz(x: u64) -> i64 = "gs_ctz";
+extern fn popcount(x: u64) -> i64 = "k_popcount";
+extern fn clz(x: u64) -> i64 = "k_clz";
+extern fn ctz(x: u64) -> i64 = "k_ctz";
 
 // x's bits rotated by n, an integer of any type taken modulo the width: a
 // negative n turns the other way. Masking n first makes its conversion to
 // i64 exact at every count type. These and byte_swap are the runtime's, so
 // that each is one instruction where the C compiler has one.
-extern fn bits_detail::rotl32(x: u32, n: i64) -> u32 = "gs_rotl32";
-extern fn bits_detail::rotl64(x: u64, n: i64) -> u64 = "gs_rotl64";
-extern fn bits_detail::rotr32(x: u32, n: i64) -> u32 = "gs_rotr32";
-extern fn bits_detail::rotr64(x: u64, n: i64) -> u64 = "gs_rotr64";
+extern fn bits_detail::rotl32(x: u32, n: i64) -> u32 = "k_rotl32";
+extern fn bits_detail::rotl64(x: u64, n: i64) -> u64 = "k_rotl64";
+extern fn bits_detail::rotr32(x: u32, n: i64) -> u32 = "k_rotr32";
+extern fn bits_detail::rotr64(x: u64, n: i64) -> u64 = "k_rotr64";
 fn rotl<N>(x: u32, n: N) -> u32 { bits_detail::rotl32(x, (n & 31) as i64) }
 fn rotl<N>(x: u64, n: N) -> u64 { bits_detail::rotl64(x, (n & 63) as i64) }
 fn rotr<N>(x: u32, n: N) -> u32 { bits_detail::rotr32(x, (n & 31) as i64) }
 fn rotr<N>(x: u64, n: N) -> u64 { bits_detail::rotr64(x, (n & 63) as i64) }
 
 // x with its bytes in the opposite order.
-extern fn bits_detail::byte_swap16(x: u16) -> u16 = "gs_byte_swap16";
-extern fn bits_detail::byte_swap32(x: u32) -> u32 = "gs_byte_swap32";
-extern fn bits_detail::byte_swap64(x: u64) -> u64 = "gs_byte_swap64";
+extern fn bits_detail::byte_swap16(x: u16) -> u16 = "k_byte_swap16";
+extern fn bits_detail::byte_swap32(x: u32) -> u32 = "k_byte_swap32";
+extern fn bits_detail::byte_swap64(x: u64) -> u64 = "k_byte_swap64";
 fn byte_swap(x: u16) -> u16 { bits_detail::byte_swap16(x) }
 fn byte_swap(x: u32) -> u32 { bits_detail::byte_swap32(x) }
 fn byte_swap(x: u64) -> u64 { bits_detail::byte_swap64(x) }
@@ -310,8 +310,8 @@ fn rand_f32(r: rng&) -> f32 { (rand_u64(r) >> 40) * (1.0 / 16777216.0) }
 
 // std imports nothing, so it names the two libm functions rand_gaussian needs
 // itself, in a namespace of their own, apart from math's sqrt and log.
-extern fn rand_detail::sqrt(x: f64) -> f64 = "gs_sqrt";
-extern fn rand_detail::log(x: f64) -> f64 = "gs_log";
+extern fn rand_detail::sqrt(x: f64) -> f64 = "k_sqrt";
+extern fn rand_detail::log(x: f64) -> f64 = "k_log";
 
 // Gaussian: the standard normal distribution (mean 0, variance 1), by
 // Marsaglia's polar method. A point
@@ -519,8 +519,8 @@ fn ends_with<T>(xs: T[:], p: T[:]) -> bool { p.len <= xs.len && xs[xs.len - p.le
 // ---- byte sets ------------------------------------------------------------------
 
 // A set of bytes, prepared by byte_set for find_any and find_pair, which the
-// runtime runs over 16 bytes at a time where it can (gs_scan_any in
-// src/runtime/runtime_impl.h, whose gs_byteset has this layout). `members`
+// runtime runs over 16 bytes at a time where it can (k_scan_any in
+// src/runtime/runtime_impl.h, whose k_byteset has this layout). `members`
 // is the set. The rest says how a block is tested for it: kind 1 to 3 by
 // comparing with that many of `bytes`, kind 4 as the range bytes[0] ..
 // bytes[0] + bytes[1], kind 0 being the empty set, and with `invert` the set
@@ -582,11 +582,11 @@ fn byte_set(bytes: u8[:]) -> ByteSet {
 }
 
 // The first i with s[i] in the set, -1 if none.
-extern fn find_any(s: const u8[:], set: const ByteSet&) -> i64 = "gs_find_any";
+extern fn find_any(s: const u8[:], set: const ByteSet&) -> i64 = "k_find_any";
 
 // find_pair, but for its check of d.
 extern fn byte_set_pair(s: const u8[:], a: const ByteSet&, d: i64,
-                          b: const ByteSet&) -> i64 = "gs_find_pair";
+                          b: const ByteSet&) -> i64 = "k_find_pair";
 
 // The first i with s[i] in a and s[i + d] in b, of those with i + d < s.len;
 // -1 if none. d >= 0.
@@ -1947,7 +1947,7 @@ extern fn float_text::ldexp(x: f64, e: i32) -> f64;
 // the runtime's own, what print writes, into out, which holds at least 17.
 // Their count, and in `point` the power of ten they are a fraction of:
 // 0.d1 d2 ... dn * 10^point.
-extern fn float_text::shortest_digits(x: f64, out: u8[:], point: i64&) -> i64 = "gs_f64_digits";
+extern fn float_text::shortest_digits(x: f64, out: u8[:], point: i64&) -> i64 = "k_f64_digits";
 
 // The double nearest to D * 10^e10, D the decimal digits text[from..to]
 // (a point among them is passed over), given an estimate v within a few

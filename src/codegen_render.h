@@ -7,7 +7,7 @@ namespace klang {
 
 // ------------------------------------------------------------------
 // Text forms (§3.7): print, str and format share them. A scalar's text
-// comes from a gs_fmt_* runtime helper writing at most GS_FMT_MAX bytes;
+// comes from a k_fmt_* runtime helper writing at most K_FMT_MAX bytes;
 // a u8 array or slice contributes its bytes as they are, and any other
 // value renders structurally into a u8[>..] builder, or through a user
 // `format` overload recorded on the call for its type.
@@ -50,7 +50,7 @@ inline bool CodeGen::SimpleText(Call *c, TypeExpr *t) {
 }
 
 inline void CodeGen::RenderLit(Loc &out, const string &text) {
-    L("GS_MEMCPY(", Top(out.stk), ", ", StrRaw(text), ", ", text.size(), ");");
+    L("K_MEMCPY(", Top(out.stk), ", ", StrRaw(text), ", ", text.size(), ");");
     Bump(out.stk, cat(text.size()));
     L(out.lenlv, " += ", text.size(), ";");
 }
@@ -97,20 +97,20 @@ inline void CodeGen::RenderLoc(Loc &out, Loc lv, TypeExpr *t, bool nested, Call 
             auto vt = t->intstorage == IS_VARINT ? ast.inttypes[IS_I64] : t;
             auto x = LoadLoc(lv, vt, ln);
             if (vt->intstorage == IS_U64)
-                RenderN(out, cat("gs_fmt_u64(", Top(out.stk), ", ", x, ")"));
+                RenderN(out, cat("k_fmt_u64(", Top(out.stk), ", ", x, ")"));
             else
-                RenderN(out, cat("gs_fmt_i64(", Top(out.stk), ", (int64_t)(", x, "))"));
+                RenderN(out, cat("k_fmt_i64(", Top(out.stk), ", (int64_t)(", x, "))"));
             return;
         }
         case TY_FLT: {
             auto x = LoadLoc(lv, t, ln);
-            if (IsF32(t)) RenderN(out, cat("gs_fmt_f32(", Top(out.stk), ", ", x, ")"));
-            else RenderN(out, cat("gs_fmt_f64(", Top(out.stk), ", (double)(", x, "))"));
+            if (IsF32(t)) RenderN(out, cat("k_fmt_f32(", Top(out.stk), ", ", x, ")"));
+            else RenderN(out, cat("k_fmt_f64(", Top(out.stk), ", (double)(", x, "))"));
             return;
         }
         case TY_BOOL: {
             auto x = LoadLoc(lv, t, ln);
-            RenderN(out, cat("gs_fmt_bool(", Top(out.stk), ", ", x, ")"));
+            RenderN(out, cat("k_fmt_bool(", Top(out.stk), ", ", x, ")"));
             return;
         }
         case TY_REF: {
@@ -141,7 +141,7 @@ inline void CodeGen::RenderLoc(Loc &out, Loc lv, TypeExpr *t, bool nested, Call 
             auto v = ArrayView(lv);
             if (IsU8(elem)) {
                 if (nested) {
-                    RenderN(out, cat("gs_fmt_quoted(", Top(out.stk), ", (const uint8_t *)(",
+                    RenderN(out, cat("k_fmt_quoted(", Top(out.stk), ", (const uint8_t *)(",
                                      v.elems, "), ", v.len, ")"));
                 } else {
                     auto n = T();
@@ -301,7 +301,7 @@ inline string CodeGen::RefArg(const Loc &lv, TypeExpr *sub, Line ln) {
         if (lv.hdr.empty() || lv.stk.empty())
             Fail(ln, "a format overload by reference needs a resizable with its own header");
         auto rr = T();
-        L("gs_rref ", rr, " = { (gs_rhdr *)&", lv.hdr, ", ", lv.stk, " };");
+        L("k_rref ", rr, " = { (k_rhdr *)&", lv.hdr, ", ", lv.stk, " };");
         return rr;
     }
     if (IsBytesT(sub)) return lv.val ? cat("(uint8_t *)&", lv.s) : lv.s;
@@ -323,7 +323,7 @@ inline string CodeGen::PrefArg(const Loc &lv, Line ln) {
     if (lv.hdr.empty() || lv.stk.empty() || lv.fl.empty() || lv.flstk.empty())
         Fail(ln, "internal: a pool reference to storage that is no pool");
     auto p = T();
-    L("gs_pref ", p, " = { &", lv.hdr, ", ", lv.stk, ", &", lv.fl, ", ", lv.flstk, " };");
+    L("k_pref ", p, " = { &", lv.hdr, ", ", lv.stk, ", &", lv.fl, ", ", lv.flstk, " };");
     return p;
 }
 
@@ -337,7 +337,7 @@ inline void CodeGen::EmitUserFormat(Loc &out, Loc lv, FnSpec *sp, Line ln) {
         r = PrefArg(out, ln);
     } else {
         r = T();
-        L("gs_rref ", r, " = { (gs_rhdr *)&", out.hdr, ", ", out.stk, " };");
+        L("k_rref ", r, " = { (k_rhdr *)&", out.hdr, ", ", out.stk, " };");
     }
     auto pt = sp->argtypes[1];
     auto arg = pool                ? PrefArg(lv, ln)
@@ -373,10 +373,10 @@ inline void CodeGen::EmitUserFormat(Loc &out, Loc lv, FnSpec *sp, Line ln) {
 inline string CodeGen::RenderFn(TypeExpr *t, Line ln) {
     auto m = Mangle(t);
     if (auto it = renderfns.find(m); it != renderfns.end()) return it->second;
-    auto name = Unique(cat("gs_render_", m));
+    auto name = Unique(cat("k_render_", m));
     renderfns[m] = name;
-    auto vt = IsResz(t) ? string("gs_rref") : IsBytesT(t) ? string("uint8_t *") : cat(CT(t), " *");
-    auto sig = cat("static void ", name, "(gs_rref gs_out, ", vt, " gs_v)");
+    auto vt = IsResz(t) ? string("k_rref") : IsBytesT(t) ? string("uint8_t *") : cat(CT(t), " *");
+    auto sig = cat("static void ", name, "(k_rref k_out, ", vt, " k_v)");
     Append(protos, sig, ";\n");
     renderqueue.push_back({ t, ln, sig });
     return name;
@@ -387,16 +387,16 @@ inline void CodeGen::EmitRenderCall(Loc &out, const Loc &lv, TypeExpr *t, Line l
     auto fn = RenderFn(t, ln);
     MarkFlush();
     auto r = T();
-    L("gs_rref ", r, " = { (gs_rhdr *)&", out.hdr, ", ", out.stk, " };");
+    L("k_rref ", r, " = { (k_rhdr *)&", out.hdr, ", ", out.stk, " };");
     auto arg = RefArg(lv, t, ln);
     L(fn, "(", r, ", ", arg, ");");
     MarkReload();
 }
 
-// A render function's body (RenderFn): the value gs_v refers to, rendered
-// into the builder gs_out as the level RenderLoc was inside of when it
+// A render function's body (RenderFn): the value k_v refers to, rendered
+// into the builder k_out as the level RenderLoc was inside of when it
 // reached it. The function takes no stack index, and none is needed: the
-// only stack it writes is the builder's, through gs_out, and it opens no
+// only stack it writes is the builder's, through k_out, and it opens no
 // stacks of its own (stkmax stays 0). Nor does it hand one on: RenderLoc is
 // run without a call, so it applies no format overload, which is where a
 // rendering calls into user code with a stack index (EmitUserFormat), and
@@ -411,14 +411,14 @@ inline void CodeGen::EmitRenderFn(RenderFnReq r) {
     ResetFnState();
     spexpr = "0";
     PushSc(SC_FN);
-    auto out = FatRefLoc("gs_out", GrowU8());
+    auto out = FatRefLoc("k_out", GrowU8());
     Loc v;
     if (IsResz(r.t)) {
-        v = FatRefLoc("gs_v", r.t);
+        v = FatRefLoc("k_v", r.t);
     } else {
         v.t = r.t;
         v.val = !IsBytesT(r.t);
-        v.s = v.val ? PointeeLv("gs_v", r.t) : string("gs_v");
+        v.s = v.val ? PointeeLv("k_v", r.t) : string("k_v");
     }
     RenderLoc(out, v, r.t, true, nullptr, r.ln);
     cscopes.clear();
@@ -471,13 +471,13 @@ inline CodeGen::Loc CodeGen::RenderToTemp(Node *a, Call *c) {
 inline string CodeGen::FmtCall(Node *a, const string &dst) {
     auto t = a->exprtype;
     if (t->kind == TY_INT) {
-        if (t->intstorage == IS_U64) return cat("gs_fmt_u64(", dst, ", ", GenX(a), ")");
-        return cat("gs_fmt_i64(", dst, ", (int64_t)(", GenX(a), "))");
+        if (t->intstorage == IS_U64) return cat("k_fmt_u64(", dst, ", ", GenX(a), ")");
+        return cat("k_fmt_i64(", dst, ", (int64_t)(", GenX(a), "))");
     }
-    if (IsF32(t)) return cat("gs_fmt_f32(", dst, ", ", GenX(a), ")");
-    if (t->kind == TY_FLT) return cat("gs_fmt_f64(", dst, ", (double)(", GenX(a), "))");
+    if (IsF32(t)) return cat("k_fmt_f32(", dst, ", ", GenX(a), ")");
+    if (t->kind == TY_FLT) return cat("k_fmt_f64(", dst, ", (double)(", GenX(a), "))");
     assert(t->kind == TY_BOOL);
-    return cat("gs_fmt_bool(", dst, ", ", GenX(a), ")");
+    return cat("k_fmt_bool(", dst, ", ", GenX(a), ")");
 }
 
 // Appends the text of `a` to the growable u8 array at lv. On a resizable
@@ -513,7 +513,7 @@ inline void CodeGen::EmitFormatInto(Loc lv, Node *a, Line ln, Call *c) {
         src = cat("(const uint8_t *)(", se.elems, ")");
     } else if (limited) {
         src = T();
-        L("uint8_t ", src, "[GS_FMT_MAX];");
+        L("uint8_t ", src, "[K_FMT_MAX];");
         L("int64_t ", n, " = ", FmtCall(a, src), ";");
     } else {
         L("int64_t ", n, " = ", FmtCall(a, Top(lv.stk)), ";");
@@ -562,7 +562,7 @@ inline vector<string> CodeGen::EmitStr(Call *c, vector<Node *> &an, Dst d0, Line
         if (!SimpleText(context, t)) {
             auto b = RenderToTemp(a, context);
             L("int64_t ", n, " = ", b.hdr, ".len;");
-            L("GS_MEMCPY(", Top(stk), ", ", b.hdr, ".base, (size_t)", n, ");");
+            L("K_MEMCPY(", Top(stk), ", ", b.hdr, ".base, (size_t)", n, ");");
         } else if (t->kind == TY_ARRAY || t->kind == TY_SLICE) {
             auto se = GenSrcElems(a);
             L("int64_t ", n, " = ", se.n, ";");
@@ -620,12 +620,12 @@ inline void CodeGen::DetectNrvo(FnSpec *sp) {
         }
         if (ok && cand) {
             NrvoDest nd;
-            nd.stk = cat("gs_dst", j);
+            nd.stk = cat("k_dst", j);
             if (rzarr) {
                 nd.prefix = true;
                 nd.ls = LenStore(sp->rets[j]->arr);
             } else {
-                nd.lenlv = cat("(*gs_rl", j, ")");
+                nd.lenlv = cat("(*k_rl", j, ")");
                 nd.fo = IsFrameObj(cand->type);
             }
             nrvo[cand] = nd;

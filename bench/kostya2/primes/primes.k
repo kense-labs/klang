@@ -6,8 +6,8 @@ import std;
 import slice_pool;
 import os;
 
-extern fn notify_start(variant: const u8[:]) = "klang_notify_start";
-extern fn notify_stop() = "klang_notify_stop";
+extern fn notify_start(variant: const u8[:]) = "k_notify_start";
+extern fn notify_stop() = "k_notify_stop";
 
 let UPPER_BOUND = 5000000;
 let PREFIX = 32338;

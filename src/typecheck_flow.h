@@ -3113,7 +3113,7 @@ inline bool TypeCheck::CheckRefRebindRoot(Node *at, VarDef *vd, const Val &rv,
                           "variable (§5.2)"));
     }
     // A pool reference is one for its whole life, carrying the freelist of
-    // the pool it points at (codegen's gs_pref): a rebind gives it a pool of
+    // the pool it points at (codegen's k_pref): a rebind gives it a pool of
     // each kind it has (§5.4).
     if (vd->ref.reusable & ~rv.reusable) {
         if (vd->ref.reusable == (RU_SLOTS | RU_SLICES)) {

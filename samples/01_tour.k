@@ -4,7 +4,7 @@
 // samples assume what this one shows.
 //
 // Build and run (from this directory):
-//   klang -o tour.c 01_tour.k && cl tour.c && tour
+//   k -o tour.c 01_tour.k && cl tour.c && tour
 
 // A function taking a slice accepts every array kind and any sub-range of
 // one, without a copy: the slice is a reference to the elements plus a count.

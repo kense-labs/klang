@@ -14,13 +14,13 @@
 // closing the window quits. `-- --frames N` stops after N frames. Either
 // way the last frame is saved as ui_todo.png.
 //
-//   klang 29_ui_todo.k
+//   k 29_ui_todo.k
 //
 // Built from the generated C, the program links the ui layer and gfx's,
-// whose paths `klang --ui-link` and `klang --gfx-link` print:
-//   klang -o ui_todo.c 29_ui_todo.k
-//   cl ui_todo.c @<klang --ui-link msvc> @<klang --gfx-link msvc>
-//   cc ui_todo.c -o ui_todo @<klang --ui-link cc> @<klang --gfx-link cc>
+// whose paths `k --ui-link` and `k --gfx-link` print:
+//   k -o ui_todo.c 29_ui_todo.k
+//   cl ui_todo.c @<k --ui-link msvc> @<k --gfx-link msvc>
+//   cc ui_todo.c -o ui_todo @<k --ui-link cc> @<k --gfx-link cc>
 
 import std;
 import vec;
@@ -73,7 +73,7 @@ fn main() {
     ui::style_from_table(ctx, colors);
 
     var tasks: Task[>..] = [];
-    tasks.push(task("Feed the goose", true));
+    tasks.push(task("Review the notes", true));
     tasks.push(task("Read docs/stdlib.md", false));
     tasks.push(task("Draw a window with ui", false));
     var entry: u8[..40] = [];

@@ -1,4 +1,4 @@
-// runtime-define: GS_DEBUG=1
+// runtime-define: K_DEBUG=1
 import std;
 
 fn main() {

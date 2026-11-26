@@ -8,7 +8,7 @@
 // set: the virtual-call idiom.
 //
 // Build and run (from this directory):
-//   klang -o shapes.c 05_shapes.k && cl shapes.c && shapes
+//   k -o shapes.c 05_shapes.k && cl shapes.c && shapes
 
 import math;
 

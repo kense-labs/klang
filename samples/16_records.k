@@ -7,7 +7,7 @@
 // customer with a dictionary keyed by slices into the orders.
 //
 // Build and run (from this directory):
-//   klang -o records.c 16_records.k && cl records.c && records
+//   k -o records.c 16_records.k && cl records.c && records
 
 import std;
 import dictionary;

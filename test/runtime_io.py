@@ -1,5 +1,5 @@
 """The runtime's standard input and files at their edges (stdlib/os.k),
-built by `klang build` and, where the JIT runs, run by `klang run`: stdin
+built by `k build` and, where the JIT runs, run by `k run`: stdin
 read as the bytes piped in, a carriage return before a line break and a
 Ctrl-Z among them, which Windows' text mode would translate and stop at;
 read_line taking off a carriage return only before a newline, never one the
@@ -52,7 +52,7 @@ def check_runtime_io(exe, base, *, jit):
     base.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="runtime-io-", dir=base) as tmp:
         root = Path(tmp)
-        env = dict(os.environ, KLANG_HOME=str(root / "home"))
+        env = dict(os.environ, K_HOME=str(root / "home"))
         source = root / "runtime_io.k"
         tc.write_text(source, PROGRAM)
         app = root / ("runtime_io" + tc.EXE_SUFFIX)
@@ -64,7 +64,7 @@ def check_runtime_io(exe, base, *, jit):
 
         code, out, err = run([exe, "build", "-o", app, source])
         if code != 0:
-            raise RuntimeError(f"runtime io: klang build:\n{out}{err}")
+            raise RuntimeError(f"runtime io: k build:\n{out}{err}")
         runners = [("built", [app])] + ([("JIT", [exe, "run", source, "--"])] if jit else [])
         cases = [("all", b"a\r\nb\x1ac", [6, 97, 13, 10, 98, 26, 99]),
                  ("lines", b"\nab\r\n", [6, 120, 13, 124, 97, 98, 124]),

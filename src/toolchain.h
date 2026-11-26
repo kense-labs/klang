@@ -2,7 +2,7 @@
 // C compiler with its C++ driver, cmake and git, found on this machine. A
 // toolchain has a style, msvc or cc, which decides how flags and response
 // files are spelled, and an id, which names what is built with it in the
-// cache. KLANG_HOME is where that cache and the compiler's settings live.
+// cache. K_HOME is where that cache and the compiler's settings live.
 #pragma once
 
 #include <filesystem>
@@ -15,7 +15,7 @@ namespace klang {
 // one kind.
 inline string KlangHome() {
     string home;
-    if (auto env = getenv("KLANG_HOME"); env && *env) home = env;
+    if (auto env = getenv("K_HOME"); env && *env) home = env;
     else {
         #ifdef _WIN32
             auto profile = getenv("USERPROFILE");
@@ -108,13 +108,8 @@ inline bool PathExists(const string &path) {
     return filesystem::exists(filesystem::path(path), ec);
 }
 
-// Pinned upstream packages still ship .goose files. Prefer a K source
-// when both extensions exist, and use its path in missing-file diagnostics.
-inline string SourcePath(const string &stem, const SourceProvider &sources = {}) {
-    auto path = cat(stem, ".k");
-    if ((sources && sources(path)) || PathExists(path)) return path;
-    auto legacy = cat(stem, ".goose");
-    return (sources && sources(legacy)) || PathExists(legacy) ? legacy : path;
+inline string SourcePath(const string &stem) {
+    return cat(stem, ".k");
 }
 
 // Renames `from` to `to`. On Windows a scanner (Defender, the indexer) may
@@ -222,7 +217,7 @@ inline string VsInstallDir() {
 // Imports the environment vcvars64.bat sets up (PATH, INCLUDE, LIB, ...)
 // into this process, so that cl and link work from here on. Running the
 // batch file costs a second or two, so what it printed is kept under
-// KLANG_HOME against the file's path and modification time; `refresh`
+// K_HOME against the file's path and modification time; `refresh`
 // ignores that. False when there is no Visual Studio with a C++ toolset.
 inline bool ImportVcvars(bool refresh) {
     auto vs = VsInstallDir();
@@ -360,8 +355,8 @@ inline Toolchain MsvcStyle(const string &name, const string &cc, const string &h
 }
 
 // The C toolchain to build with: the one `request` asks for (a name: msvc,
-// clang-cl, clang, gcc, cc; or a path), else KLANG_CC, else `cc` in
-// KLANG_HOME/config, else the first found on this machine (the order in
+// clang-cl, clang, gcc, cc; or a path), else K_CC, else `cc` in
+// K_HOME/config, else the first found on this machine (the order in
 // docs/design/packages.md §6.1). False, with `why` saying what was looked
 // for, when there is none.
 inline bool FindToolchain(string request, Toolchain &out, string &why,
@@ -370,9 +365,9 @@ inline bool FindToolchain(string request, Toolchain &out, string &why,
     ProgressStep step("finding the C compiler");
     string how = "--cc";
     if (request.empty()) {
-        if (auto env = getenv("KLANG_CC"); env && *env) {
+        if (auto env = getenv("K_CC"); env && *env) {
             request = env;
-            how = "KLANG_CC";
+            how = "K_CC";
         }
     }
     if (request.empty()) {
@@ -381,7 +376,7 @@ inline bool FindToolchain(string request, Toolchain &out, string &why,
         if (found) {
             cfg.CheckKeys({ "cc" });
             request = cfg.Str("cc");
-            how = "KLANG_HOME/config";
+            how = "K_HOME/config";
         }
     }
     auto lowered = request;
@@ -473,7 +468,7 @@ inline bool FindToolchain(string request, Toolchain &out, string &why,
         why = name.empty()
             ? "cannot find a C compiler (looked for cl, clang-cl and clang on PATH and in "
               "Visual Studio, for clang in Program Files\\LLVM, and for gcc and cc on PATH); "
-              "install Visual Studio with C++ or LLVM, or set KLANG_CC"
+              "install Visual Studio with C++ or LLVM, or set K_CC"
             : cat("cannot find the C compiler ", request, " (", how, ") on PATH or in Visual Studio");
         return false;
     #else
@@ -493,13 +488,13 @@ inline bool FindToolchain(string request, Toolchain &out, string &why,
         }
         why = name.empty()
             ? "cannot find a C compiler (looked for cc, gcc and clang on PATH); install one, "
-              "or set KLANG_CC"
+              "or set K_CC"
             : cat("cannot find the C compiler ", request, " (", how, ") on PATH");
         return false;
     #endif
 }
 
-// Everything `klang toolchain` reports: the C toolchain, cmake and git.
+// Everything `k toolchain` reports: the C toolchain, cmake and git.
 inline Tools FindTools(const string &ccrequest, bool refresh = false) {
     Tools t;
     t.home = KlangHome();
@@ -513,7 +508,7 @@ inline Tools FindTools(const string &ccrequest, bool refresh = false) {
     return t;
 }
 
-// What `klang toolchain` prints: for people, or as JSON for scripts.
+// What `k toolchain` prints: for people, or as JSON for scripts.
 // `builtin` names the modules whose packages are compiled into this
 // compiler (builtin.h), for the runners to know what runs without a build.
 inline string ToolsReport(const Tools &t, bool json, const vector<string> &builtin) {
@@ -560,7 +555,7 @@ inline string ToolsReport(const Tools &t, bool json, const vector<string> &built
     string mods;
     for (auto &m : builtin) Append(mods, mods.empty() ? "" : ", ", m);
     Append(s, "built in:     ", mods.empty() ? "no packages" : mods, "\n");
-    Append(s, "KLANG_HOME:   ", t.home, "\n");
+    Append(s, "K_HOME:   ", t.home, "\n");
     return s;
 }
 

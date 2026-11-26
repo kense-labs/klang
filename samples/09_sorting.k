@@ -6,7 +6,7 @@
 // locals, so the scratch buffer belongs to the caller and is passed in.
 //
 // Build and run (from this directory):
-//   klang -o sorting.c 09_sorting.k && cl sorting.c && sorting
+//   k -o sorting.c 09_sorting.k && cl sorting.c && sorting
 
 import std;
 import os;

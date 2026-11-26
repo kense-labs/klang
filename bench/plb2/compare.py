@@ -15,7 +15,7 @@ is compiled by the same clang at `-O3`. On Windows C and K both get
   python bench/plb2/compare.py build                  # all three languages
   python bench/plb2/compare.py build klang            # one of them
   python bench/plb2/compare.py build c --tag c-native --cflags=-march=native
-  python bench/plb2/compare.py build klang --tag klang-nosimd --no-simd --only matmul
+  python bench/plb2/compare.py build k --tag klang-nosimd --no-simd --only matmul
   python bench/plb2/compare.py run                    # timings and a ratio table
   python bench/plb2/compare.py run --only matmul --langs klang,klang-nosimd,c,c-native
   python bench/plb2/compare.py report                 # table from saved results
@@ -40,11 +40,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 BUILD = HERE / "build"
-KLANG_SRC = HERE / "klang"
+K_SRC = HERE / "klang"
 IS_WINDOWS = os.name == "nt"
 # What a program's runtime links besides libm and threads: dlopen, in libdl on
 # Linux before glibc 2.34.
-KLANG_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
+K_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
 EXE = ".exe" if IS_WINDOWS else ""
 
 BENCHES = ["nqueen", "matmul", "sudoku", "bedcov"]
@@ -94,12 +94,12 @@ def clang():
     return cc
 
 
-def klang_exe():
+def k_exe():
     for sub in ("Release", "", "RelWithDebInfo", "Debug"):
-        p = REPO / "build" / sub / ("klang" + EXE)
+        p = REPO / "build" / sub / ("k" + EXE)
         if p.exists():
             return p
-    sys.exit("no klang binary under build/")
+    sys.exit("no k binary under build/")
 
 
 def run(argv, cwd=None, check=True):
@@ -114,8 +114,8 @@ def run(argv, cwd=None, check=True):
 STRICT = ["-fstrict-aliasing"] if IS_WINDOWS else []
 # plb2's src/c/Makefile; lld does the link-time optimization on Windows.
 C_FLAGS = ["-O3", "-fwrapv", "-flto"] + STRICT + (["-fuse-ld=lld"] if IS_WINDOWS else [])
-KLANG_FLAGS = ["-O2"]
-KLANG_CFLAGS = ["-O3", "-w"] + STRICT
+K_FLAGS = ["-O2"]
+K_CFLAGS = ["-O3", "-w"] + STRICT
 # plb2's src/rust/Makefile.
 RUST_FLAGS = ["-C", "debuginfo=0", "-C", "opt-level=3"]
 
@@ -135,15 +135,15 @@ def build_klang(benches, tag="klang", extra_klang=(), extra_cflags=(), compiler=
         plain = out / "src"
         plain.mkdir(exist_ok=True)
         for b in benches:
-            text = (Path(src or KLANG_SRC) / (b + ".k")).read_text()
+            text = (Path(src or K_SRC) / (b + ".k")).read_text()
             (plain / (b + ".k")).write_text(text.replace("simd fn ", "fn "))
         src = plain
     for b in benches:
         cfile = out / (b + ".c")
-        run([compiler or klang_exe(), *KLANG_FLAGS, *extra_klang, "--standalone", "-o", cfile,
-             Path(src or KLANG_SRC) / (b + ".k")])
-        run([cc, *KLANG_CFLAGS, *extra_cflags, cfile, "-o", exe_path(tag, b)] +
-            ([] if IS_WINDOWS else ["-lm", "-pthread"] + KLANG_LIBS))
+        run([compiler or k_exe(), *K_FLAGS, *extra_klang, "--standalone", "-o", cfile,
+             Path(src or K_SRC) / (b + ".k")])
+        run([cc, *K_CFLAGS, *extra_cflags, cfile, "-o", exe_path(tag, b)] +
+            ([] if IS_WINDOWS else ["-lm", "-pthread"] + K_LIBS))
         print(f"{tag}: {exe_path(tag, b)}")
 
 
@@ -322,7 +322,7 @@ def main():
         plb2 = find_plb2() if any(l in ("c", "rust") for l in langs) else None
         for lang in langs:
             if lang == "klang":
-                build_klang(benches, args.tag or "klang", args.klang_flags.split(), args.cflags.split(),
+                build_klang(benches, args.tag or "klang", args.k_flags.split(), args.cflags.split(),
                             args.k, args.src, args.no_simd)
             elif lang == "c":
                 build_c(benches, plb2, args.tag or "c", args.cflags.split())

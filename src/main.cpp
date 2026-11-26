@@ -1,7 +1,7 @@
 // K compiler — driver. Includes establish the project-wide header order.
 
 #include "includes.h"
-#include "build_paths.h"   // KLANG_STDLIB_PATH
+#include "build_paths.h"   // K_STDLIB_PATH
 #include "utils.h"
 #include "small_vector.h"
 #include "flat_map.h"
@@ -127,22 +127,22 @@ string RelativeTo(const string &path, const string &dir) {
 }
 
 // Where the standard library lives (§11.1): an explicit --stdlib or
-// KLANG_STDLIB, else a `stdlib/` directory found by walking up from the
+// K_STDLIB, else a `stdlib/` directory found by walking up from the
 // executable (a release's, or the source tree's for a build inside it), else
-// the one CMake was configured with (KLANG_STDLIB_PATH: the source tree's, or
+// the one CMake was configured with (K_STDLIB_PATH: the source tree's, or
 // a package's install location). A directory more than one of those name is
 // in the list once, as the first named it.
 vector<string> StdlibDirs(const string &stdlibdir, const string &exe) {
     vector<string> cands;
     if (!stdlibdir.empty()) cands.push_back(cat(stdlibdir, "/"));
-    if (auto env = getenv("KLANG_STDLIB")) cands.push_back(cat(env, "/"));
+    if (auto env = getenv("K_STDLIB")) cands.push_back(cat(env, "/"));
     auto exedir = DirOf(exe);
     cands.push_back(cat(exedir, "stdlib/"));
     cands.push_back(cat(exedir, "../stdlib/"));
     cands.push_back(cat(exedir, "../../stdlib/"));
     cands.push_back(cat(exedir, "../../../stdlib/"));
-    #ifdef KLANG_STDLIB_PATH
-        if (*KLANG_STDLIB_PATH) cands.push_back(cat(KLANG_STDLIB_PATH, "/"));
+    #ifdef K_STDLIB_PATH
+        if (*K_STDLIB_PATH) cands.push_back(cat(K_STDLIB_PATH, "/"));
     #endif
     cands.push_back("stdlib/");
     vector<string> dirs;
@@ -368,15 +368,15 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                         if (std::find(req.begin(), req.end(), imppkg) == req.end())
                             req.push_back(imppkg);
                     }
-                    imppath = SourcePath(cat(ast.packages[imppkg].root, imp.path), sources);
+                    imppath = SourcePath(cat(ast.packages[imppkg].root, imp.path));
                 } else if (imp.relative) {
-                    imppath = SourcePath(cat(DirOf(path), imp.path), sources);
+                    imppath = SourcePath(cat(DirOf(path), imp.path));
                 } else {
                     // A file under this package's root; a module of a package the
                     // root declared (`import pkg;` is its entry, `import pkg.sub;`
                     // its sub.k); a blessed name, its package loaded as if
                     // the root had declared it (§4.5); the standard library.
-                    auto local = SourcePath(cat(ast.packages[pkg].root, imp.path), sources);
+                    auto local = SourcePath(cat(ast.packages[pkg].root, imp.path));
                     auto first = imp.path.substr(0, imp.path.find('/'));
                     auto rest = imp.path.size() > first.size() ? imp.path.substr(first.size() + 1)
                                                                : first;
@@ -393,19 +393,19 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                                         cat(imp.path, " is both a file of this package (", local,
                                             ") and the declared package ", first, "'s module"));
                         imppkg = it->second.pkg;
-                        imppath = SourcePath(cat(ast.packages[imppkg].root, rest), sources);
+                        imppath = SourcePath(cat(ast.packages[imppkg].root, rest));
                     } else if (blessed) {
                         try {
                             imppkg = loadblessed(*blessed);
                         } catch (CompileError &e) {
                             ImportError(filename, imp, e.msg);
                         }
-                        imppath = SourcePath(cat(ast.packages[imppkg].root, rest), sources);
+                        imppath = SourcePath(cat(ast.packages[imppkg].root, rest));
                     } else {
                         imppath = local;
                         if (!available(local)) {
                             for (auto &dir : stdlibdirs) {
-                                auto cand = SourcePath(cat(dir, imp.path), sources);
+                                auto cand = SourcePath(cat(dir, imp.path));
                                 if (available(cand)) {
                                     imppath = cand;
                                     imppkg = stdlibpkg(dir);
@@ -431,7 +431,7 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                                     Append(msg, "\nand found no standard library, looking in");
                                     for (auto &dir : stdlibdirs)
                                         Append(msg, "\n    ", ForwardSlashes(AbsolutePath(dir)));
-                                    Append(msg, "\nset --stdlib or KLANG_STDLIB to its directory");
+                                    Append(msg, "\nset --stdlib or K_STDLIB to its directory");
                                 }
                                 ImportError(filename, imp, msg);
                             }
@@ -526,7 +526,7 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
 }
 
 // Parses a program's dump as a program of its own and requires that dumping
-// that gives back the same text: what `klang --dump` of the dump written to a
+// that gives back the same text: what `k --dump` of the dump written to a
 // file would print. `path` is where the dump's diagnostics say they are.
 void CheckRoundtrip(const string &dumped, const string &path,
                     const vector<string> &stdlibdirs, const string &exedir) {
@@ -602,17 +602,17 @@ string RuntimeVersion() {
     return buf;
 }
 
-// The runtime object's C (klang --emit-runtime): the runtime that programs
+// The runtime object's C (k --emit-runtime): the runtime that programs
 // written with -o declare extern, for any program this compiler writes.
 string RuntimeObjectSource() {
-    return cat("/* The K runtime, written by `klang --emit-runtime`. Do not edit.\n"
+    return cat("/* The K runtime, written by `k --emit-runtime`. Do not edit.\n"
                "   Compile it once, with the C compiler and flags of the programs it is\n"
-               "   for, and link the object with every program `klang -o` writes (all\n"
+               "   for, and link the object with every program `k -o` writes (all\n"
                "   but --standalone ones). It needs no -D: a program hands the runtime\n"
                "   its configuration as it starts. A program from another version of\n"
-               "   the compiler fails to link against it, missing gs_rt_start_<version>. */\n\n"
-               "#define GS_SEPARATE_RUNTIME 1\n#define GS_RUNTIME_OBJECT 1\n"
-               "#define GS_NEED_THREADS 1\n#define GS_RUNTIME_VERSION ", RuntimeVersion(),
+               "   the compiler fails to link against it, missing k_rt_start_<version>. */\n\n"
+               "#define K_SEPARATE_RUNTIME 1\n#define K_RUNTIME_OBJECT 1\n"
+               "#define K_NEED_THREADS 1\n#define K_RUNTIME_VERSION ", RuntimeVersion(),
                "\n\n", RuntimeSections({ "runtime.h", "runtime_impl.h", "runtime_threads.h",
                                           "runtime_ext.h", "runtime_os.h" }));
 }
@@ -622,7 +622,7 @@ string RuntimeObjectSource() {
 // source tree layout.
 string FindRuntimeDir(const char *exe) {
     vector<string> cands;
-    if (auto env = getenv("KLANG_RUNTIME")) cands.push_back(cat(env, "/"));
+    if (auto env = getenv("K_RUNTIME")) cands.push_back(cat(env, "/"));
     auto exedir = DirOf(exe);
     cands.push_back(cat(exedir, "runtime/"));
     cands.push_back(cat(exedir, "../../src/runtime/"));
@@ -633,14 +633,14 @@ string FindRuntimeDir(const char *exe) {
         if (LoadFile(cat(dir, runtimefiles[0]), probe)) return dir;
     }
     throw CompileError { "cannot locate the runtime sources (src/runtime); "
-                         "set KLANG_RUNTIME" };
+                         "set K_RUNTIME" };
 }
 
 // Regenerates src/runtime_inline.h from src/runtime/, so the compiler binary
 // is self-contained. Anyone editing the runtime re-runs this and rebuilds.
 void GenRuntimeHeader(const char *exe) {
     auto dir = FindRuntimeDir(exe);
-    string out = "// Generated by `klang --gen-runtime-header` from src/runtime/. "
+    string out = "// Generated by `k --gen-runtime-header` from src/runtime/. "
                  "Do not edit.\n#pragma once\n\nnamespace klang {\n\n"
                  "struct RuntimeFile {\n    const char *name;\n    string_view text;\n"
                  "};\n\ninline const RuntimeFile runtime_files[] = {\n";
@@ -648,8 +648,8 @@ void GenRuntimeHeader(const char *exe) {
         string src;
         if (!LoadFile(cat(dir, rf), src))
             throw CompileError { cat("cannot read runtime file: ", dir, rf) };
-        if (src.find(")GSRT\"") != string::npos)
-            throw CompileError { cat(rf, " contains the raw-string delimiter )GSRT\"") };
+        if (src.find(")KRT\"") != string::npos)
+            throw CompileError { cat(rf, " contains the raw-string delimiter )KRT\"") };
         Append(out, "    { \"", rf, "\", string_view(\n");
         // Blank-line boundaries keep chunks stable when earlier text changes.
         // Older MSVC caps single literals at ~16K, so long paragraphs also split.
@@ -669,7 +669,7 @@ void GenRuntimeHeader(const char *exe) {
                 auto nl = src.rfind('\n', end - 1);
                 if (nl != string::npos && nl >= pos) end = nl + 1;
             }
-            Append(out, "R\"GSRT(", string_view(src).substr(pos, end - pos), ")GSRT\"\n");
+            Append(out, "R\"KRT(", string_view(src).substr(pos, end - pos), ")KRT\"\n");
             pos = end;
         }
         if (src.empty()) out += "\"\"\n";
@@ -690,7 +690,7 @@ int RunOnCompilerStack(const function<int()> &fn);
 // What --multi-test prints on a line of its own on stdout and on stderr after
 // each file, with the exit code a run on the file alone would have had and
 // the file's name as given.
-constexpr const char *MULTIMARK = "==== klang --multi-test: exit";
+constexpr const char *MULTIMARK = "==== k --multi-test: exit";
 
 // The options run, build and check share, for their help.
 constexpr const char *COMPILEOPTIONS =
@@ -702,10 +702,10 @@ R"(  --stats               Print what the compile did: the declarations parsed,
   --diagnostics json    Print the errors and warnings as JSON on stdout, and
                         the --stats lines on stderr.
   --offline             Fetch nothing: a package that is not fetched is an
-                        error at its import, which klang fetch resolves.
+                        error at its import, which k fetch resolves.
   -D NAME[=VALUE]       Define a C macro in the generated program (or -DNAME).
-  --stdlib dir          The standard library's directory (or KLANG_STDLIB);
-                        found from where klang is by default.
+  --stdlib dir          The standard library's directory (or K_STDLIB);
+                        found from where k is by default.
   --update              Fetch packages at a tag or branch again (a commit is
                         never fetched again).
   --stack-reserve size  Address space reserved per data stack, from 64K, with a
@@ -722,25 +722,25 @@ R"(  --debug               Overflow, range and tag checks that name the source
                         line they fail on.
 )";
 
-// The help on a command or topic, `klang help` or `klang --help`'s for ""
+// The help on a command or topic, `k help` or `k --help`'s for ""
 // or "help", and "" for none. Each starts with its usage lines and a blank
 // line, which a command line without a file prints.
 string HelpText(const string &topic) {
     if (topic.empty() || topic == "help") return
-R"(usage: klang <command> file.k [options]
-       klang file.k [options] [-- program args...]
+R"(usage: k <command> file.k [options]
+       k file.k [options] [-- program args...]
 
 Commands:
-  run        Compile a program and run it in this process, which klang
+  run        Compile a program and run it in this process, which k
              file.k does too.
   build      Build an executable or shared library with a C compiler.
   check      Parse and typecheck a program, and run nothing.
   fetch      Fetch the packages a program declares.
   format     Rewrite K files in the standard layout.
-  toolchain  Report the C compiler, cmake and git found, and KLANG_HOME.
+  toolchain  Report the C compiler, cmake and git found, and K_HOME.
   version    Print the compiler's version (or --version).
   lsp        Serve an editor over the Language Server Protocol.
-  completion Print a shell's completion script for klang.
+  completion Print a shell's completion script for k.
   help       Print this (or --help, -h); with a command, that command's help.
 
 Common options:
@@ -754,40 +754,40 @@ Common options:
   -- args...      What follows is the program's arguments.
 
 Environment:
-  KLANG_HOME      Fetched packages, build intermediates and settings
+  K_HOME      Fetched packages, build intermediates and settings
                   (default ~/.klang).
-  KLANG_CC        The C compiler, where --cc is not given.
-  KLANG_STDLIB    The standard library, where --stdlib is not given.
-  KLANG_PROGRESS  plain or live: how progress shows on stderr.
+  K_CC        The C compiler, where --cc is not given.
+  K_STDLIB    The standard library, where --stdlib is not given.
+  K_PROGRESS  plain or live: how progress shows on stderr.
 
-klang <command> --help, or klang help <command>, lists a command's options.
-klang help c covers writing the C yourself (klang -o out.c), and klang help
-internals the options for looking into the compiler and testing it. klang
+k <command> --help, or k help <command>, lists a command's options.
+k help c covers writing the C yourself (k -o out.c), and k help
+internals the options for looking into the compiler and testing it. k
 help --man prints all of the help as a man page.
 )";
     if (topic == "run") return cat(
-R"(usage: klang run file.k [options] [-- program args...]
-       klang file.k [options] [-- program args...]
+R"(usage: k run file.k [options] [-- program args...]
+       k file.k [options] [-- program args...]
 
 Compiles the program and runs it in this process with TinyCC, and exits with
 its exit code. What follows -- is the program's arguments. A program that
-starts threads needs klang build.
+starts threads needs k build.
 
 Options:
   -O0, -O1, -O2         Inlining level (default -O2).
 )", DEBUGOPTION, COMPILEOPTIONS,
 R"(  --cc name|path        The C compiler for packages' native parts: msvc,
-                        clang-cl, clang, gcc, cc or a path (or KLANG_CC).
+                        clang-cl, clang, gcc, cc or a path (or K_CC).
   -v                    Print each command that builds a native part, and
                         what it prints.
 )");
     if (topic == "build") return cat(
-R"(usage: klang build file.k [options]
+R"(usage: k build file.k [options]
 
 Builds an executable beside the source with a C compiler on this machine,
-or a shared library with --shared (klang toolchain says which), linking the
+or a shared library with --shared (k toolchain says which), linking the
 runtime and the native parts of the packages the program uses. Intermediates
-go under KLANG_HOME.
+go under K_HOME.
 
 Options:
   -o exe                Where the executable goes.
@@ -797,19 +797,19 @@ Options:
                         line they fail on, and the C built for a debugger.
 )", COMPILEOPTIONS,
 R"(  --cc name|path        The C compiler: msvc, clang-cl, clang, gcc, cc or a
-                        path (or KLANG_CC; by default the first one found).
+                        path (or K_CC; by default the first one found).
   --standalone          Compile the runtime into the program rather than link
                         the runtime object built once per C compiler.
   --shared              Build a self-contained shared library (.dll, .dylib or
-                        .so). Its export fns and klang_init/klang_exit are the
+                        .so). Its export fns and k_init/k_exit are the
                         host entry points; implies --standalone.
   --header out.h        With --shared: also write the host's header, declaring
-                        the export fns and klang_init/klang_exit.
+                        the export fns and k_init/k_exit.
   -v                    Print each command the build runs and what it prints.
   --dry-run             Print the commands the build would run, and run none.
 )");
     if (topic == "check") return cat(
-R"(usage: klang check file.k [options]
+R"(usage: k check file.k [options]
 
 Parses and typechecks the program and what it imports, and writes and runs
 nothing.
@@ -817,9 +817,9 @@ nothing.
 Options:
 )", COMPILEOPTIONS);
     if (topic == "fetch") return
-R"(usage: klang fetch [--update] file.k
+R"(usage: k fetch [--update] file.k
 
-Fetches the packages the program declares from git into KLANG_HOME, and
+Fetches the packages the program declares from git into K_HOME, and
 compiles nothing. A run or a build fetches what is missing as well.
 
 Options:
@@ -827,8 +827,8 @@ Options:
                         never fetched again).
 )";
     if (topic == "format") return
-R"(usage: klang format [--check] file.k|dir...
-       klang format [-]
+R"(usage: k format [--check] file.k|dir...
+       k format [-]
 
 Rewrites each file in the standard layout, in place: indentation, the
 spaces between tokens, blank lines and trailing commas, with the types
@@ -848,91 +848,91 @@ Exit status:
                         or an option is wrong.
 )";
     if (topic == "lsp") return
-R"(usage: klang lsp [--stdio] [--stdlib dir]
-       klang lsp --probe
+R"(usage: k lsp [--stdio] [--stdlib dir]
+       k lsp --probe
 
 Serves an editor over the Language Server Protocol, on stdin and stdout:
 diagnostics as files change, hover, go to definition, references and
 rename, document and workspace symbols, semantic highlighting, signature
 help, completion, inlay hints, folding and selection ranges, code
-lenses, and formatting as klang format does. It analyzes the programs whose entry files the editor configures
+lenses, and formatting as k format does. It analyzes the programs whose entry files the editor configures
 (the initializationOptions' entryFiles, with the standard library's
 directory as stdlib) and every open file none of them imports; the
 initializationOptions' commands are the client's own commands a code lens
 may name (klang.run, klang.showInstantiations). It fetches nothing: a
-package not fetched is an error at its import, which klang fetch resolves.
+package not fetched is an error at its import, which k fetch resolves.
 
 Options:
   --probe               Print the protocol version and exit.
   --stdio               Serve on stdin and stdout, as it does anyway.
-  --stdlib dir          The standard library's directory (or KLANG_STDLIB).
+  --stdlib dir          The standard library's directory (or K_STDLIB).
 )";
     if (topic == "toolchain") return
-R"(usage: klang toolchain [--cc name|path] [--json] [--refresh]
+R"(usage: k toolchain [--cc name|path] [--json] [--refresh]
 
-Reports the C compiler a build would use, cmake, git, KLANG_HOME and the
-modules compiled into klang. Exits with 1 when there is no C compiler.
+Reports the C compiler a build would use, cmake, git, K_HOME and the
+modules compiled into k. Exits with 1 when there is no C compiler.
 
 Options:
   --cc name|path        Look for this C compiler: msvc, clang-cl, clang, gcc,
-                        cc or a path (or KLANG_CC).
+                        cc or a path (or K_CC).
   --json                Report as JSON.
   --refresh             Set up Visual Studio's environment again rather than
                         take the one kept from last time.
 )";
     if (topic == "version") return
-R"(usage: klang version
-       klang --version
+R"(usage: k version
+       k --version
 
 Prints the compiler's version and the runtime's: a hash of the runtime's
-text, which the runtime that klang --emit-runtime writes has to match.
+text, which the runtime that k --emit-runtime writes has to match.
 )";
     if (topic == "completion") return
-R"(usage: klang completion bash|zsh|fish|powershell
+R"(usage: k completion bash|zsh|fish|powershell
 
-Prints the script that completes klang's commands, options and .k
+Prints the script that completes k's commands, options and .k
 files in that shell. To have it in every shell:
 
-  bash        klang completion bash > ~/.local/share/bash-completion/completions/klang
-  zsh         klang completion zsh > "${fpath[1]}/_klang"
-  fish        klang completion fish > ~/.config/fish/completions/klang.fish
-  powershell  klang completion powershell >> $PROFILE
+  bash        k completion bash > ~/.local/share/bash-completion/completions/k
+  zsh         k completion zsh > "${fpath[1]}/_k"
+  fish        k completion fish > ~/.config/fish/completions/k.fish
+  powershell  k completion powershell >> $PROFILE
 
-or, for the shell at hand, source <(klang completion bash) (or zsh).
+or, for the shell at hand, source <(k completion bash) (or zsh).
 )";
     if (topic == "c") return cat(
-R"(usage: klang -o out.c file.k [options]
-       klang --emit-runtime runtime.c
-       klang --<package>-link msvc|cc
+R"(usage: k -o out.c file.k [options]
+       k --emit-runtime runtime.c
+       k --<package>-link msvc|cc
 
 Writes the program's C, for a build of your own or a C host. It links with
 the runtime that --emit-runtime writes, compiled once with the C compiler
-and flags the programs use. klang build --dry-run prints the commands for
+and flags the programs use. k build --dry-run prints the commands for
 the program at hand.
 
 Options:
   -o out.c              Write the program's C rather than run it.
   --standalone          Write C that holds the whole runtime and builds alone.
   --header out.h        Also write a header for a C host, which supplies main,
-                        starts the program through klang_init and may end it
-                        through klang_exit.
+                        starts the program through k_init and may end it
+                        through k_exit.
   --include header.h    Have the C include this header (may be repeated).
   --jit                 Also run the program in this process.
   --emit-runtime out.c  Write the runtime's C.
   --<package>-link msvc|cc
                         Print the response file that links the native part of
-                        a package compiled into klang (--gfx-link cc).
+                        a package compiled into k (--gfx-link cc).
   -O0, -O1, -O2         Inlining level (default -O2).
 )", DEBUGOPTION, COMPILEOPTIONS);
     if (topic == "internals") return cat(
-R"(usage: klang [options] file.k
+R"(usage: k [options] file.k
 
 Options for looking into what the compiler does, and for its test suite.
 
 Options:
   --tokens              Print the file's tokens.
   --parse               Stop after parsing.
-  --check               Stop after typechecking, as klang check does.
+  --check               Stop after typechecking, as k check does.
   --dump                Print the parsed program back as source.
   --dump-docs           Print the documentation comments of the program's
                         declarations, fields and variants.
@@ -950,7 +950,7 @@ Options:
                         reference the same program must print the same with.
   --gen-runtime-header  Regenerate src/runtime_inline.h from src/runtime/.
 
-klang format --verify file.k|dir... formats each file in memory and
+k format --verify file.k|dir... formats each file in memory and
 writes nothing: it checks the result as a format does, and that formatting
 it again changes nothing, and skips a file that does not parse.
 )");
@@ -1073,10 +1073,10 @@ CodeGen::StackConfig StackConfigOf(const vector<string> &cdefines) {
     };
     CodeGen::StackConfig cfg { 0, 0, 0, 0 };
     uint64_t maxstacks = 0;
-    value("GS_STACK_RESERVE", cfg.reserve);
-    value("GS_STACK_GAP", cfg.gap);
-    value("GS_STACK_BUDGET", cfg.budget);
-    value("GS_MAX_STACKS", maxstacks);
+    value("K_STACK_RESERVE", cfg.reserve);
+    value("K_STACK_GAP", cfg.gap);
+    value("K_STACK_BUDGET", cfg.budget);
+    value("K_MAX_STACKS", maxstacks);
     cfg.maxstacks = (int64_t)maxstacks;
     return cfg;
 }
@@ -1126,7 +1126,7 @@ static vector<string> HelpOptions(const string &topic) {
     return opts;
 }
 
-// What `klang completion <shell>` prints: completion of the commands, each
+// What `k completion <shell>` prints: completion of the commands, each
 // command's options as its help names them, the help's topics, and .k
 // files and directories. "" for a shell it does not know.
 static string CompletionScript(const string &shell) {
@@ -1163,9 +1163,9 @@ static string CompletionScript(const string &shell) {
     auto runopts = words(HelpOptions("run"));
     string s;
     if (shell == "bash") {
-        Append(s, "# klang completion bash: source this, or install it as\n"
-                  "# ~/.local/share/bash-completion/completions/klang\n"
-                  "_klang() {\n"
+        Append(s, "# k completion bash: source this, or install it as\n"
+                  "# ~/.local/share/bash-completion/completions/k\n"
+                  "_k() {\n"
                   "    local cur=${COMP_WORDS[COMP_CWORD]} verb= i opts\n"
                   "    for ((i = 1; i < COMP_CWORD; i++)); do\n"
                   "        case ${COMP_WORDS[i]} in -*) ;; *) verb=${COMP_WORDS[i]}; break ;; esac\n"
@@ -1182,12 +1182,12 @@ static string CompletionScript(const string &shell) {
                   "    [[ -z $verb ]] && COMPREPLY=($(compgen -W \"", words(verbs), "\" -- \"$cur\"))\n"
                   "    COMPREPLY+=($(compgen -f -X '!*.k' -- \"$cur\") $(compgen -d -- \"$cur\"))\n"
                   "}\n"
-                  "complete -o filenames -F _klang klang\n");
+                  "complete -o filenames -F _k k\n");
     } else if (shell == "zsh") {
-        Append(s, "#compdef klang\n"
-                  "# klang completion zsh: source this, or install it as _klang in a\n"
+        Append(s, "#compdef k\n"
+                  "# k completion zsh: source this, or install it as _k in a\n"
                   "# directory on $fpath\n"
-                  "_klang() {\n"
+                  "_k() {\n"
                   "    local verb word\n"
                   "    for word in ${words[2,CURRENT-1]}; do\n"
                   "        [[ $word == -* ]] || { verb=$word; break }\n"
@@ -1214,19 +1214,19 @@ static string CompletionScript(const string &shell) {
                   "    fi\n"
                   "    _files -g '*.k'\n"
                   "}\n"
-                  "if [[ $zsh_eval_context[-1] == loadautofunc ]]; then _klang \"$@\"; else compdef _klang klang; fi\n");
+                  "if [[ $zsh_eval_context[-1] == loadautofunc ]]; then _k \"$@\"; else compdef _k k; fi\n");
     } else if (shell == "fish") {
         auto quote = [](const string &t) {
             string q = "'";
             for (auto c : t) { if (c == '\'' || c == '\\') q += '\\'; q += c; }
             return q + "'";
         };
-        Append(s, "# klang completion fish: install it as ~/.config/fish/completions/klang.fish\n"
-                  "complete -c klang -f\n");
+        Append(s, "# k completion fish: install it as ~/.config/fish/completions/k.fish\n"
+                  "complete -c k -f\n");
         for (auto &v : verbs)
-            Append(s, "complete -c klang -n __fish_use_subcommand -a ", v, " -d ", quote(summary[v]), "\n");
+            Append(s, "complete -c k -n __fish_use_subcommand -a ", v, " -d ", quote(summary[v]), "\n");
         auto flag = [&](const string &cond, const string &o) {
-            Append(s, "complete -c klang -n ", quote(cond), " ");
+            Append(s, "complete -c k -n ", quote(cond), " ");
             if (o.rfind("--", 0) == 0) Append(s, "-l ", o.substr(2));
             else if (o.size() == 2) Append(s, "-s ", o.substr(1));
             else Append(s, "-o ", o.substr(1));
@@ -1237,9 +1237,9 @@ static string CompletionScript(const string &shell) {
         string verbset;
         for (auto &v : verbs) Append(verbset, " ", v);
         for (auto &o : HelpOptions("run")) flag(cat("not __fish_seen_subcommand_from", verbset), o);
-        Append(s, "complete -c klang -n '__fish_seen_subcommand_from help' -a ", quote(words(topics)), "\n"
-                  "complete -c klang -n '__fish_seen_subcommand_from completion' -a ", quote(words(shells)), "\n"
-                  "complete -c klang -n 'not __fish_seen_subcommand_from help completion version toolchain lsp' "
+        Append(s, "complete -c k -n '__fish_seen_subcommand_from help' -a ", quote(words(topics)), "\n"
+                  "complete -c k -n '__fish_seen_subcommand_from completion' -a ", quote(words(shells)), "\n"
+                  "complete -c k -n 'not __fish_seen_subcommand_from help completion version toolchain lsp' "
                   "-a '(__fish_complete_suffix .k)'\n");
     } else if (shell == "powershell") {
         auto list = [](const vector<string> &ws) {
@@ -1247,8 +1247,8 @@ static string CompletionScript(const string &shell) {
             for (size_t i = 0; i < ws.size(); i++) Append(l, i ? ", " : "", "'", ws[i], "'");
             return l + ")";
         };
-        Append(s, "# klang completion powershell: add this to $PROFILE\n"
-                  "Register-ArgumentCompleter -Native -CommandName klang, klang.exe -ScriptBlock {\n"
+        Append(s, "# k completion powershell: add this to $PROFILE\n"
+                  "Register-ArgumentCompleter -Native -CommandName k, k.exe -ScriptBlock {\n"
                   "    param($wordToComplete, $commandAst, $cursorPosition)\n"
                   "    $words = @($commandAst.CommandElements | Select-Object -Skip 1 | ForEach-Object { $_.ToString() })\n"
                   "    if ($wordToComplete -and $words.Count -gt 0) { $words = @($words | Select-Object -First ($words.Count - 1)) }\n"
@@ -1279,7 +1279,7 @@ static string CompletionScript(const string &shell) {
     return s;
 }
 
-// What `klang help --man` prints: the help of every command and topic as a
+// What `k help --man` prints: the help of every command and topic as a
 // man page, each kept as the terminal shows it.
 static string ManPage() {
     auto roff = [](const string &text) {
@@ -1311,9 +1311,9 @@ static string ManPage() {
     auto overview = HelpText("");
     auto body = overview.substr(overview.find("\n\n") + 2);
     string s;
-    Append(s, ".TH KLANG 1 \"\" \"klang ", CompilerVersion(), "\" \"K Manual\"\n"
+    Append(s, ".TH K 1 \"\" \"k ", CompilerVersion(), "\" \"K Manual\"\n"
               ".SH NAME\n"
-              "klang \\- the K compiler, its build tool and its language server\n"
+              "k \\- the K compiler, its build tool and its language server\n"
               ".SH SYNOPSIS\n", roff(overview.substr(0, overview.find("\n\n"))),
               ".SH DESCRIPTION\n", roff(body), ".SH COMMANDS\n");
     for (auto v : VERBS) {
@@ -1327,9 +1327,9 @@ static string ManPage() {
 
 int Main(int argc, char **argv) {
     auto exe = ExePath(argv[0]);
-    // The verb forms, `klang run|build|check|fetch|format|toolchain|version|help ...`.
+    // The verb forms, `k run|build|check|fetch|format|toolchain|version|help ...`.
     // A first argument that is none of them is read as an option or a file,
-    // as it always was, so `klang foo.k` is `klang run foo.k`.
+    // as it always was, so `k foo.k` is `k run foo.k`.
     string verb;
     auto firstarg = 1;
     if (argc > 1) {
@@ -1354,14 +1354,14 @@ int Main(int argc, char **argv) {
         if (arg == "--version" && (verb.empty() || verb == "version")) verb = "version";
     }
     // A first word that is no command, no option and no file is a command
-    // mistyped, not a program: `klang biuld x.k`.
+    // mistyped, not a program: `k biuld x.k`.
     if (verb.empty() && argc > 1 && argv[1][0] != '-') {
         string v = argv[1];
         if (v.find_first_of("/\\.") == string::npos && !PathExists(v)) {
             string near;
             for (auto known : VERBS)
                 if (EditDistance(v, known) <= 2 && near.empty()) near = known;
-            fprintf(stderr, "klang: unknown command %s%s (klang help lists the commands)\n", v.c_str(),
+            fprintf(stderr, "klang: unknown command %s%s (k help lists the commands)\n", v.c_str(),
                     near.empty() ? "" : cat(": did you mean ", near, "?").c_str());
             return 1;
         }
@@ -1370,7 +1370,7 @@ int Main(int argc, char **argv) {
         auto shell = argc > 2 ? string(argv[2]) : string();
         auto script = CompletionScript(shell);
         if (script.empty() || argc > 3) {
-            fprintf(stderr, "klang completion takes bash, zsh, fish or powershell%s\n",
+            fprintf(stderr, "k completion takes bash, zsh, fish or powershell%s\n",
                     shell.empty() ? "" : cat(", not ", shell).c_str());
             return 1;
         }
@@ -1385,14 +1385,14 @@ int Main(int argc, char **argv) {
         }
         auto help = HelpText(topic);
         if (help.empty()) {
-            fprintf(stderr, "no help on %s: klang help lists the commands\n", topic.c_str());
+            fprintf(stderr, "no help on %s: k help lists the commands\n", topic.c_str());
             return 1;
         }
         fputs(help.c_str(), stdout);
         return 0;
     }
     if (verb == "version") {
-        printf("klang %s (runtime %s)\n", CompilerVersion(), RuntimeVersion().c_str());
+        printf("k %s (runtime %s)\n", CompilerVersion(), RuntimeVersion().c_str());
         return 0;
     }
     if (verb == "lsp") return RunLsp(exe, vector<string>(argv + firstarg, argv + argc));
@@ -1433,11 +1433,11 @@ int Main(int argc, char **argv) {
             // uses: the runtime rounds a reservation down to whole pages.
             if (!ParseSize(argv[++i], size) || size < (64ull << 10) || size > (1ull << 48)) {
                 fprintf(stderr, "--stack-reserve takes a size from 64 KB to 256 TB (2^48, "
-                                "klang_spec.md 10.4), with an optional K, M, G or T suffix: %s\n",
+                                "k_spec.md 10.4), with an optional K, M, G or T suffix: %s\n",
                         argv[i]);
                 return 1;
             }
-            cdefines.push_back(cat("GS_STACK_RESERVE=", size, "ull"));
+            cdefines.push_back(cat("K_STACK_RESERVE=", size, "ull"));
         }
         else if (arg == "--check") nocgen = true;
         else if (arg == "--diagnostics" && i + 1 < argc) {
@@ -1510,7 +1510,7 @@ int Main(int argc, char **argv) {
         else if (arg == "--refresh") refresh = true;
         else if (arg == "--debug") {
             debug = true;
-            cdefines.push_back("GS_DEBUG=1");
+            cdefines.push_back("K_DEBUG=1");
         }
         else if (arg == "-v") verbose = true;
         else if (arg == "--stats") stats = true;
@@ -1531,7 +1531,7 @@ int Main(int argc, char **argv) {
         else if (arg == "-D" && i + 1 < argc) cdefines.push_back(argv[++i]);
         else if (arg.rfind("-D", 0) == 0 && arg.size() > 2) cdefines.push_back(arg.substr(2));
         else if (!arg.empty() && arg[0] == '-') {
-            fprintf(stderr, "unknown option: %s (klang --help lists them)\n", arg.c_str());
+            fprintf(stderr, "unknown option: %s (k --help lists them)\n", arg.c_str());
             return 1;
         }
         else files.push_back(arg);
@@ -1553,16 +1553,16 @@ int Main(int argc, char **argv) {
         }
     }
     if (shared && verb != "build") {
-        fprintf(stderr, "--shared is an option of klang build\n");
+        fprintf(stderr, "--shared is an option of k build\n");
         return 1;
     }
-    // What `klang build` builds with; its -o names the executable or shared
+    // What `k build` builds with; its -o names the executable or shared
     // library, and the C goes to the program's build directory (build.h).
     BuildOptions buildopts;
     string builddir;
     if (verb == "run") {
         if (!outname.empty()) {
-            fprintf(stderr, "klang run takes no -o: it compiles and runs the program in this "
+            fprintf(stderr, "k run takes no -o: it compiles and runs the program in this "
                             "process\n");
             return 1;
         }
@@ -1575,7 +1575,7 @@ int Main(int argc, char **argv) {
         parseonly = true;
     } else if (verb == "build") {
         if (multitest || (!headername.empty() && !shared)) {
-            fprintf(stderr, "klang build takes one program, and --header only with --shared; "
+            fprintf(stderr, "k build takes one program, and --header only with --shared; "
                             "the flag form (-o out.c) writes the C for a C host\n");
             return 1;
         }
@@ -1599,8 +1599,8 @@ int Main(int argc, char **argv) {
     if (files.empty()) {
         auto help = HelpText(verb);
         fprintf(stderr, "%s\n%s\n", help.substr(0, help.find("\n\n") + 1).c_str(),
-                verb.empty() ? "klang --help lists the commands and common options."
-                             : cat("klang ", verb, " --help lists its options.").c_str());
+                verb.empty() ? "k --help lists the commands and common options."
+                             : cat("k ", verb, " --help lists its options.").c_str());
         return 1;
     }
     // With no output file the program is compiled into this process and run,
@@ -1612,7 +1612,7 @@ int Main(int argc, char **argv) {
         return 1;
     }
     // A header is for a C host, which supplies its own main and starts the
-    // program through klang_init (and may end it through klang_exit).
+    // program through k_init (and may end it through k_exit).
     auto library = !headername.empty() || shared;
     if (multitest && (tokens || !dumpfile.empty() || !progargs.empty() ||
                       (!outname.empty() && outname.find('%') == string::npos) ||
@@ -1776,13 +1776,13 @@ int Main(int argc, char **argv) {
             string out = cat("/* Generated by the K compiler from ", filename,
                              ". Do not edit.\n"
                              "   Names from the program carry a _g suffix, which keeps them clear of\n"
-                             "   the C keywords, of the runtime's gs_ names and of whatever this\n"
+                             "   the C keywords, of the runtime's k_ names and of whatever this\n"
                              "   platform's headers declare; a namespaced name ns::x is ns_x_g followed\n"
                              "   by the namespace's length. An --include header names them that way.",
-                             separate ? "\n   Link it with the runtime that `klang --emit-runtime` "
-                                        "writes. */\n\n#define GS_SEPARATE_RUNTIME 1\n"
+                             separate ? "\n   Link it with the runtime that `k --emit-runtime` "
+                                        "writes. */\n\n#define K_SEPARATE_RUNTIME 1\n"
                                       + (embedded ? string() :
-                                         "#define GS_RUNTIME_VERSION " + RuntimeVersion() + "\n")
+                                         "#define K_RUNTIME_VERSION " + RuntimeVersion() + "\n")
                                       : " */\n\n",
                              cg.predefs);
             // -D goes into the source rather than onto a backend's command
@@ -1793,7 +1793,7 @@ int Main(int argc, char **argv) {
                        eq == string::npos ? string("1") : d.substr(eq + 1), "\n");
             }
             if (embedded)
-                Append(out, "#define GS_EMBEDDED_JIT 1\n",
+                Append(out, "#define K_EMBEDDED_JIT 1\n",
                        RuntimeSections({ "jit_c.h" }));
             if (separate)
                 Append(out, RuntimeSections({ "runtime.h" }), cg.head,
@@ -1802,8 +1802,8 @@ int Main(int argc, char **argv) {
                 Append(out, RuntimeSections({ "runtime.h", "runtime_impl.h", "runtime_threads.h" }),
                        cg.head, RuntimeSections({ "runtime_ext.h", "runtime_os.h" }), cg.result);
             if (embedded)
-                Append(out, "\nvoid gs_jit_cleanup(void) { free(gs_stks); gs_stks = NULL; "
-                            "gs_nstks = 0; }\n");
+                Append(out, "\nvoid k_jit_cleanup(void) { free(k_stks); k_stks = NULL; "
+                            "k_nstks = 0; }\n");
             return out;
         };
         if (!outfile.empty() && !nocgen) {

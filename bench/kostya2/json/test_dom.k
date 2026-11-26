@@ -6,8 +6,8 @@ import std;
 import os;
 import json;
 
-extern fn notify_start(variant: const u8[:]) = "klang_notify_start";
-extern fn notify_stop() = "klang_notify_stop";
+extern fn notify_start(variant: const u8[:]) = "k_notify_start";
+extern fn notify_stop() = "k_notify_stop";
 
 struct Coordinate { x: f64, y: f64, z: f64 }
 

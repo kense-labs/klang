@@ -12,7 +12,7 @@ diagnostic substrings in their source and the compiler's normal error exit.
 `// warning:` substrings declare the warnings a fixture's typecheck prints,
 one warning line each, in any order; a positive fixture without them must
 print none. A first-line `runtime-debug` marker adds a targeted
-GS_DEBUG=1 run, alongside the existing codegen_exec debug coverage.
+K_DEBUG=1 run, alongside the existing codegen_exec debug coverage.
 A first-line `dump-runtime` marker also executes the parser's dump, checking
 that stable roundtripping preserved the original program's behavior.
 
@@ -33,7 +33,7 @@ use the SDL3 graphics module, the physics/ tests the Box3D
 physics module and the ui/ tests the Nuklear ui module. They always parse,
 typecheck and generate C; they build and run where the compiler has the
 native layers they use built in -- their category's, and any other they
-import, as a ui test drawing through gfx does -- built by `klang build`,
+import, as a ui test drawing through gfx does -- built by `k build`,
 which links the packages the compiler was configured with, and a machine
 without a GPU device counts as a skip for gfx. A fixture there with
 `// error:` markers is a rejection test, as in errors_tc/. The packages
@@ -43,7 +43,7 @@ each of their repositories).
 Profiles keep the CI coverage deliberate: baseline compares K/native C
 -O0 and -O2 plus the targeted debug-runtime runs; sanitize uses K -O2 and
 Clang -O1 with ASan/UBSan on Linux, including the samples and C runtime tests.
-The klang_in_klang/ compiler is one multi-file bootstrap fixture: build three
+The k_in_k/ compiler is one multi-file bootstrap fixture: build three
 native generations, require identical stage-2/stage-3 C, and run a self-check
 of the stage-2 compiler, which stands for both, beside stage 3's build.
 TinyCC also emits the same C when available.
@@ -115,7 +115,7 @@ def first_line(path):
 
 
 def debug_fixture(f, line):
-    """Whether a fixture also runs with GS_DEBUG: codegen_exec.k and
+    """Whether a fixture also runs with K_DEBUG: codegen_exec.k and
     those whose first line asks for it."""
     return f.stem == "codegen_exec" or "runtime-debug" in line
 
@@ -145,13 +145,13 @@ def runtime_defines(source):
     return re.findall(r"^// runtime-define: (\w+=\w+)$", first_line(source))
 
 
-# What `klang --multi-test` ends each file's part of stdout and of stderr
+# What `k --multi-test` ends each file's part of stdout and of stderr
 # with, on a line of its own, followed by the file's exit code and name.
-MULTIMARK = "==== klang --multi-test: exit"
+MULTIMARK = "==== k --multi-test: exit"
 
 
 def split_multi(text, files):
-    """A `klang --multi-test` stream cut at each file's mark: (exit code,
+    """A `k --multi-test` stream cut at each file's mark: (exit code,
     what the file printed) for each file it has the mark of, in order, and
     what follows the last mark. The line break before a mark is the mark's
     own."""
@@ -319,7 +319,7 @@ class Fixture:
         self.line, self.dumped = "", False
         # By build_options key, the compiler run that wrote the C and where.
         self.modules, self.jitlevels, self.gen, self.c = [], (), {}, {}
-        # Whether the compiler builds its program (klang build) rather than
+        # Whether the compiler builds its program (k build) rather than
         # this runner: a .build sidecar beside it (C of its own), or a
         # packages/ fixture, whose packages may have C the runner cannot
         # see.
@@ -345,14 +345,14 @@ class Runner:
         self.local = threading.local()
         self.pool = concurrent.futures.ThreadPoolExecutor(jobs) if jobs > 1 else None
         self.jobs = jobs
-        # Files to a `klang --multi-test` run (klang_each); 0 chooses by the
+        # Files to a `k --multi-test` run (k_each); 0 chooses by the
         # number of files and jobs.
         self.batch = 0
         self.fronts = {}
         # Slots shown before any section print as they are.
         self.sections = [(None, [])]
         self.gpulock = None
-        # What the C that `klang -o` writes links with, built once per
+        # What the C that `k -o` writes links with, built once per
         # configuration by whichever job first asks for it.
         self.runtime = tc.KlangRuntime(exe, tc.REPO_ROOT / "build" / "gen" / "runtime")
 
@@ -502,9 +502,9 @@ class Runner:
         """The compiler under test, as (exit code, stdout, stderr). Both
         streams are captured rather than shown, so a failing step can print
         what happened without having to run the compiler a second time."""
-        return self.screened(args[-1], tc.run_capture(self.klang_argv(args)))
+        return self.screened(args[-1], tc.run_capture(self.k_argv(args)))
 
-    def klang_argv(self, args):
+    def k_argv(self, args):
         # Resource-bound regressions use the same runtime configuration
         # through generated C and TinyCC, at every optimization level.
         # --stats for the parsed ok and typechecked ok lines the checks read,
@@ -521,7 +521,7 @@ class Runner:
             self.fail(f"compiler sanitizer {what}", result[2])
         return result
 
-    def klang_each(self, args, files):
+    def k_each(self, args, files):
         """What klang(*args, f) runs the compiler for, for each of `files`,
         as callables returning its (exit code, stdout, stderr) unscreened:
         the runs happen on the pool, up to `batch` files to one `klang
@@ -538,12 +538,12 @@ class Runner:
             for f in chunk:
                 results[f] = lambda f=f, future=future: future.result()[f]
         for f in alone:
-            results[f] = self.submit(tc.run_capture, self.klang_argv([*args, f])).result
+            results[f] = self.submit(tc.run_capture, self.k_argv([*args, f])).result
         return results
 
     def multi_test(self, args, files):
         """{f: what `klang *args f` gives} for each of `files`, from one
-        `klang --multi-test *args *files` where it got through them: each
+        `k --multi-test *args *files` where it got through them: each
         file's part of both streams ends in a line of its own with what the
         file's run would have exited with (MULTIMARK). A run that ends
         before a file's mark, a crash or an abort, gets through the files
@@ -564,7 +564,7 @@ class Runner:
             done = {}
         for f in files:
             if f not in done:
-                done[f] = tc.run_capture(self.klang_argv([*args, f]))
+                done[f] = tc.run_capture(self.k_argv([*args, f]))
         return done
 
     def run_expected(self, argv, name, label):
@@ -718,7 +718,7 @@ class Runner:
         if self.jit and debug and "no-jit" not in line and f.name not in res.jitskips:
             with self.into(res.jitdebug):
                 out = self.check_run(f.stem, f"jit-debug {f.name}",
-                                     *self.klang("-O2", "--jit", "-DGS_DEBUG=1", f))
+                                     *self.klang("-O2", "--jit", "-DK_DEBUG=1", f))
                 if out is not None and self.check_stdout(f.stem, f"jit-debug {f.name}", out):
                     self.ok(f"jit-debug {f.name}")
         return res
@@ -787,9 +787,9 @@ class Runner:
 
     def build_options(self, key):
         """How a fixture's C is built: at a level ("0", "2"), its dump's
-        ("dump") or its GS_DEBUG build ("debug"). (opt, defines)."""
+        ("dump") or its K_DEBUG build ("debug"). (opt, defines)."""
         if key in ("dump", "debug"):
-            return 2 if self.profile == "baseline" else 1, ["GS_DEBUG=1"] if key == "debug" else []
+            return 2 if self.profile == "baseline" else 1, ["K_DEBUG=1"] if key == "debug" else []
         return int(key) if self.profile == "baseline" else 1, []
 
     def builds_together(self, res, key):
@@ -857,7 +857,7 @@ class Runner:
                             if tc.NO_TOOLCHAIN in err or tc.NO_CMAKE in err:
                                 res.nativeskips.append(f.name)
                             else:
-                                self.fail(f"klang build -O{ol} {f.name}", out + err)
+                                self.fail(f"k build -O{ol} {f.name}", out + err)
                             bad = True
                             continue
                     elif not argv:
@@ -948,7 +948,7 @@ class Runner:
             self.ok(f"dump+run {dumpfile.name}")
 
     def debug_program(self, f, res, argv):
-        """GS_DEBUG changes language overflow/cast checks, independently of
+        """K_DEBUG changes language overflow/cast checks, independently of
         native optimization: its helpers under O2. The C is from fixture();
         `argv` runs it where build_programs built it."""
         name = f.stem
@@ -1146,7 +1146,7 @@ class Runner:
         # Both copies of a body run in blocks divide by the magic number of a
         # divisor the loop cannot change (HoistDivisors), never by the divisor.
         body = texts.get("shape_strip_div", "")
-        if "gs_divu32_q(" not in body or re.search(r"\bgs_(?:div|mod)_u32\(", body):
+        if "k_divu32_q(" not in body or re.search(r"\bk_(?:div|mod)_u32\(", body):
             self.fail("loop shapes shape_strip_div", "a division not by the divisor's magic number")
             valid = False
         # From 0 to a constant multiple of the block size, the blocks run every
@@ -1195,7 +1195,7 @@ class Runner:
 
     # --- the K-written compiler ---------------------------------------
 
-    def klang_in_klang(self, cc, profile, extra, jit):
+    def k_in_k(self, cc, profile, extra, jit):
         """Exercise the compiler as a large program, then execute its output.
 
         Stage 1 comes from the compiler under test; each subsequent stage is
@@ -1206,8 +1206,8 @@ class Runner:
         The chain of stages at each level, and the JIT self-compile at each,
         are jobs of their own, started here; what this returns adds their
         slots, and those of the comparisons between them, to the log."""
-        source = HERE / "klang_in_klang" / "main.k"
-        directory = tc.REPO_ROOT / "build" / "gen" / profile / "klang_in_klang"
+        source = HERE / "k_in_k" / "main.k"
+        directory = tc.REPO_ROOT / "build" / "gen" / profile / "k_in_k"
 
         # Generated compilers need the same stack budget as the host. Only
         # the child's soft limit is raised, by the shell that starts it: the
@@ -1267,7 +1267,7 @@ class Runner:
         def chain(ol):
             """The native stages at one level; the stage-2 C, when they all
             built."""
-            label = f"klang_in_klang -O{ol}"
+            label = f"k_in_k -O{ol}"
             work = directory / f"O{ol}"
             work.mkdir(parents=True, exist_ok=True)
             if not cc:
@@ -1324,7 +1324,7 @@ class Runner:
         def jit_self_compile(ol):
             """The K-written compiler run through TinyCC, compiling
             itself; the C it wrote."""
-            label = f"klang_in_klang -O{ol}"
+            label = f"k_in_k -O{ol}"
             work = directory / f"O{ol}"
             work.mkdir(parents=True, exist_ok=True)
             cfile = work / "jit-stage2.c"
@@ -1346,22 +1346,22 @@ class Runner:
             jit_c, native_c = jits[ol].result().value, chains[ol].result().value
             if jit_c is not None and native_c is not None:
                 if jit_c != native_c:
-                    self.fail(f"JIT/native self-compile differs klang_in_klang -O{ol}")
+                    self.fail(f"JIT/native self-compile differs k_in_k -O{ol}")
                 else:
-                    self.ok(f"JIT/native self-compile matches klang_in_klang -O{ol}")
+                    self.ok(f"JIT/native self-compile matches k_in_k -O{ol}")
 
         def compare_levels():
             outputs = [chains[ol].result().value for ol in levels]
             if len(outputs) == 2 and None not in outputs:
                 if outputs[0] != outputs[1]:
-                    self.fail("klang_in_klang self-compile differs between O0 and O2")
+                    self.fail("k_in_k self-compile differs between O0 and O2")
                 else:
-                    self.ok("klang_in_klang self-compile matches between O0 and O2")
+                    self.ok("k_in_k self-compile matches between O0 and O2")
 
         def show():
-            self.section("klang_in_klang bootstrap")
+            self.section("k_in_k bootstrap")
             if not cc:
-                self.show_later(self.say, "skip native klang_in_klang bootstrap "
+                self.show_later(self.say, "skip native k_in_k bootstrap "
                                           "(no C compiler found or --nocgen)")
             for ol in levels:
                 self.show(chains[ol])
@@ -1393,7 +1393,7 @@ def main():
                     help="fail if the baseline's second C-front-end check is unavailable")
     ap.add_argument("--no-jit", action="store_true",
                     help="skip the in-process TinyCC runs even where they are available")
-    ap.add_argument("--klang-in-klang-only", action="store_true",
+    ap.add_argument("--k-in-k-only", action="store_true",
                     help="run only the multi-stage K-written compiler regression")
     ap.add_argument("-j", "--jobs", type=int, default=default_jobs(),
                     help=f"how many jobs run at once (default {default_jobs()}); "
@@ -1402,7 +1402,7 @@ def main():
                     help="how many gfx programs run at once (default: no limit "
                          "beyond --jobs)")
     ap.add_argument("--batch", type=int, default=0,
-                    help="how many files one `klang --multi-test` run checks, and how "
+                    help="how many files one `k --multi-test` run checks, and how "
                          "many programs one executable holds (default: by the number of "
                          "files and jobs); 1 gives each a process and an executable of "
                          "its own")
@@ -1422,11 +1422,11 @@ def main():
     tc.setup_console()
     # The compiler's cache (runtime objects, fetched packages) for everything
     # the suite runs: under the build tree, never the user's own.
-    os.environ["KLANG_HOME"] = str(tc.REPO_ROOT / "build" / "klang-home")
+    os.environ["K_HOME"] = str(tc.REPO_ROOT / "build" / "klang-home")
     started = time.perf_counter()
     # The suite opens no windows: a gfx program asking for one draws off
     # screen instead.
-    os.environ["GOOSE_GFX_HEADLESS"] = "1"
+    os.environ["K_GFX_HEADLESS"] = "1"
     exe = tc.find_klang(args.exe)
     # Everything that changes this process's environment (vcvars) or writes
     # a shared file (the JIT probe) happens here, before any job starts.
@@ -1444,9 +1444,9 @@ def main():
 
     # The bootstrap is the longest chain of work in the suite, so it starts
     # first, and the samples' runner, a process of its own, next.
-    show_klang_in_klang = r.klang_in_klang(cc, args.profile, extra, jit)
-    if args.klang_in_klang_only:
-        show_klang_in_klang()
+    show_k_in_k = r.k_in_k(cc, args.profile, extra, jit)
+    if args.k_in_k_only:
+        show_k_in_k()
         r.flush()
         return r.finish()
 
@@ -1522,10 +1522,10 @@ def main():
     doc_examples_future = r.task(doc_examples, alone=True)
 
     # One level of category directories; nested syntax helpers and the modules
-    # of the klang_in_klang bootstrap are exercised through their entry points.
+    # of the k_in_k bootstrap are exercised through their entry points.
     # The lsp/ fixtures are the language server's, driven by lsp_protocol.py.
     tests = [f for f in sorted(HERE.glob("*/*.k"))
-             if f.parent.name not in ("errors", "errors_tc", "klang_in_klang", "lsp") and
+             if f.parent.name not in ("errors", "errors_tc", "k_in_k", "lsp") and
              f.name != "lexer_tokens.k"]
     if len({f.stem for f in tests}) != len(tests):
         ap.error("fixture names must be unique across categories (shared expected/ and build outputs)")
@@ -1630,7 +1630,7 @@ def main():
         if "dump-runtime" not in line:
             fronts.setdefault(tuple(front_args(line, has_bce_annotations(f))), []).append(f)
     for args_, files in fronts.items():
-        r.fronts.update(r.klang_each(list(args_), files))
+        r.fronts.update(r.k_each(list(args_), files))
     # The fixtures that take longest, those building and running graphics,
     # physics or ui programs, start first.
     order = sorted(tests, key=lambda f: not native_modules(f, native))
@@ -1728,7 +1728,7 @@ def main():
 
     # The data stack report (--stacks): a program with a worker, whose
     # first-line budget caps the workers at one, a recursive one whose
-    # first-line GS_MAX_STACKS the compiler checks the count against, and one
+    # first-line K_MAX_STACKS the compiler checks the count against, and one
     # whose worker only puts a fixed value: it holds no regions, which caps
     # nothing. The counts themselves follow the emitted code and are not
     # pinned, other than that worker's none.
@@ -1744,14 +1744,14 @@ def main():
         else:
             r.ok(f"stacks {f.name}")
     r.show_task(stacks_report, HERE / "threads" / "thread_cap.k", [
-        r"^data stacks: 2 GB reserved per stack, 1 MB guard gap, 4 GB budget: 1 regions, GS_MAX_STACKS 1024$",
+        r"^data stacks: 2 GB reserved per stack, 1 MB guard gap, 4 GB budget: 1 regions, K_MAX_STACKS 1024$",
         r"^main program: \d+ data stacks \+ 0 global stacks = \d+ regions$",
         r"^worker `worker`: [1-9]\d* data stacks \+ 0 argument and global stacks = \d+ regions$",
         r"^thread cap: 1 workers \(\(1 - \d+\) / \d+\), what hardware_threads\(\) reports at most$",
         r"^fn worker: [1-9]\d* own, \d+ with callees$",
     ])
     r.show_task(stacks_report, HERE / "codegen" / "cycle_scratch_locals.k", [
-        r"^data stacks: .*, GS_MAX_STACKS 4$",
+        r"^data stacks: .*, K_MAX_STACKS 4$",
         r"^main program: [1-4] data stacks \+ 0 global stacks = [1-4] regions$",
         r"^thread cap: none, no workers$",
         r"^fn in_block: [1-9]\d* own, [1-4] with callees$",
@@ -1772,7 +1772,7 @@ def main():
             r.ok(f"loop shapes {f.name}")
     r.show_task(loop_shapes)
     # An inline fn returning two values stays a call in K and is declared
-    # GS_INLINE in the C, for the C compiler to inline (§7.13).
+    # K_INLINE in the C, for the C compiler to inline (§7.13).
     def inline_fn_c():
         f = HERE / "optimizer" / "optimize.k"
         cfile = gendir / "optimize-inline.c"
@@ -1781,10 +1781,10 @@ def main():
             r.fail("inline fn C", out + err)
             return
         text = cfile.read_text()
-        pair = re.search(r"^static GS_INLINE [^\n;]*\bil_pair_g\d*\(", text, re.MULTILINE)
-        plain = re.search(r"^static GS_INLINE [^\n;]*\bil_plain_g\d*\(", text, re.MULTILINE)
+        pair = re.search(r"^static K_INLINE [^\n;]*\bil_pair_g\d*\(", text, re.MULTILINE)
+        plain = re.search(r"^static K_INLINE [^\n;]*\bil_plain_g\d*\(", text, re.MULTILINE)
         if not pair or plain:
-            r.fail("inline fn C", f"il_pair GS_INLINE: {bool(pair)}, il_plain GS_INLINE: {bool(plain)}")
+            r.fail("inline fn C", f"il_pair K_INLINE: {bool(pair)}, il_plain K_INLINE: {bool(plain)}")
         else:
             r.ok("inline fn C")
     r.show_task(inline_fn_c)
@@ -1799,7 +1799,7 @@ def main():
             return
         sig = re.search(r"^static void walk_g\w*\(([^)]*)\) \{$", cfile.read_text(),
                         re.MULTILINE)
-        want = (r"void \*\w+, int64_t \w+, gs_i64 \w+, gs_rhdr \*\w+, gs_stack \*\w+, "
+        want = (r"void \*\w+, int64_t \w+, k_i64 \w+, k_rhdr \*\w+, k_stack \*\w+, "
                 r"void \*\w+, int64_t \w+")
         if not sig or not re.fullmatch(want, sig[1]):
             r.fail(f"member parameters {f.name}",
@@ -1872,9 +1872,9 @@ def main():
             return m.group(1) if m else None
         if body("ignore") is None or body("ignore") != body("discard"):
             wrong.append("ignore and discard: not the same C, so keeping them apart tests nothing")
-        caught = re.findall(r"\bgs_rf == (\d+)\)", text)
-        thrown = set(re.findall(r"\bgs_rf = ([1-9]\d*);", text))
-        declared = set(re.findall(r"^static GS_TLS [^\n]*\bgs_lret_(\d+)_0;$", text, re.MULTILINE))
+        caught = re.findall(r"\bk_rf == (\d+)\)", text)
+        thrown = set(re.findall(r"\bk_rf = ([1-9]\d*);", text))
+        declared = set(re.findall(r"^static K_TLS [^\n]*\bk_lret_(\d+)_0;$", text, re.MULTILINE))
         if len(caught) != 3 or len(set(caught)) != 3:
             wrong.append(f"targets caught: {caught}, want 3 distinct")
         if not thrown or not thrown <= set(caught) or declared != set(caught):
@@ -1921,7 +1921,7 @@ def main():
         text = cfile.read_text()
         bodies = re.findall(r"^static [^\n;]*\b(?:grow|fill)_g\w*\([^\n]*\) \{\n(.*?)^\}\n",
                             text, re.MULTILINE | re.DOTALL)
-        bulk = [b for b in bodies if "GS_MEMZERO" in b and "for (" not in b]
+        bulk = [b for b in bodies if "K_MEMZERO" in b and "for (" not in b]
         effects = [b for b in bodies if "next_g" in b and "for (" in b]
         if len(bulk) != 4 or len(effects) != 2:
             r.fail("bulk default loops", "\n".join(bodies))
@@ -1967,7 +1967,7 @@ def main():
                                   text, re.MULTILINE | re.DOTALL)
             direct = bodies("known") + bodies("descend")
             generic = bodies("shared") + bodies("shared_recursive") + bodies("dynamic")
-            if (len(direct) < 2 or not all("gs_component_one_g_" in b and "hdr->" not in b for b in direct)
+            if (len(direct) < 2 or not all("k_component_one_g_" in b and "hdr->" not in b for b in direct)
                     or len(generic) < 3 or not all("hdr->" in b for b in generic)):
                 r.fail(f"root call identity O{opt}", "\n".join(direct + generic))
             else:
@@ -1989,17 +1989,17 @@ def main():
             prefix, _, loop = body(name).partition("for (")
             ok &= len(re.findall(r"uint8_t \*\w+ = .*->top;", prefix)) == 1
             ok &= len(re.findall(r"int64_t \w+ = .*\.len;", prefix)) == 1
-            ok &= "GS_GL" not in loop.partition("\n    }")[0]
+            ok &= "K_GL" not in loop.partition("\n    }")[0]
         outer = body("outer")
         before, call, after = outer.partition(" = inner_g(")
         ok &= bool(call)
         for component in (0, 1):
-            stack = rf"\(&GS_GL->gs_gstk_gs_component_state_g_{component}\)->top"
-            length = rf"GS_GL->gs_component_state_g_{component}\.len"
+            stack = rf"\(&K_GL->k_gstk_k_component_state_g_{component}\)->top"
+            length = rf"K_GL->k_component_state_g_{component}\.len"
             ok &= bool(re.search(stack + r" = \w+;", before) and re.search(length + r" = \w+;", before))
             ok &= bool(re.search(r"\w+ = " + stack + ";", after) and re.search(r"\w+ = " + length + ";", after))
         mixed = body("mixed").partition("for (")[2].partition("\n    }")[0]
-        ok &= "gs_gstk_gs_component_state_g_0)->top" in mixed and ".stk->top" in mixed
+        ok &= "k_gstk_k_component_state_g_0)->top" in mixed and ".stk->top" in mixed
         if ok:
             r.ok("root call caches")
         else:
@@ -2039,7 +2039,7 @@ def main():
         body = re.search(r"^static void store_links_g\w*\([^\n]*\) \{\n(.*?)^\}\n",
                          cfile.read_text(), re.MULTILINE | re.DOTALL)
         stores = body and all(re.search(rf"\)\.{fld}_g = ", body[1]) for fld in ("w", "prev"))
-        if not stores or re.search(r"gs_f64 \*t\d+ = &", body[1]):
+        if not stores or re.search(r"k_f64 \*t\d+ = &", body[1]):
             r.fail(f"member stores {f.name}", body[1] if body else "no store_links in the C")
         else:
             r.ok(f"member stores {f.name}")
@@ -2057,7 +2057,7 @@ def main():
         text = cfile.read_text()
         listed = re.search(r"^static const a260_i64 LONG_g\w* = ", text, re.MULTILINE)
         filled = re.search(r"^static a300_i64 FILLED_g\w*;$", text, re.MULTILINE)
-        if not listed or not filled or "GS_GL->FILLED_g" in text:
+        if not listed or not filled or "K_GL->FILLED_g" in text:
             r.fail(f"static arrays {f.name}",
                    f"LONG static: {bool(listed)}, FILLED shared: {bool(filled)}")
         else:
@@ -2075,7 +2075,7 @@ def main():
         text = cfile.read_text()
         bad = [n for n in ("TABLE", "ZEROS", "TEXT")
                if not re.search(rf"^static \w+ {n}_g\w*;$", text, re.MULTILINE) or
-                  f"GS_GL->{n}_g" in text]
+                  f"K_GL->{n}_g" in text]
         if bad:
             r.fail(f"shared fills {f.name}", "copied or not static: " + ", ".join(bad))
         else:
@@ -2102,7 +2102,7 @@ def main():
         r.show(lambda f=f: fixtures[f].result().cgen)
     r.show_later(native_skips)
     if cc:
-        for kind, title in (("dump", "dump-runtime programs"), ("debug", "GS_DEBUG programs")):
+        for kind, title in (("dump", "dump-runtime programs"), ("debug", "K_DEBUG programs")):
             r.section(title)
             for f in tests:
                 r.show(lambda f=f, kind=kind: getattr(fixtures[f].result(), kind))
@@ -2151,7 +2151,7 @@ def main():
         r.show_task(runtime_lifecycle, "runtime_trim_memory", "runtime")
 
         # Library builds' C hosts, each built with the C the compiler writes for
-        # its program (--header). host_exit's ends the program with klang_exit
+        # its program (--header). host_exit's ends the program with k_exit
         # and starts it again over fresh globals and queues, and ending it
         # while a worker still runs is a runtime error. export's and
         # bce_export_entry's call the exports' wrappers, which only a C host
@@ -2197,7 +2197,7 @@ def main():
             for label in ("release", "debug"):
                 out_exe = gendir / f"cgclang-{label}{tc.EXE_SUFFIX}"
                 ok, log = clang.compile(src, out_exe, opt=1, warn="off", strict_decls=True,
-                                        defines=["GS_DEBUG=1"] if label == "debug" else [],
+                                        defines=["K_DEBUG=1"] if label == "debug" else [],
                                         runtime=r.runtime, log=gendir / f"cgclang-{label}.log")
                 if not ok:
                     r.fail(f"cgen-clang-{label} codegen_exec.k",
@@ -2246,7 +2246,7 @@ def main():
                 label = f"simd{level}"
                 out_exe = gendir / f"simdclang-{name}-{level}{tc.EXE_SUFFIX}"
                 ok, log = clang.compile(src, out_exe, opt=2, warn="off", strict_decls=True,
-                                        defines=[f"GS_SIMD={level}"], runtime=r.runtime,
+                                        defines=[f"K_SIMD={level}"], runtime=r.runtime,
                                         log=gendir / f"simdclang-{name}-{level}.log")
                 if not ok:
                     r.fail(f"{label}-clang {name}.k", "\n".join(log.splitlines()[:8]))
@@ -2299,7 +2299,7 @@ def main():
                     r.fail(f"mul_add-clang{gopt} {name}.k", out + err)
                     continue
                 ctext = src.read_text(encoding="utf-8")
-                if not re.search(r"#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET1 static [^\n]*"
+                if not re.search(r"#define K_MUL_ADD_MODE fused\nGS_SIMD_TARGET1 static [^\n]*"
                                  r"\bdirect_g\w*_simd1\(", ctext):
                     r.fail(f"mul_add-clang{gopt} {name}.k", "no fused mode around the AVX2 version")
                     continue
@@ -2307,7 +2307,7 @@ def main():
                     label = f"mul_add-simd{level}-clang{gopt} {name}.k"
                     out_exe = gendir / f"muladdclang-{tag}-{level}{tc.EXE_SUFFIX}"
                     ok, log = clang.compile(src, out_exe, opt=2, warn="off", strict_decls=True,
-                                            defines=[f"GS_SIMD={level}"], runtime=r.runtime,
+                                            defines=[f"K_SIMD={level}"], runtime=r.runtime,
                                             log=gendir / f"muladdclang-{tag}-{level}.log")
                     if not ok:
                         r.fail(label, "\n".join(log.splitlines()[:8]))
@@ -2328,10 +2328,10 @@ def main():
                     else:
                         r.ok(label)
 
-        # Elementwise float arithmetic as one vector operation (GS_VEC,
+        # Elementwise float arithmetic as one vector operation (K_VEC,
         # runtime.h): vec_elemwise's struct and array shapes are computed
         # through each of the six vector types where the compiler has vector
-        # extensions, and nothing else is. Built by clang with GS_VEC on and
+        # extensions, and nothing else is. Built by clang with K_VEC on and
         # off, both print the member-by-member results.
         def clang_vec():
             name = "vec_elemwise"
@@ -2341,13 +2341,13 @@ def main():
                 r.fail(f"vec-clang {name}.k", out + err)
                 return
             ctext = src.read_text(encoding="utf-8")
-            missing = [v for v in ("gs_vf64_2", "gs_vf64_4", "gs_vf64_8", "gs_vf32_4", "gs_vf32_8", "gs_vf32_16")
-                       if f"GS_VST({v}," not in ctext]
+            missing = [v for v in ("k_vf64_2", "k_vf64_4", "k_vf64_8", "k_vf32_4", "k_vf32_8", "k_vf32_16")
+                       if f"K_VST({v}," not in ctext]
             if missing:
                 r.fail(f"vec-clang {name}.k", f"no vector operations on {', '.join(missing)}")
                 return
             # The generated code's tests are indented; runtime.h's are not.
-            opens = len(re.findall(r"^\s+#if GS_VEC$", ctext, re.M))
+            opens = len(re.findall(r"^\s+#if K_VEC$", ctext, re.M))
             elses = len(re.findall(r"^\s+#else$", ctext, re.M))
             if opens == 0 or opens > elses:
                 r.fail(f"vec-clang {name}.k", f"{opens} vector operations, {elses} member-by-member ones")
@@ -2356,7 +2356,7 @@ def main():
                 label = f"vec{on}"
                 out_exe = gendir / f"vecclang-{on}{tc.EXE_SUFFIX}"
                 ok, log = clang.compile(src, out_exe, opt=2, warn="off", strict_decls=True,
-                                        defines=[f"GS_VEC={on}"], runtime=r.runtime,
+                                        defines=[f"K_VEC={on}"], runtime=r.runtime,
                                         log=gendir / f"vecclang-{on}.log")
                 if not ok:
                     r.fail(f"{label}-clang {name}.k", "\n".join(log.splitlines()[:8]))
@@ -2382,7 +2382,7 @@ def main():
 
     def driver_verbs():
         """The verb forms of the command line against the flag forms they
-        stand for: `klang run`, `klang check` and `klang version`, the help, a
+        stand for: `k run`, `k check` and `k version`, the help, a
         mistyped command, --color, --stats, the completion scripts and the
         man page."""
         probe = gendir / "verbs.k"
@@ -2398,7 +2398,7 @@ def main():
                        "verbs" not in out, out + err))
         code, out, err = tc.run_capture([exe, "run", "-o", str(gendir / "verbs.c"), probe])
         checks.append(("run -o (refused)", code != 0 and "takes no -o" in err, out + err))
-        version = re.compile(r"klang \S+ \(runtime [0-9a-f]{12}\)\s*$")
+        version = re.compile(r"k \S+ \(runtime [0-9a-f]{12}\)\s*$")
         code, out, err = tc.run_capture([exe, "version"])
         checks.append(("version", code == 0 and version.match(out) is not None, out + err))
         code, out2, err = tc.run_capture([exe, "--version"])
@@ -2446,8 +2446,8 @@ def main():
                     probe_dir.mkdir(parents=True, exist_ok=True)
                     tc.write_text(probe_dir / "complete_me.k", "fn main() {}\n")
                     probe_sh = (f"source '{script}'; t() {{ COMP_WORDS=(\"$@\"); "
-                                "COMP_CWORD=$(( ${#COMP_WORDS[@]} - 1 )); COMPREPLY=(); _klang; "
-                                "echo \"${COMPREPLY[*]}\"; }; t klang bu; t klang build --dr; t klang complete_m")
+                                "COMP_CWORD=$(( ${#COMP_WORDS[@]} - 1 )); COMPREPLY=(); _k; "
+                                "echo \"${COMPREPLY[*]}\"; }; t k bu; t k build --dr; t k complete_m")
                     r2 = subprocess.run(["bash", "-c", probe_sh], capture_output=True, text=True,
                                         cwd=probe_dir)
                     lines = r2.stdout.splitlines()
@@ -2461,11 +2461,11 @@ def main():
                        out + err))
         # The man page holds every command's help.
         code, man, err = tc.run_capture([exe, "help", "--man"])
-        checks.append(("help --man", code == 0 and man.startswith(".TH KLANG 1") and
+        checks.append(("help --man", code == 0 and man.startswith(".TH K 1") and
                        all(f".SS {v}\n" in man for v in ["run", "build", "format", "completion"]),
                        man[:400] + err))
         if shutil.which("groff") and os.name != "nt":
-            page = gendir / "klang.1"
+            page = gendir / "k.1"
             tc.write_text(page, man)
             r2 = subprocess.run(["groff", "-man", "-ww", "-z", str(page)], capture_output=True, text=True)
             checks.append(("help --man is a man page groff reads without warnings",
@@ -2485,8 +2485,8 @@ def main():
         code, out, err = tc.run_capture([exe, "check", "--no-bce", nobce])
         checks.append(("check --no-bce, a checkfree fn", code == 0 and
                        "checkfree is not verified under --no-bce" in err, out + err))
-        # The help: `klang --help` on the commands, `klang <command> --help`
-        # and `klang help <topic>` on each, which between them name every
+        # The help: `k --help` on the commands, `k <command> --help`
+        # and `k help <topic>` on each, which between them name every
         # option the driver reads, but for the hidden shader ones.
         code, overview, err = tc.run_capture([exe, "--help"])
         checks.append(("--help", code == 0 and "build" in overview and
@@ -2496,7 +2496,7 @@ def main():
                     "completion"]:
             code, out, err = tc.run_capture([exe, cmd, "--help"])
             checks.append((f"{cmd} --help", code == 0 and
-                           out.startswith(f"usage: klang {cmd}"), out + err))
+                           out.startswith(f"usage: k {cmd}"), out + err))
             pages += out
         for topic in ["c", "internals"]:
             code, out, err = tc.run_capture([exe, "help", topic])
@@ -2516,8 +2516,8 @@ def main():
         code, out, err = tc.run_capture([exe])
         checks.append(("(no file)", code == 1 and "usage:" in err and "--help" in err, out + err))
         code, out, err = tc.run_capture([exe, "build"])
-        checks.append(("build (no file)", code == 1 and "usage: klang build" in err and
-                       "klang build --help" in err, out + err))
+        checks.append(("build (no file)", code == 1 and "usage: k build" in err and
+                       "k build --help" in err, out + err))
         # The compiler's own toolchain discovery: where this runner found a C
         # compiler, the compiler must find one too, and say so as JSON.
         code, out, err = tc.run_capture([exe, "toolchain", "--json"])
@@ -2531,12 +2531,12 @@ def main():
         # A control character in what it reports is escaped, not lost.
         home = str(gendir / "home\twith a tab")
         tab = subprocess.run([str(exe), "toolchain", "--json"], capture_output=True, text=True,
-                             errors="replace", env=dict(os.environ, KLANG_HOME=home))
+                             errors="replace", env=dict(os.environ, K_HOME=home))
         try:
             good = json.loads(tab.stdout).get("home") == home.replace("\\", "/")
         except ValueError:
             good = False
-        checks.append(("toolchain --json with a tab in KLANG_HOME", good, tab.stdout + tab.stderr))
+        checks.append(("toolchain --json with a tab in K_HOME", good, tab.stdout + tab.stderr))
         # A directory on PATH that has a tool's name is not that tool.
         fakebin = gendir / "fakebin"
         (fakebin / "git").mkdir(parents=True, exist_ok=True)
@@ -2555,12 +2555,12 @@ def main():
         nowhere = gendir / "nowhere"
         nowhere.mkdir(exist_ok=True)
         env = {k: v for k, v in os.environ.items()
-               if k.upper() not in ("KLANG_CC", "PATH", "PROGRAMFILES", "PROGRAMW6432",
+               if k.upper() not in ("K_CC", "PATH", "PROGRAMFILES", "PROGRAMW6432",
                                      "PROGRAMFILES(X86)")}
         # Nothing on PATH, no Visual Studio where vswhere would be, and no
         # LLVM where its installer puts it. Windows gives a 64-bit process
         # ProgramFiles from ProgramW6432, so that one is hidden too.
-        env.update({"PATH": str(nowhere), "KLANG_HOME": str(nowhere / "home"),
+        env.update({"PATH": str(nowhere), "K_HOME": str(nowhere / "home"),
                     "PROGRAMFILES": str(nowhere), "PROGRAMW6432": str(nowhere),
                     "PROGRAMFILES(X86)": str(nowhere)})
         nocc = subprocess.run([str(exe), "toolchain"], capture_output=True, text=True,
@@ -2579,7 +2579,7 @@ def main():
                        code == 1 and "cannot start" in out + err and "No error" not in out + err,
                        out + err))
         if cc:
-            # `klang build` against the toolchain the compiler finds itself:
+            # `k build` against the toolchain the compiler finds itself:
             # the executable beside -o, running; a dry run writing none.
             built = gendir / ("verbs_built" + tc.EXE_SUFFIX)
             code, out, err = tc.run_capture([exe, "build", "-o", str(built), probe])
@@ -2592,7 +2592,7 @@ def main():
 
             shared_src = gendir / "verbs_shared.k"
             tc.write_text(shared_src,
-                          'export "klang_add" fn add(a: i32, b: i32) -> i32 { a + b }\n')
+                          'export "example_add" fn add(a: i32, b: i32) -> i32 { a + b }\n')
             shared_suffix = ".dll" if tc.IS_WINDOWS else ".dylib" if tc.IS_MACOS else ".so"
             shared_out = gendir / ("verbs_shared" + shared_suffix)
             code, out, err = tc.run_capture(
@@ -2602,16 +2602,16 @@ def main():
             if good:
                 try:
                     lib = ctypes.CDLL(str(shared_out.resolve()))
-                    lib.klang_init.argtypes = [ctypes.c_int,
+                    lib.k_init.argtypes = [ctypes.c_int,
                                                ctypes.POINTER(ctypes.c_char_p)]
-                    lib.klang_init.restype = None
-                    lib.klang_add.argtypes = [ctypes.c_int32, ctypes.c_int32]
-                    lib.klang_add.restype = ctypes.c_int32
-                    lib.klang_exit.argtypes = []
-                    lib.klang_exit.restype = None
-                    lib.klang_init(0, None)
-                    good = lib.klang_add(20, 22) == 42
-                    lib.klang_exit()
+                    lib.k_init.restype = None
+                    lib.example_add.argtypes = [ctypes.c_int32, ctypes.c_int32]
+                    lib.example_add.restype = ctypes.c_int32
+                    lib.k_exit.argtypes = []
+                    lib.k_exit.restype = None
+                    lib.k_init(0, None)
+                    good = lib.example_add(20, 22) == 42
+                    lib.k_exit()
                 except (AttributeError, OSError) as e:
                     good = False
                     detail += str(e)
@@ -2629,13 +2629,13 @@ def main():
             if good:
                 header_text = shared_header.read_text(encoding="utf-8", errors="replace")
                 good = all(name in header_text
-                           for name in ("klang_init", "klang_exit", "klang_add"))
+                           for name in ("k_init", "k_exit", "example_add"))
             checks.append(("build --shared --header", good, detail))
 
             # Without -o, the platform's normal shared-library spelling is used.
             default_src = gendir / "verbs_shared_default.k"
             tc.write_text(default_src,
-                          'export "klang_add" fn add(a: i32, b: i32) -> i32 { a + b }\n')
+                          'export "example_add" fn add(a: i32, b: i32) -> i32 { a + b }\n')
             default_out = gendir / (
                 "verbs_shared_default.dll" if tc.IS_WINDOWS else
                 "libverbs_shared_default.dylib" if tc.IS_MACOS else
@@ -2661,13 +2661,13 @@ def main():
 
             code, out, err = tc.run_capture([exe, "check", "--shared", probe])
             checks.append(("check --shared (refused)",
-                           code == 1 and "--shared is an option of klang build" in err,
+                           code == 1 and "--shared is an option of k build" in err,
                            out + err))
 
             dry = gendir / ("verbs_dry" + tc.EXE_SUFFIX)
             code, out, err = tc.run_capture([exe, "build", "--dry-run", "-o", str(dry), probe])
             checks.append(("build --dry-run", code == 0 and not dry.exists() and
-                           "verbs" in out and "klang_runtime" in out, out + err))
+                           "verbs" in out and "k_runtime" in out, out + err))
         for what, good, text in checks:
             if good:
                 r.ok(f"klang {what}")
@@ -2975,7 +2975,7 @@ def main():
     if cc:
         r.show_task(native_builder)
 
-    show_klang_in_klang()
+    show_k_in_k()
 
     # --- JIT: the same programs, compiled and run inside the compiler --------
     # No C file, no external toolchain: what this checks is that the generated
@@ -2998,7 +2998,7 @@ def main():
         r.show_later(jit_skips)
 
     parse_errors = sorted((HERE / "errors").glob("*.k"))
-    parse_runs = r.klang_each(["--parse"], parse_errors)
+    parse_runs = r.k_each(["--parse"], parse_errors)
 
     def parse_error(f):
         code, out, err = r.screened(f, parse_runs[f]())
@@ -3011,7 +3011,7 @@ def main():
     # Typecheck error tests: must parse, must fail the typechecker. One
     # compiler run tells the two apart by whether it reported the parse done.
     tc_errors = sorted((HERE / "errors_tc").glob("*.k")) + native_errors
-    tc_runs = r.klang_each(["--check"], tc_errors)
+    tc_runs = r.k_each(["--check"], tc_errors)
 
     def tc_error(f):
         code, out, err = r.screened(f, tc_runs[f]())
@@ -3028,7 +3028,7 @@ def main():
     # the order found, in text and as JSON. Each `// error:` marker is part
     # of the message of the error in its position, and there are no others.
     recovery = sorted((HERE / "errors_tc" / "recovery").glob("*.k"))
-    recovery_runs = r.klang_each(["--check"], recovery)
+    recovery_runs = r.k_each(["--check"], recovery)
 
     def recovery_error(f):
         code, out, err = r.screened(f, recovery_runs[f]())

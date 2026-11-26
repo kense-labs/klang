@@ -4,7 +4,7 @@
 // type there.
 struct Word { letters: u8[name.len] }
 
-var name = "goose";
+var name = "stone";
 
 fn main() {
     let w = Word { "geese" };

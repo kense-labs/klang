@@ -265,10 +265,10 @@ further optimizations do not require user code changes.
 
 ### Initial native measurement
 
-`python bench/root_structs.py --exe <klang.exe> --n 32000000 --reps 9`
+`python bench/root_structs.py --exe <k.exe> --n 32000000 --reps 9`
 compares `push_ref.k` with `push_root.k`: the same RNG, item writes,
 retained references, checksums, and two owner instances. The harness marks both
-C `fill` helpers `GS_NOINLINE`, preserving the call boundary at K O0 and O2
+C `fill` helpers `K_NOINLINE`, preserving the call boundary at K O0 and O2
 while compiling the C with native optimization. It saves timings, generated C,
 executable sizes, and stack reports. Times include process startup.
 
@@ -505,7 +505,7 @@ and for struct copies, which general codegen changes have since removed
 ([slot_pool.md](../../bench/slot_pool.md)); the index into `items` from the
 public freelist keeps its check. The slice pool's span
 tree is checked K code, where `reusable[]` calls the runtime's C
-(`gs_spans_*`). The JIT compiles that runtime C natively, so the gap there is
+(`k_spans_*`). The JIT compiles that runtime C natively, so the gap there is
 about 2.5x on the fragmented and resize workloads.
 
 Validation covers recursive forwarding, a recursive helper used by multiple

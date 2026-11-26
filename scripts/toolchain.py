@@ -82,10 +82,10 @@ def find_klang(explicit=None):
     # Routine runs should use an optimized compiler when one is available.
     # Correctness/CI runs that require assertions select Debug with --exe.
     for sub in ("Release", "RelWithDebInfo", "", "Debug"):
-        p = REPO_ROOT / "build" / sub / ("klang" + EXE_SUFFIX)
+        p = REPO_ROOT / "build" / sub / ("k" + EXE_SUFFIX)
         if p.exists():
             return p
-    sys.exit("no klang binary under build/ -- build it first, or pass --exe")
+    sys.exit("no k binary under build/ -- build it first, or pass --exe")
 
 
 # The compiler's own wording for a program the TinyCC backend cannot run yet.
@@ -112,7 +112,7 @@ def have_gfx(exe):
 
 def builtin_modules(exe):
     """The native modules (audio, gfx, physics, ui) whose packages are
-    compiled into this compiler, from `klang toolchain --json`: a program
+    compiled into this compiler, from `k toolchain --json`: a program
     using one of them runs and builds without the package being built first,
     which is what the runners need to know. Empty when the compiler cannot
     say."""
@@ -128,7 +128,7 @@ def native_link(exe, cc, module):
     physics, ui, audio) needs with this toolchain, as a list for CC.compile's
     `libs`: the response file the compiler's build wrote for the package. An
     empty list when the package is not compiled in. The runners build such
-    programs with `klang build`, which finds this itself; this is for the
+    programs with `k build`, which finds this itself; this is for the
     windowed gfx tests, which compile a C program of their own."""
     code, out, _ = run_capture([exe, f"--{module}-link", "msvc" if cc.style == "msvc" else "cc"])
     return [f"@{out.strip()}"] if code == 0 and out.strip() else []
@@ -265,7 +265,7 @@ class CC:
         (ok, combined output), and writes that output to `log` when given.
         `libs` go after the sources, where a GNU linker resolves static
         archives in order: a gfx program's `@link-*.rsp` (gfx_link).
-        `runtime`, a KlangRuntime, links the runtime object that C `klang -o`
+        `runtime`, a KlangRuntime, links the runtime object that C `k -o`
         writes needs, built with the same opt, defines and extra flags."""
         if cpp and not self.cxx:
             return False, f"no C++ compiler alongside {self.cc}\n"
@@ -302,7 +302,7 @@ class CC:
         return r.returncode == 0, output
 
     def compile_programs(self, cfiles, out, **kwargs):
-        """Compile and link the C of several programs that `klang -o` wrote
+        """Compile and link the C of several programs that `k -o` wrote
         into the one executable `out`, whose first argument, k, runs the
         k-th program as its own executable would, with the arguments past
         k and this executable's name: a unit of its own per program holds it with its main renamed, beside
@@ -316,21 +316,21 @@ class CC:
             unit = out.parent / f"{out.stem}-{k}.c"
             # Quoted includes in the program's C resolve against its own
             # directory, wherever the unit is.
-            write_text(unit, f'#define main gs_multi_main_{k}\n'
+            write_text(unit, f'#define main k_multi_main_{k}\n'
                              f'#include "{Path(cfile).resolve().as_posix()}"\n')
             units.append(unit)
         dispatch = out.parent / f"{out.stem}-main.c"
         write_text(dispatch,
                    "#include <stdlib.h>\n" +
-                   "".join(f"int gs_multi_main_{k}(int, char **);\n" for k in range(len(cfiles))) +
-                   "static int (*const gs_multi_mains[])(int, char **) = {\n" +
-                   "".join(f"    gs_multi_main_{k},\n" for k in range(len(cfiles))) +
+                   "".join(f"int k_multi_main_{k}(int, char **);\n" for k in range(len(cfiles))) +
+                   "static int (*const k_multi_mains[])(int, char **) = {\n" +
+                   "".join(f"    k_multi_main_{k},\n" for k in range(len(cfiles))) +
                    "};\n\n"
                    "int main(int argc, char **argv) {\n"
                    "    int k = argc > 1 ? atoi(argv[1]) : -1;\n"
                    f"    if (k < 0 || k >= {len(cfiles)}) return 125;\n"
                    "    argv[1] = argv[0];\n"
-                   "    return gs_multi_mains[k](argc - 1, argv + 1);\n"
+                   "    return k_multi_mains[k](argc - 1, argv + 1);\n"
                    "}\n")
         return self.compile(units + [dispatch], out, **kwargs)
 
@@ -365,7 +365,7 @@ class CC:
 
 class KlangRuntime:
     """The runtime that the C a klang compiler writes with -o links with:
-    `klang --emit-runtime` writes it, once, and it is compiled once for each
+    `k --emit-runtime` writes it, once, and it is compiled once for each
     toolchain configuration that asks for it -- compiler, optimization level,
     defines and extra flags such as the sanitizers' -- into an object of its
     own under `workdir`, which every program built that way then links.
@@ -385,10 +385,10 @@ class KlangRuntime:
         with self._lock:
             if self._source is None:
                 self.workdir.mkdir(parents=True, exist_ok=True)
-                path = self.workdir / "klang_runtime.c"
+                path = self.workdir / "k_runtime.c"
                 code, out, err = run_capture([self.exe, "--emit-runtime", path])
                 self._source = (True, path) if code == 0 else (
-                    False, f"klang --emit-runtime failed (exit {code})\n{out}{err}")
+                    False, f"k --emit-runtime failed (exit {code})\n{out}{err}")
             return self._source
 
     def object(self, cc, *, opt=None, defines=(), extra=()):
@@ -405,7 +405,7 @@ class KlangRuntime:
                 else:
                     tag = hashlib.sha1(repr(key).encode()).hexdigest()[:12]
                     obj = self.workdir / f"{cc.name}-{tag}" / (
-                        "klang_runtime.obj" if cc.style == "msvc" else "klang_runtime.o")
+                        "k_runtime.obj" if cc.style == "msvc" else "k_runtime.o")
                     obj.parent.mkdir(parents=True, exist_ok=True)
                     ok, log = cc.compile_object(src, obj, opt=opt, defines=defines, extra=extra)
                     entry[1] = (True, obj) if ok else (

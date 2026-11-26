@@ -27,7 +27,7 @@ asks.
 The repository also needs these entries in `languages.sh`:
 
 ```bash
-compile 'K' 'klang' 'klang -O2 --standalone -o klang/run.c klang/run.k && gcc -O3 -march=native klang/run.c -o klang/run -lm -pthread'
+compile 'K' 'klang' 'k -O2 --standalone -o klang/run.c klang/run.k && gcc -O3 -march=native klang/run.c -o klang/run -lm -pthread'
 run 'K' './klang/run' './klang/run'
 ```
 
@@ -125,7 +125,7 @@ in one file. Clang applies it to neither version.
 computes a libdivide-style magic number for the divisor before the loop
 and turns each `%` into a multiplication, a shift and a subtraction; C, C++
 and Rust leave a `div` instruction in the loop. The operands are `u32`, so
-the magic number is a 32-bit one (`gs_divu32_gen`, `gs_divu32_q`), and the
+the magic number is a 32-bit one (`k_divu32_gen`, `k_divu32_q`), and the
 quotient is the high half of a 32 by 32-bit product. A 64-bit magic number
 needs the high half of a 64 by 64-bit product instead, which x86-64 has
 only as a scalar instruction.

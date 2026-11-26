@@ -4,7 +4,7 @@
 // through the consequences one at a time, with the numbers to show for it.
 //
 // Build and run (from this directory):
-//   klang -o memory.c 02_memory.k && cl memory.c && memory
+//   k -o memory.c 02_memory.k && cl memory.c && memory
 
 import slot_pool;
 import std;

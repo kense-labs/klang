@@ -1,0 +1,12 @@
+K incorporates and modifies portions of the Goose programming language by
+Wouter van Oortmerssen (https://github.com/aardappel/goose). That material is
+available under the Apache License, Version 2.0 (LICENSE-APACHE).
+
+The graphics, audio, and UI package under packages/gfx incorporates and
+modifies https://github.com/aardappel/goose_gfx at revision
+8ee6375b65d6c76e162c5d24ba915d3ecb759cf3. The physics package under
+packages/physics incorporates and modifies
+https://github.com/aardappel/goose_physics at revision
+805ad8698593e2f7fb05d7b3f62d8cf75b6e435f. Each package carries its original
+license and dependency notices. K changes include the project name,
+source extensions, package and toolchain integration, and documentation.

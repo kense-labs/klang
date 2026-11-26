@@ -188,7 +188,7 @@ inline string CodeGen::DivisionKey(const Division &dv, const VarDef **root, bool
 }
 
 // A division of l by a divisor fixed for an enclosing loop (HoistDivisors):
-// the high half of a product by its magic number, unless gs_divu_gen found
+// the high half of a product by its magic number, unless k_divu_gen found
 // none to give. `plain`, the division by the divisor itself, where no loop
 // fixed it.
 inline string CodeGen::FixedDivX(const Division &dv, const string &l,
@@ -200,7 +200,7 @@ inline string CodeGen::FixedDivX(const Division &dv, const string &l,
     auto ct = CT(dv.t);
     auto lc = cat("(", ct, ")(", l, ")");
     auto w = mg.narrow ? "uint32_t" : "uint64_t";
-    auto q = cat(mg.narrow ? "gs_divu32_q(" : "gs_divu_q(", "(", w, ")(", lc, "), ", mg.magic, ", ",
+    auto q = cat(mg.narrow ? "k_divu32_q(" : "k_divu_q(", "(", w, ")(", lc, "), ", mg.magic, ", ",
                  mg.more, ")");
     auto fast = dv.op == T_DIV ? q : cat("(", w, ")(", lc, ") - ", q, " * ", mg.val);
     // Where only a zero divisor goes without, the plain division would fail.
@@ -208,8 +208,8 @@ inline string CodeGen::FixedDivX(const Division &dv, const string &l,
     // takes out of the loop; the plain division's own zero test would be a
     // loop exit after which the loop's stores might not run, which keeps gcc
     // from holding them in registers (and from vectorizing the loop).
-    auto slow = mg.zeronone ? cat("(gs_divfail(", LocArgs(line), "), 0)") : plain();
-    return cat("(", ct, ")(", mg.more, " != GS_DIVU_NONE ? ", fast, " : ", slow, ")");
+    auto slow = mg.zeronone ? cat("(k_divfail(", LocArgs(line), "), 0)") : plain();
+    return cat("(", ct, ")(", mg.more, " != K_DIVU_NONE ? ", fast, " : ", slow, ")");
 }
 
 // What a divisor a loop may fix is known by, or "" where it is none: an
@@ -404,12 +404,12 @@ inline vector<string> CodeGen::HoistDivisors(Block *loopbody, Node *cond,
         auto v = T(), m = T(), more = T();
         auto narrow = NarrowDivision(dv);
         auto w = narrow ? "uint32_t" : "uint64_t";
-        auto gen = narrow ? "gs_divu32_gen(" : "gs_divu_gen(";
+        auto gen = narrow ? "k_divu32_gen(" : "k_divu_gen(";
         L("uint8_t ", more, ";");
         L(w, " ", v, " = (", w, ")(", x, ");");
         if (ok == "1") L(w, " ", m, " = ", gen, v, ", &", more, ");");
         else L(w, " ", m, " = (", ok, ") ? ", gen, v, ", &", more, ") : (", more,
-               " = GS_DIVU_NONE, 0);");
+               " = K_DIVU_NONE, 0);");
         divmagic[key] = { v, m, more, narrow, narrow && ok == "1" };
         added.push_back(key);
     }
@@ -608,7 +608,7 @@ inline string CodeGen::DstTop0(size_t i) {
     if (dsttop0.size() <= i) dsttop0.resize(i + 1);
     if (dsttop0[i].empty()) {
         dsttop0[i] = T();
-        DeclareTop0(0, 1, dsttop0[i], cat("gs_dst", i));
+        DeclareTop0(0, 1, dsttop0[i], cat("k_dst", i));
     }
     return dsttop0[i];
 }
@@ -719,7 +719,7 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
         return;
     }
     if (PrefVar(d)) {
-        L("gs_pref ", name, " = ", GenPrefVal(init), ";");
+        L("k_pref ", name, " = ", GenPrefVal(init), ";");
         return;
     }
     // A relative reference variable holds the offset (§3.9): whatever the
@@ -800,26 +800,26 @@ inline Dst CodeGen::DeclStackLocal(VarDef *d, bool forlocal) {
         }
         return Dst { DK_STACK, stk, t, name };
     }
-    L("gs_rhdr ", name, " = { ", Top(stk), ", 0 };");
+    L("k_rhdr ", name, " = { ", Top(stk), ", 0 };");
     if (own) SaveBase(forlocal, stk, cat(name, ".base"));
     if (d->reusable) {
         // Companion freelist: free slot indices on their own stack.
         auto flstk = AllocStk(forlocal);
         auto fln = Unique2(cat(name, "_fl"));
-        L("gs_rhdr ", fln, " = { ", Top(flstk), ", 0 };");
+        L("k_rhdr ", fln, " = { ", Top(flstk), ", 0 };");
         SaveBase(forlocal, flstk, cat(fln, ".base"));
         vpool[d] = { fln, flstk };
     }
     return Dst { DK_STACK, stk, t, cat(name, ".len") };
 }
 
-// A gs_pref value from a &pool expression or another pool reference, or
+// A k_pref value from a &pool expression or another pool reference, or
 // from a construct choosing among pools of one kind (MergeVals keeps the
 // bits they share), which each branch builds into one temporary.
 inline string CodeGen::GenPrefVal(Node *n) {
     if (IsCtl(n)) {
         auto t = T();
-        L("gs_pref ", t, ";");
+        L("k_pref ", t, ";");
         GenAny(n, Dst { DK_LVALUE, t, n->exprtype, "", true });
         return t;
     }
@@ -828,11 +828,11 @@ inline string CodeGen::GenPrefVal(Node *n) {
             auto vd = id->vdef;
             auto pit = vpool.find(vd);
             auto git = gpools.find(vd);
-            // A captured pool arrives as a gs_pref (VarLoc).
+            // A captured pool arrives as a k_pref (VarLoc).
             if (pit == vpool.end() && git == gpools.end()) return VName(vd);
             auto &pl = pit != vpool.end() ? pit->second : git->second;
             auto t = T();
-            L("gs_pref ", t, " = { &", HdrLv(vd), ", ", VStkOf(vd), ", &", pl.first,
+            L("k_pref ", t, " = { &", HdrLv(vd), ", ", VStkOf(vd), ", &", pl.first,
               ", ", pl.second, " };");
             return t;
         }
@@ -869,7 +869,7 @@ inline void CodeGen::GenRebind(Assign *a, Loc lv) {
     }
     assert(lv.val);
     if (Is<NullLit>(a->rhs)) {
-        if (IsResz(lv.t->ref->sub)) L("GS_MEMZERO(&", lv.s, ", sizeof(", lv.s, "));");
+        if (IsResz(lv.t->ref->sub)) L("K_MEMZERO(&", lv.s, ", sizeof(", lv.s, "));");
         else L(lv.s, " = NULL;");
         return;
     }
@@ -962,12 +962,12 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
             vector<string> starts(sp->rets.size());
             for (size_t i = 0; i < sp->rets.size(); i++) {
                 auto rt = sp->rets[i];
-                auto dst = cat("gs_dst", i);
-                if (IsResz(rt)) chans[i] = Dst { DK_STACK, dst, rt, cat("(*gs_rl", i, ")") };
+                auto dst = cat("k_dst", i);
+                if (IsResz(rt)) chans[i] = Dst { DK_STACK, dst, rt, cat("(*k_rl", i, ")") };
                 else if (IsBytesT(rt)) chans[i] = Dst { DK_STACK, dst };
                 else if (NeedsResultLocation(rt))
-                    chans[i] = Dst { DK_LVALUE, cat("(*gs_r", i, ")"), rt };
-                else if (PtrAbi(rt)) chans[i] = FreshLv(cat("(*gs_r", i, ")"), rt);
+                    chans[i] = Dst { DK_LVALUE, cat("(*k_r", i, ")"), rt };
+                else if (PtrAbi(rt)) chans[i] = FreshLv(cat("(*k_r", i, ")"), rt);
                 else continue;
                 if (IsBytesT(rt)) starts[i] = ExitStart(c, dst, "", 0);
             }
@@ -976,12 +976,12 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
                 if (IsBytesT(sp->rets[i])) continue;
                 if ((int)i == si.cret) retv = fixed[i];
                 else if (!NeedsResultLocation(sp->rets[i]) && fixed[i] != chans[i].s)
-                    L("*gs_r", i, " = ", fixed[i], ";");
+                    L("*k_r", i, " = ", fixed[i], ";");
             }
             for (size_t i = 0; i < sp->rets.size(); i++)
                 if (!starts[i].empty())
-                    LandValue(cat("gs_dst", i), DstTop0(i), starts[i], sp->rets[i],
-                              cat("(*gs_rl", i, ")"));
+                    LandValue(cat("k_dst", i), DstTop0(i), starts[i], sp->rets[i],
+                              cat("(*k_rl", i, ")"));
             Epilogue(retv);
             return;
         }
@@ -991,7 +991,7 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
         auto rt = sp->rets[i];
         auto id = Is<Ident>(vals[i]);
         auto named = id && id->vdef ? nrvo.find(id->vdef) : nrvo.end();
-        auto dst = cat("gs_dst", i);
+        auto dst = cat("k_dst", i);
         // Inline destinations belong to their own block; only DetectNrvo's
         // entries alias this function's return destinations.
         auto direct = named != nrvo.end() && !named->second.inlined && named->second.stk == dst;
@@ -999,12 +999,12 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
             if (direct) {
                 // Built at the destination; only the count (or the frame
                 // object) travels.
-                if (IsFrameObj(rt)) L("*gs_rl", i, " = ", HdrLv(id->vdef), ";");
-                else L("*gs_rl", i, " = ", HdrLv(id->vdef), ".len;");
+                if (IsFrameObj(rt)) L("*k_rl", i, " = ", HdrLv(id->vdef), ";");
+                else L("*k_rl", i, " = ", HdrLv(id->vdef), ".len;");
                 continue;
             }
             NoSelfRelCopy(vals[i]);
-            auto lenlv = cat("(*gs_rl", i, ")");
+            auto lenlv = cat("(*k_rl", i, ")");
             auto start = ExitStart(vals[i], dst, lenlv, 0);
             GenConstruct(vals[i], dst, rt, lenlv);
             if (!start.empty()) LandValue(dst, DstTop0(i), start, rt, lenlv);
@@ -1021,20 +1021,20 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
             GenConstruct(vals[i], dst, rt);
             if (!start.empty()) LandValue(dst, DstTop0(i), start, rt, "");
         } else if (NeedsResultLocation(rt)) {
-            GenAny(vals[i], Dst { DK_LVALUE, cat("(*gs_r", i, ")"), rt });
+            GenAny(vals[i], Dst { DK_LVALUE, cat("(*k_r", i, ")"), rt });
         } else if ((int)i == si.cret) {
             retv = T();
             L(CT(rt), " ", retv, ";");
             GenAny(vals[i], Dst { DK_LVALUE, retv, rt });
         } else if (PtrAbi(rt)) {
-            // The caller points gs_r at fresh storage (Dst::fresh), so the
+            // The caller points k_r at fresh storage (Dst::fresh), so the
             // value is built there directly.
-            GenAny(vals[i], FreshLv(cat("(*gs_r", i, ")"), rt));
+            GenAny(vals[i], FreshLv(cat("(*k_r", i, ")"), rt));
         } else {
             auto tv = T();
             FixedLocal(rt, tv);
             GenAny(vals[i], Dst { DK_LVALUE, tv, rt });
-            L("*gs_r", i, " = ", tv, ";");
+            L("*k_r", i, " = ", tv, ";");
         }
     }
     Epilogue(retv);
@@ -1059,10 +1059,10 @@ inline void CodeGen::EmitPrefixPatch(const string &pref, IntStorage ls, const st
     ind++;
     auto tmp = T(), ms = T();
     L("uint8_t ", tmp, "[10];");
-    L("int64_t ", ms, " = gs_uleb_write(", tmp, ", (uint64_t)(", count, "));");
+    L("int64_t ", ms, " = k_uleb_write(", tmp, ", (uint64_t)(", count, "));");
     L("memmove((", elems, ") + ", ms, " - 1, ", elems, ", (size_t)(", Top(stk), " - (",
       elems, ")));");
-    L("GS_MEMCPY(", pref, ", ", tmp, ", (size_t)", ms, ");");
+    L("K_MEMCPY(", pref, ", ", tmp, ", (size_t)", ms, ");");
     L(TopW(stk), " += ", ms, " - 1;");
     ind--;
     L("}");
@@ -1087,13 +1087,13 @@ inline void CodeGen::Epilogue(const string &retv) {
 }
 
 // The dummy C return value used on propagate paths. `rfval` names the
-// target to propagate to, or is empty when gs_rf already holds it (an
+// target to propagate to, or is empty when k_rf already holds it (an
 // intermediate frame passing on a propagation it did not start).
 inline void CodeGen::PropagateReturn(const string &rfval) {
     EmitExitRestores(0);
     MarkFlush();
     for (auto &s : fdstsaves) L(s);
-    if (!rfval.empty()) L("gs_rf = ", rfval, ";");
+    if (!rfval.empty()) L("k_rf = ", rfval, ";");
     if (curinfo->cret >= 0) {
         auto d = T();
         L(CT(curspec->rets[curinfo->cret]), " ", d, " = {0};");
@@ -1119,16 +1119,16 @@ inline void CodeGen::GenFromReturn(Return *r) {
     // the catch moves them down from here (EmitRfCheck).
     for (size_t i = 0; i < rets.size(); i++)
         if (IsBytesT(rets[i]))
-            L("gs_fval_", tid, "_", i, " = ", Top(cat("gs_fdst_", tid, "_", i)), ";");
+            L("k_fval_", tid, "_", i, " = ", Top(cat("k_fdst_", tid, "_", i)), ";");
     if (r->vals.size() == rets.size()) {
         for (size_t i = 0; i < rets.size(); i++) {
             if (IsResz(rets[i]))
-                GenConstruct(r->vals[i], cat("gs_fdst_", tid, "_", i), rets[i],
-                             cat("gs_lret_", tid, "_", i));
+                GenConstruct(r->vals[i], cat("k_fdst_", tid, "_", i), rets[i],
+                             cat("k_lret_", tid, "_", i));
             else if (IsBytesT(rets[i]))
-                GenConstruct(r->vals[i], cat("gs_fdst_", tid, "_", i), rets[i]);
+                GenConstruct(r->vals[i], cat("k_fdst_", tid, "_", i), rets[i]);
             else {
-                auto dst = cat("gs_lret_", tid, "_", i);
+                auto dst = cat("k_lret_", tid, "_", i);
                 if (NeedsResultLocation(rets[i])) dst = cat("(*", dst, ")");
                 GenAny(r->vals[i], Dst { DK_LVALUE, dst, rets[i] });
             }
@@ -1137,7 +1137,7 @@ inline void CodeGen::GenFromReturn(Return *r) {
         // Forward one call's values into the channels.
         vector<Dst> chans;
         for (size_t i = 0; i < rets.size(); i++) {
-            auto stk = cat("gs_fdst_", tid, "_", i), lret = cat("gs_lret_", tid, "_", i);
+            auto stk = cat("k_fdst_", tid, "_", i), lret = cat("k_lret_", tid, "_", i);
             if (NeedsResultLocation(rets[i])) lret = cat("(*", lret, ")");
             if (IsResz(rets[i])) chans.push_back(Dst { DK_STACK, stk, rets[i], lret });
             else if (IsBytesT(rets[i])) chans.push_back(Dst { DK_STACK, stk });
@@ -1163,15 +1163,15 @@ inline string CodeGen::FromChannels(FnSpec *t, const string &tid) {
     auto &rets = t->rets;
     for (size_t i = 0; i < rets.size(); i++) {
         if (IsFix(rets[i])) {
-            Append(decls, "static GS_TLS ", CT(rets[i]), NeedsResultLocation(rets[i]) ? " *" : " ",
-                   "gs_lret_", tid, "_", i, ";\n");
+            Append(decls, "static K_TLS ", CT(rets[i]), NeedsResultLocation(rets[i]) ? " *" : " ",
+                   "k_lret_", tid, "_", i, ";\n");
             continue;
         }
-        Append(decls, "static GS_TLS gs_stack *gs_fdst_", tid, "_", i, ";\n");
-        Append(decls, "static GS_TLS uint8_t *gs_fval_", tid, "_", i, ";\n");
+        Append(decls, "static K_TLS k_stack *k_fdst_", tid, "_", i, ";\n");
+        Append(decls, "static K_TLS uint8_t *k_fval_", tid, "_", i, ";\n");
         if (IsResz(rets[i]))
-            Append(decls, "static GS_TLS ", IsFrameObj(rets[i]) ? CT(rets[i]) : string("int64_t"),
-                   " gs_lret_", tid, "_", i, ";\n");
+            Append(decls, "static K_TLS ", IsFrameObj(rets[i]) ? CT(rets[i]) : string("int64_t"),
+                   " k_lret_", tid, "_", i, ";\n");
     }
     return decls;
 }
@@ -1212,7 +1212,7 @@ inline string CodeGen::CallVal0(Call *c, const string &r0, TypeExpr *want) {
     }
     if (rt && rt->kind == TY_REF && rt->ref->lenstorage < 0 && et &&
         et->kind != TY_REF && et->kind != TY_VOID) {
-        if (IsVarintT(rt->ref->sub)) return cat("gs_zig_read(", r0, ")");
+        if (IsVarintT(rt->ref->sub)) return cat("k_zig_read(", r0, ")");
         if (IsResz(rt->ref->sub) || IsBytesT(rt->ref->sub)) return r0;
         return PointeeLv(r0, rt->ref->sub);
     }

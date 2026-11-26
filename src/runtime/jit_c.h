@@ -1,8 +1,8 @@
 /* The C surface used by generated code in the embedded JIT. Platform types
    and implementation headers belong to the runtime built into K. The
    integer and pointer types follow TinyCC's target definitions. */
-#ifndef KLANG_JIT_C_H
-#define KLANG_JIT_C_H
+#ifndef K_JIT_C_H
+#define K_JIT_C_H
 typedef signed char int8_t;
 typedef unsigned char uint8_t;
 typedef short int16_t;
@@ -43,55 +43,55 @@ void *realloc(void *, size_t);
 void free(void *);
 int abs(int);
 
-#define GS_JIT_MATH1(fn) double fn(double); float fn##f(float);
-#define GS_JIT_MATH2(fn) double fn(double, double); float fn##f(float, float);
-GS_JIT_MATH1(sqrt)
-GS_JIT_MATH1(sin)
-GS_JIT_MATH1(cos)
-GS_JIT_MATH1(tan)
-GS_JIT_MATH1(asin)
-GS_JIT_MATH1(acos)
-GS_JIT_MATH1(atan)
-GS_JIT_MATH1(exp)
-GS_JIT_MATH1(log)
-GS_JIT_MATH1(log2)
-GS_JIT_MATH1(log10)
-GS_JIT_MATH1(floor)
-GS_JIT_MATH1(ceil)
-GS_JIT_MATH1(round)
-GS_JIT_MATH1(trunc)
-GS_JIT_MATH1(fabs)
-GS_JIT_MATH2(atan2)
-GS_JIT_MATH2(pow)
-GS_JIT_MATH2(fmod)
-GS_JIT_MATH1(cbrt)
-GS_JIT_MATH2(hypot)
-GS_JIT_MATH1(exp2)
-GS_JIT_MATH1(expm1)
-GS_JIT_MATH1(log1p)
-GS_JIT_MATH1(sinh)
-GS_JIT_MATH1(cosh)
-GS_JIT_MATH1(tanh)
-GS_JIT_MATH2(copysign)
+#define K_JIT_MATH1(fn) double fn(double); float fn##f(float);
+#define K_JIT_MATH2(fn) double fn(double, double); float fn##f(float, float);
+K_JIT_MATH1(sqrt)
+K_JIT_MATH1(sin)
+K_JIT_MATH1(cos)
+K_JIT_MATH1(tan)
+K_JIT_MATH1(asin)
+K_JIT_MATH1(acos)
+K_JIT_MATH1(atan)
+K_JIT_MATH1(exp)
+K_JIT_MATH1(log)
+K_JIT_MATH1(log2)
+K_JIT_MATH1(log10)
+K_JIT_MATH1(floor)
+K_JIT_MATH1(ceil)
+K_JIT_MATH1(round)
+K_JIT_MATH1(trunc)
+K_JIT_MATH1(fabs)
+K_JIT_MATH2(atan2)
+K_JIT_MATH2(pow)
+K_JIT_MATH2(fmod)
+K_JIT_MATH1(cbrt)
+K_JIT_MATH2(hypot)
+K_JIT_MATH1(exp2)
+K_JIT_MATH1(expm1)
+K_JIT_MATH1(log1p)
+K_JIT_MATH1(sinh)
+K_JIT_MATH1(cosh)
+K_JIT_MATH1(tanh)
+K_JIT_MATH2(copysign)
 double ldexp(double, int);
 float ldexpf(float, int);
 double frexp(double, int *);
 float frexpf(float, int *);
-GS_JIT_MATH1(acosh)
-GS_JIT_MATH1(asinh)
-GS_JIT_MATH1(atanh)
-GS_JIT_MATH1(erf)
-GS_JIT_MATH1(erfc)
-GS_JIT_MATH1(tgamma)
-GS_JIT_MATH1(lgamma)
-GS_JIT_MATH1(logb)
-GS_JIT_MATH1(rint)
-GS_JIT_MATH1(nearbyint)
-GS_JIT_MATH2(fmin)
-GS_JIT_MATH2(fmax)
-GS_JIT_MATH2(fdim)
-GS_JIT_MATH2(nextafter)
-GS_JIT_MATH2(remainder)
+K_JIT_MATH1(acosh)
+K_JIT_MATH1(asinh)
+K_JIT_MATH1(atanh)
+K_JIT_MATH1(erf)
+K_JIT_MATH1(erfc)
+K_JIT_MATH1(tgamma)
+K_JIT_MATH1(lgamma)
+K_JIT_MATH1(logb)
+K_JIT_MATH1(rint)
+K_JIT_MATH1(nearbyint)
+K_JIT_MATH2(fmin)
+K_JIT_MATH2(fmax)
+K_JIT_MATH2(fdim)
+K_JIT_MATH2(nextafter)
+K_JIT_MATH2(remainder)
 double fma(double, double, double);
 float fmaf(float, float, float);
 double scalbn(double, int);
@@ -114,6 +114,6 @@ double remquo(double, double, int *);
 float remquof(float, float, int *);
 double nan(const char *);
 float nanf(const char *);
-#undef GS_JIT_MATH1
-#undef GS_JIT_MATH2
+#undef K_JIT_MATH1
+#undef K_JIT_MATH2
 #endif

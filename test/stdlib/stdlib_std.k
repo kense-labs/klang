@@ -1,6 +1,6 @@
 // runtime-debug: stdlib/std.k, one function group per section; the
 // expected values are worked out by hand in the comments. Valid input trips
-// none of GS_DEBUG's checks inside std.
+// none of K_DEBUG's checks inside std.
 import std;
 
 fn scalars() {
@@ -483,9 +483,9 @@ fn strings() {
     let lng, lnga, lngok = split_once("ab", "abc");
     print(lng, "|", lnga.len, "|", lngok);                                     // ab|0|false
     var buf: u8[>..] = [];
-    format(buf, "name: goose");
+    format(buf, "name: stone");
     let bk, bv, bok = split_once(buf, ": ");
-    print(bk, "|", bv, "|", bok);                                              // name|goose|true
+    print(bk, "|", bv, "|", bok);                                              // name|stone|true
     var line: u8[>..] = [];
     format(line, "  take \t the\r\nsword  ");
     let cmd = words(line);

@@ -1,4 +1,4 @@
-// runtime-define: GS_DEBUG=1
+// runtime-define: K_DEBUG=1
 // thread_spawn_contained (§11.2): each kind of abort ends only its worker, and
 // every thread_wait for it answers false; the first that asks takes its
 // message. Other workers, waiters, and a replacement worker run on. A debug build, for the checks only

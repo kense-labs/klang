@@ -5,7 +5,7 @@
 // moment, for how long, and the last line the tool running printed, redrawn
 // in place and erased when the work is done; anywhere else (a pipe, a file,
 // a CI log, an agent reading the output) there is no live line, so nothing
-// is printed but those lines. KLANG_PROGRESS=plain or live overrides what
+// is printed but those lines. K_PROGRESS=plain or live overrides what
 // stderr suggests. Implemented in progress.cpp, a translation unit of its
 // own for the platform headers that ask about the terminal.
 #pragma once

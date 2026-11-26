@@ -1,4 +1,4 @@
-// runtime-define: GS_DEBUG=1
+// runtime-define: K_DEBUG=1
 // A checked `as` that would change its value aborts a debug build (§6.3),
 // naming the value, the target type and the line of the cast itself, which
 // is inside `level` even where -O2 inlines it into main.

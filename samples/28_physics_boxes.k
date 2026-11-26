@@ -17,15 +17,15 @@
 // button to look around and use the wheel to zoom; Up and Down pour faster
 // and slower; Escape quits.
 //
-//   klang 28_physics_boxes.k
-//   klang 28_physics_boxes.k -- --boxes 20000
+//   k 28_physics_boxes.k
+//   k 28_physics_boxes.k -- --boxes 20000
 //
 // `--frames N` stops after N frames and saves the last as physics_boxes.png;
 // `--rate N` drops N boxes a frame. Built from the generated C, the program
 // links both native layers, whose paths klang prints as response files:
-//   klang -o physics_boxes.c 28_physics_boxes.k
-//   cl physics_boxes.c @<klang --gfx-link msvc> @<klang --physics-link msvc>
-//   cc physics_boxes.c -o physics_boxes @<klang --gfx-link cc> @<klang --physics-link cc>
+//   k -o physics_boxes.c 28_physics_boxes.k
+//   cl physics_boxes.c @<k --gfx-link msvc> @<k --physics-link msvc>
+//   cc physics_boxes.c -o physics_boxes @<k --gfx-link cc> @<k --physics-link cc>
 
 import std;
 import vec;

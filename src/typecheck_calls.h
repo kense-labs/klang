@@ -2682,7 +2682,7 @@ inline bool TypeCheck::ExternParamOk(TypeExpr *t, string &why) {
             return false;
         }
         auto s = t->ref->sub;
-        // A resizable crosses as its header and stack (gs_rref), and C sees
+        // A resizable crosses as its header and stack (k_rref), and C sees
         // its elements as blocks of their packed size.
         if (s->kind == TY_ARRAY && s->arr->akind == A_GROW) return ExternValueOk(s->arr->sub, why);
         return ExternValueOk(s, why);
@@ -2787,10 +2787,10 @@ inline void TypeCheck::CheckExport(SFunction *sf) {
         fail("must be a top-level K function");
     if (!sf->generics.empty()) fail("cannot be generic");
     if (sf->cname.empty()) fail("needs a C symbol");
-    if (sf->cname == "main" || sf->cname == "klang_init" || sf->cname == "klang_exit")
+    if (sf->cname == "main" || sf->cname == "k_init" || sf->cname == "k_exit")
         fail(cat("C symbol ", sf->cname, " is reserved"));
-    if (sf->cname.rfind("gs_", 0) == 0)
-        fail("C symbols beginning with gs_ are reserved for K internals");
+    if (sf->cname.rfind("k_", 0) == 0)
+        fail("C symbols beginning with k_ are reserved for K internals");
     auto valid_ident = [](string_view n) {
         if (n.empty() || n[0] == '_' || !isalpha((unsigned char)n[0])) return false;
         for (auto c : n)
@@ -2917,7 +2917,7 @@ inline void TypeCheck::CheckSpecBody(FnSpec *spec, vector<Val> *argvals, Line ca
         for (auto &[cls, tc] : threadedclasses) broken += tc.broken;
         auto bounds = threadbounds;
         auto members = spec->cyclemembers;
-        if (getenv("KLANG_ROUNDS"))
+        if (getenv("K_ROUNDS"))
             fprintf(stderr, "round %d of %.*s begins (%d members)\n", spec->rounds + 1,
                     (int)spec->sf->name.size(), spec->sf->name.data(), (int)members.size());
         for (auto m : members) {
@@ -2928,7 +2928,7 @@ inline void TypeCheck::CheckSpecBody(FnSpec *spec, vector<Val> *argvals, Line ca
         CheckSpecBodyOnce(spec, argvals, callline, call);
         for (auto &[cls, tc] : threadedclasses) broken -= tc.broken;
         auto outer = cyclerounds.back().changed;
-        if (outer && getenv("KLANG_ROUNDS"))
+        if (outer && getenv("K_ROUNDS"))
             fprintf(stderr, "round %d of %.*s: a variable outside it changed\n", spec->rounds,
                     (int)spec->sf->name.size(), spec->sf->name.data());
         auto settled = broken == 0 && bounds == threadbounds && !outer;
@@ -2946,10 +2946,10 @@ inline bool TypeCheck::SameRecord(const FnRecord &a, const FnRecord &b, const Fn
     auto sameroots = [&](const Roots &x, const Roots &y) {
         return x.Same(y, Roots::Compare::Cycle);
     };
-    // KLANG_ROUNDS in the environment traces what keeps a cycle's rounds
+    // K_ROUNDS in the environment traces what keeps a cycle's rounds
     // going.
     auto why = [&](const char *what) {
-        if (getenv("KLANG_ROUNDS"))
+        if (getenv("K_ROUNDS"))
             fprintf(stderr, "round %d of %.*s: %s changed\n", spec->rounds, (int)spec->sf->name.size(),
                     spec->sf->name.data(), what);
         return false;

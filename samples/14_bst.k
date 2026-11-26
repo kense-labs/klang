@@ -7,7 +7,7 @@
 // own growable data of its own.
 //
 // Build and run (from this directory):
-//   klang -o bst.c 14_bst.k && cl bst.c && bst
+//   k -o bst.c 14_bst.k && cl bst.c && bst
 
 import std;
 

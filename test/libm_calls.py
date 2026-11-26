@@ -1,5 +1,5 @@
 """math's libm functions as the C compiler sees them: gcc and clang still know
-them as libm's under the runtime's names (gs_sin, ...), so pow(x, 2.0) is a
+them as libm's under the runtime's names (k_sin, ...), so pow(x, 2.0) is a
 multiply and, where the C library has sincos (Linux), sin and cos of one
 value are one call to it. gcc knows a libm function only by its own name,
 and clang by its symbol."""
@@ -66,7 +66,7 @@ def check_libm_calls(exe, ccs, base):
         cfile = root / "libm.c"
         code, out, err = tc.run_capture([exe, "-o", cfile, source])
         if code != 0:
-            raise RuntimeError(f"libm calls: klang -o failed\n{out}{err}")
+            raise RuntimeError(f"libm calls: k -o failed\n{out}{err}")
         for cc in ccs:
             asm = root / f"libm-{cc.name}.s"
             code, out, err = tc.run_capture([cc.cc, "-O2", "-S", "-o", asm, cfile])

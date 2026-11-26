@@ -137,7 +137,7 @@ Literals:
   Separators may appear in the integer part, fraction, and exponent,
   including a hex float's binary exponent (`3.141_592`, `1_000e3`,
   `0x1.A_Bp3`, `1e1_0`, `0x1.8p1_0`); `1.0_` and `0x1.8_p3` are errors.
-  `klang format` preserves the author's separators.
+  `k format` preserves the author's separators.
 * String `"..."`, with escapes `\n \t \r \0 \\ \" \' \xNN` (two hex digits).
 * Raw string `"""..."""`: no escapes, and the next `"""` ends it. On one
   line, its text is what lies between the delimiters (`"""a "quoted"
@@ -153,9 +153,9 @@ Literals:
 
   ```klang
   let usage = """
-      usage: klang [options] file.k
+      usage: k [options] file.k
         -o file.c   write C instead of running it
-      """;      // "usage: klang [options] file.k\n  -o file.c   write C ..."
+      """;      // "usage: k [options] file.k\n  -o file.c   write C ..."
   ```
 * `null` — the empty value of any optional type `T?` (§3.8).
 * `self` — inside a struct or variant literal, the value that literal is
@@ -3364,7 +3364,7 @@ local propagation and `return from` to return across several calls.
 ```klang
 extern fn sqrt(x: f64) -> f64;
 extern fn sqrt(x: f32) -> f32 = "sqrtf";
-extern fn read_file(path: u8[:], out: u8[>..]&) -> bool = "gs_os_read_file";
+extern fn read_file(path: u8[:], out: u8[>..]&) -> bool = "k_os_read_file";
 extern fn gl_vertex3(v: float3&);
 ```
 
@@ -3378,7 +3378,7 @@ change it). A declaration giving both strings is an error. An `extern fn`
 is top-level only, fully typed, not generic, and joins overload resolution
 like any function. A call compiles to a direct C call with no
 calling-convention extras, and a prototype is emitted from the declaration
-unless the runtime declares the symbol (the `os` library's `gs_os_*`
+unless the runtime declares the symbol (the `os` library's `k_os_*`
 functions, declared in `src/runtime/runtime_ext.h` and defined in
 `src/runtime/runtime_os.h`). User C code is added to the program with
 `--include <header>`, which is emitted after the generated type
@@ -3409,9 +3409,9 @@ These values can cross the boundary (with layouts per C.2):
 * `T&` to such a `T`, as a pointer;
 * `T[:]` of such a `T`, as the slice struct (`{ data, len }`);
 * `T[>..]&` of such a `T`, as the resizable's header plus its stack
-  (`gs_rref`). C sees the elements as blocks of `T`'s packed size: it may
+  (`k_rref`). C sees the elements as blocks of `T`'s packed size: it may
   write the ones there are and append whole ones at the stack top, moving
-  the top and the header's count together, which `gs_bld_append(ref, p, n)`
+  the top and the header's count together, which `k_bld_append(ref, p, n)`
   does for a `u8[>..]&`. C compiled on its own, such as a package's C, finds
   both in `klang.h` (docs/packages.md).
 
@@ -3529,7 +3529,7 @@ Other references, slices, and variable-size returns are rejected.
 Generated C retains its normal `main` unless the program is compiled with
 `--header out.h`, which builds it for a C host: the generated C has no `main`
 and a source without a K `fn main()` is accepted. The header declares
-`klang_init(argc, argv)`, which a C host must call before any exported
+`k_init(argc, argv)`, which a C host must call before any exported
 function. It initializes the runtime and the globals and then runs the K
 `fn main()`, if there is one, so `main` is where a library keeps its own
 start-up code; exported functions may be called from it. A second call does
@@ -3547,21 +3547,21 @@ generated C output and at least one export, and
 writes declarations and the required packed C type definitions for the
 exported API.
 
-The header also declares `klang_exit()`, which ends the program: it releases
-what `klang_init` set up (the data stack regions, the queues, and the
+The header also declares `k_exit()`, which ends the program: it releases
+what `k_init` set up (the data stack regions, the queues, and the
 runtime's handling of faults, which returns to the host's), after which
-`klang_init` may start a program in the process again, this one or another
+`k_init` may start a program in the process again, this one or another
 build of it, as a host that reloads a library does. It must be called from
 the initializing thread, with no thread program of the program still
 running, which is a runtime error; exported functions may not be called
-again until `klang_init` has. Before `klang_init`, it does nothing. What the
+again until `k_init` has. Before `k_init`, it does nothing. What the
 K `main` set up outside the runtime is not undone. Where programs share
 a runtime object, starting one while another is started is a runtime error,
 rather than the first's regions being forgotten.
 
 An exported C symbol is emitted as written, as an `extern` one is, and must be a
 C identifier that is not a C keyword and that the program does not otherwise
-reserve (`main`, `klang_init`, `klang_exit`, or a name beginning with `gs_`).
+reserve (`main`, `k_init`, `k_exit`, or a name beginning with `k_`).
 
 The wrapper calls the normal generated K specialization, not its hidden
 internal C signature. This keeps K's stack argument and other compiler
@@ -4455,7 +4455,7 @@ it leaves the caller's own facts about `src` intact.
   the library's directory. Next, where `a` names a package the root file
   declared (below), it is resolved as that package's module `b/c.k`
   (`import a;` is its entry `a.k`). Last, it is resolved in the
-  standard library's directory (`--stdlib <dir>`, else `KLANG_STDLIB`, else
+  standard library's directory (`--stdlib <dir>`, else `K_STDLIB`, else
   the `stdlib/` of the source tree the compiler was built in). A file of
   the importing package with the name of a declared package is an error.
   The form `import .a.b;` (leading dot) resolves relative to the
@@ -5310,7 +5310,7 @@ compiler's own description, pass by pass and analysis by analysis, is
   backend so that this stays true. What differs is the runtime around it.
   The in-process build compiles the whole runtime with the program. The
   file holds only the parts of the runtime that have to be inlined into the
-  program and declares the rest; `klang --emit-runtime` writes that rest as
+  program and declares the rest; `k --emit-runtime` writes that rest as
   a C file of its own, built once and linked with every program
   (`--standalone` writes a file that holds the whole runtime, as the
   in-process build does). TinyCC does not optimize and cannot place

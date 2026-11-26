@@ -1,4 +1,4 @@
-// runtime-define: GS_DEBUG=1
+// runtime-define: K_DEBUG=1
 // Signed overflow aborts a debug build (§6.2), naming the operands, the
 // operation's type and the line of the operation itself, which is inside
 // `next` even where -O2 inlines it into main.

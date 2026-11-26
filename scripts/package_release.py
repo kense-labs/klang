@@ -7,22 +7,23 @@ it was built in is not there (main.cpp's StdlibDirs, jit.h's JitLibPath,
 builtin.h's BuiltinSrcDir and BuiltinPackageLinkFile), so a release is one
 directory:
 
-  klang[.exe]          the compiler, with the blessed packages compiled in
+  k[.exe]          the compiler, with the blessed packages compiled in
   stdlib/              the standard library
   tcclib/              TinyCC's headers and support archive, for in-process runs
   pkg/<package>/       each builtin package's K sources, sidecar, docs and
                        license, without its vendored dependencies (third_party/);
-                       lib/ holding the static libraries a `klang build` of a
+                       lib/ holding the static libraries a `k build` of a
                        program using it links, and link-msvc.rsp and
                        link-cc.rsp naming them relative to themselves
+  packages/            bundled packages that were not compiled in
   docs/, samples/      as in this tree (less the samples' test harness)
   vscode/              the prebuilt VS Code extension
-  man/klang.1          the help as a man page (klang help --man)
+  man/k.1          the help as a man page (k help --man)
   licenses/            the licenses of what the compiler and the packages'
                        libraries are built from
-  README.md, LICENSE
+  README.md, LICENSE, LICENSE-APACHE, NOTICE
 
-Configure with -DKLANG_BUILTIN_LIBS=all (or a subset) and build the configuration
+Configure with -DK_BUILTIN_LIBS=all (or a subset) and build the configuration
 given here first. Files from this tree are the ones git tracks, so nothing a run
 left in samples/ or docs/ is shipped. If no packages are compiled in, the release
 will omit the pkg/ directory.
@@ -134,13 +135,13 @@ def package_libraries(name, rspdir, build, out):
 def package_sources(name, srcdir, out):
     """The package as its repository has it, less version control and its
     vendored dependencies, whose license files go to licenses/."""
-    if not any((srcdir / f"{name}{suffix}").is_file() for suffix in (".k", ".goose")):
+    if not (srcdir / f"{name}.k").is_file():
         fail(f"package {name}: {srcdir} has no {name}.k")
     for entry in sorted(srcdir.iterdir()):
-        if entry.name.startswith(".git") or entry.name == "third_party":
+        if entry.name.startswith(".git") or entry.name in {"third_party", "build", "__pycache__"}:
             continue
         if entry.is_dir():
-            shutil.copytree(entry, out / entry.name)
+            shutil.copytree(entry, out / entry.name, ignore=shutil.ignore_patterns("__pycache__"))
         else:
             copy_file(entry, out / entry.name)
 
@@ -165,7 +166,7 @@ def main():
 
     build = Path(args.build).resolve()
     out = Path(args.out).resolve()
-    exe_name = "klang" + EXE_SUFFIX
+    exe_name = "k" + EXE_SUFFIX
     exe = next((p for p in (build / args.config / exe_name, build / exe_name) if p.exists()), None)
     if not exe:
         fail(f"no {exe_name} under {build} for {args.config}")
@@ -189,18 +190,23 @@ def main():
         collect_licenses(srcdir / "third_party", out / "licenses" / name)
         print(f"package {name}: from {srcdir}")
 
+    builtins = {name for name, _ in packages}
+    for srcdir in sorted((REPO_ROOT / "packages").iterdir()):
+        if srcdir.name not in builtins and (srcdir / f"{srcdir.name}.k").is_file():
+            package_sources(srcdir.name, srcdir, out / "packages" / srcdir.name)
+
     copy_tracked("stdlib", out)
     copy_tracked("docs", out)
     copy_tracked("samples", out, skip=SAMPLES_HARNESS)
-    for rel in ("README.md", "LICENSE", "vscode/klang-language.vsix", "vscode/README.md",
-                "vscode/LICENSE"):
+    for rel in ("README.md", "LICENSE", "LICENSE-APACHE", "NOTICE", "vscode/klang-language.vsix",
+                "vscode/README.md", "vscode/LICENSE"):
         copy_file(REPO_ROOT / rel, out / rel)
     collect_licenses(REPO_ROOT / "third_party", out / "licenses")
     man = subprocess.run([str(out / exe_name), "help", "--man"], capture_output=True)
-    if man.returncode != 0 or not man.stdout.startswith(b".TH KLANG 1"):
-        fail(f"klang help --man failed:\n{man.stderr.decode(errors='replace')}")
+    if man.returncode != 0 or not man.stdout.startswith(b".TH K 1"):
+        fail(f"k help --man failed:\n{man.stderr.decode(errors='replace')}")
     (out / "man").mkdir()
-    (out / "man" / "klang.1").write_bytes(man.stdout)
+    (out / "man" / "k.1").write_bytes(man.stdout)
     print(f"wrote {out}")
 
 

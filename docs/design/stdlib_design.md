@@ -23,7 +23,7 @@ namespaces, generic aliases, serialization, graphics, physics, user
 interfaces, directories and atomic replacement in `os`, and the `base64`,
 `csv`, `json` and `regex` modules; some rules and limitations below have
 therefore been superseded. See `../stdlib.md` for the current API and
-`../klang_spec.md` for current language rules. References of the form §N
+`../k_spec.md` for current language rules. References of the form §N
 refer to that specification.
 
 ---
@@ -282,10 +282,10 @@ automatically. The compiler resolves `import std;` by looking in three
 places, in order. First it looks in the importing file's package root (spec
 §11.1: the main file's directory for the program's own files, the library's
 directory for a library module). Next it looks in `--stdlib <dir>` or
-`KLANG_STDLIB`, if given. Finally it walks up from its own executable's
+`K_STDLIB`, if given. Finally it walks up from its own executable's
 directory, looking for `stdlib/std.k` (three levels). This way
-`build/Debug/klang.exe`, `build/klang`, `bin/klang.exe` and an installed
-`<prefix>/bin/klang` beside `<prefix>/stdlib` all find it, without
+`build/Debug/k.exe`, `build/k`, `bin/k.exe` and an installed
+`<prefix>/bin/k` beside `<prefix>/stdlib` all find it, without
 requiring a single installation path. Unused library functions cost only
 parse time: functions are typechecked in call-graph order from `main`, so
 an unreferenced generic is never instantiated.
@@ -828,7 +828,7 @@ that are not plain `assert`s (an unknown base in `format_int` or
 ```klang
 extern fn sqrt(x: f64) -> f64;
 extern fn sqrt(x: f32) -> f32 = "sqrtf";
-extern fn read_file(path: u8[:], out: u8[>..]&) -> bool = "gs_os_read_file";
+extern fn read_file(path: u8[:], out: u8[>..]&) -> bool = "k_os_read_file";
 extern fn gl_vertex3(v: float3&);
 ```
 
@@ -840,13 +840,13 @@ extern fn gl_vertex3(v: float3&);
   types can be:
   * the integer and float scalars and `bool`;
   * any *flat, fixed-size* struct or fixed array, passed by value as its
-    generated packed C type (`gs_float3`);
-  * `T&` to such a `T`, passed as a pointer (`const gs_float3 *`, which is
+    generated packed C type (`k_float3`);
+  * `T&` to such a `T`, passed as a pointer (`const k_float3 *`, which is
     what an OpenGL-style API wants, since a packed `float3` is three
     contiguous floats);
   * `T[:]` of such a `T`, passed as pointer and count;
   * `u8[>..]&`, passed as the resizable's header plus its stack, so C code
-    can append through a runtime helper (`gs_bld_append(bld, ptr, n)`).
+    can append through a runtime helper (`k_bld_append(bld, ptr, n)`).
     This is the parameter shape that lets the whole `os` layer be externs
     instead of builtins.
 * These types cannot cross: `varint`, references inside structs, variable
@@ -860,7 +860,7 @@ extern fn gl_vertex3(v: float3&);
   library's externs is in `src/runtime/runtime_os.h`, which is part of the
   runtime like the other runtime files. User externs get their C in via
   `--include <header>`; the header is emitted after the generated type
-  declarations, so it can implement shims against the `gs_<name>` typedefs.
+  declarations, so it can implement shims against the `k_<name>` typedefs.
   An existing C API whose declaration differs from the emitted prototype
   (alignment, `APIENTRY`, pointer types) gets a one-line shim in that
   header.
@@ -887,7 +887,7 @@ names = [];` idiomatic user code.
 ### 8.6 Where `import std;` looks (spec §11.1)
 
 This consists of the search path of §3, a `--stdlib` flag and a
-`KLANG_STDLIB` variable. The compiler finds the source tree's `stdlib/` from
+`K_STDLIB` variable. The compiler finds the source tree's `stdlib/` from
 its own location, so the test runner needs no flag.
 
 ### 8.7 Checker and language rules
@@ -1032,11 +1032,11 @@ addressing every struct relative to its tail. The review's instinct, to
 give the tail its own independent header, leads to this layout: a
 resizable-tailed struct is represented as a *frame object* that holds its
 fixed prefix fields exactly as a fixed local would, followed by the tail's
-own `gs_rhdr`. Only the tail's elements are stored on the data stack. With
+own `k_rhdr`. Only the tail's elements are stored on the data stack. With
 this layout:
 
 * `&bag.items` is a pointer to that header field. It is an ordinary
-  `gs_rref`, indistinguishable from a reference to a standalone resizable,
+  `k_rref`, indistinguishable from a reference to a standalone resizable,
   so nothing downstream needs to know it came from a struct.
 * `&bag` is a pointer to the frame object.
 * `bag.n` through either is a plain field access.

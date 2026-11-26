@@ -5,7 +5,7 @@
 // nowhere in sight.
 //
 // Build and run (from this directory):
-//   klang -o sieve.c 07_sieve.k && cl sieve.c && sieve
+//   k -o sieve.c 07_sieve.k && cl sieve.c && sieve
 
 import std;
 import os;

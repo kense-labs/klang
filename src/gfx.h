@@ -1,5 +1,5 @@
 // The compiler's side of graphics: compiling the shaders `embed_shader`
-// embeds into a program, for the gfx package (github.com/aardappel/goose_gfx)
+// embeds into a program, for the gfx package under packages/gfx
 // or any other graphics library that reads the blob. Shader compilation
 // (src/shaderc.c) is always built: a program using gfx typechecks and emits
 // the same C whether or not the package is compiled in.
@@ -14,9 +14,9 @@ namespace klang {
 // The stage embed_shader("frag", source) names, which is also the extension
 // of a shader file for it; -1 for none.
 inline int ShaderStageNamed(string_view name) {
-    if (name == "vert") return GS_GFX_STAGE_VERTEX;
-    if (name == "frag") return GS_GFX_STAGE_FRAGMENT;
-    if (name == "comp") return GS_GFX_STAGE_COMPUTE;
+    if (name == "vert") return K_GFX_STAGE_VERTEX;
+    if (name == "frag") return K_GFX_STAGE_FRAGMENT;
+    if (name == "comp") return K_GFX_STAGE_COMPUTE;
     return -1;
 }
 
@@ -49,14 +49,14 @@ inline string CompileShader(const string &source, const string &path, int stage)
     static map<tuple<int, string, string>, string> compiled;
     auto key = make_tuple(stage, path, source);
     if (auto it = compiled.find(key); it != compiled.end()) return it->second;
-    auto r = gs_shaderc_compile(source.c_str(), path.c_str(), stage);
+    auto r = k_shaderc_compile(source.c_str(), path.c_str(), stage);
     if (!r.blob) {
         auto msg = string(r.error ? r.error : "shader compilation failed");
-        gs_shaderc_free(&r);
+        k_shaderc_free(&r);
         throw CompileError { msg };
     }
     string blob((const char *)r.blob, r.size);
-    gs_shaderc_free(&r);
+    k_shaderc_free(&r);
     return compiled.emplace(std::move(key), std::move(blob)).first->second;
 }
 
@@ -94,7 +94,7 @@ inline bool ShaderMessageAt(const string &err, const string &path, int &line, st
 // program around it; `source` optionally prints the MSL or HLSL as well.
 inline void DumpShader(const string &path, const string &source) {
     auto blob = CompileShaderFile(path);
-    gs_gfx_blob_header h;
+    k_gfx_blob_header h;
     memcpy(&h, blob.data(), sizeof h);
     static const char *stages[] = { "vertex", "fragment", "compute" };
     string s = cat(stages[h.stage], " shader, ", blob.size(), " bytes: SPIR-V ", h.spirv_size,
@@ -109,11 +109,11 @@ inline void DumpShader(const string &path, const string &source) {
         Append(s, i ? ", " : " (", size, " bytes", i + 1 == h.num_uniform_buffers ? ")" : "");
     }
     s += "\n";
-    if (h.stage == GS_GFX_STAGE_COMPUTE)
+    if (h.stage == K_GFX_STAGE_COMPUTE)
         Append(s, "local size ", h.local_size[0], " x ", h.local_size[1], " x ",
                h.local_size[2], "\n");
-    for (int i = 0; i < h.num_inputs; i++, p += sizeof(gs_gfx_blob_input)) {
-        gs_gfx_blob_input in;
+    for (int i = 0; i < h.num_inputs; i++, p += sizeof(k_gfx_blob_input)) {
+        k_gfx_blob_input in;
         memcpy(&in, p, sizeof in);
         Append(s, "input location ", (int)in.location, " type ", (int)in.type, "\n");
     }

@@ -20,7 +20,7 @@ _spec.loader.exec_module(tc)
 class CompilerSelection(unittest.TestCase):
     def test_preference_and_fallback(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(tc, "REPO_ROOT", Path(tmp)):
-            paths = [Path(tmp) / "build" / sub / ("klang" + tc.EXE_SUFFIX)
+            paths = [Path(tmp) / "build" / sub / ("k" + tc.EXE_SUFFIX)
                      for sub in ("Release", "RelWithDebInfo", "", "Debug")]
             for path in paths:
                 path.parent.mkdir(parents=True, exist_ok=True)

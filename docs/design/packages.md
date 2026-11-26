@@ -17,7 +17,7 @@
 
 </details>
 
-This document describes how `klang build` replaces the hand-written C
+This document describes how `k build` replaces the hand-written C
 compiler invocations, and how a program pulls in libraries, written in K
 or C, from git repositories. It is the design and the migration plan,
 written against the tree at `de24a156`, following the discussion that
@@ -27,14 +27,14 @@ implemented, one working commit at a time. The user-facing documentation is
 
 ## 1. Decisions
 
-* **One executable, with verbs.** `klang build foo.k`, `klang run
-  foo.k`, `klang check foo.k`, `klang fetch foo.k`, `klang
-  toolchain`, `klang version`. The bare `klang foo.k` form stays and
+* **One executable, with verbs.** `k build foo.k`, `k run
+  foo.k`, `k check foo.k`, `k fetch foo.k`, `klang
+  toolchain`, `k version`. The bare `k foo.k` form stays and
   means `run`. Every flag that exists today stays, as the plumbing the verbs
-  are built on, and `klang build --dry-run` prints the commands for anyone
+  are built on, and `k build --dry-run` prints the commands for anyone
   with a build system of their own.
 * **Dependencies are declared in the root source file**, as imports with a
-  source: `import gfx from "aardappel/goose_gfx@v1";`. Every other file,
+  source: `import gfx from "./packages/gfx";`. Every other file,
   including the library's own files, imports by name only. Information that
   is not code (C sources to compile, system libraries, CMake options) goes
   in an optional sidecar file beside the entry file, `foo.build` beside
@@ -51,7 +51,7 @@ implemented, one working commit at a time. The user-facing documentation is
   JIT can run a program against a native library that was not compiled into
   the compiler.
 * **The compiler's own build can compile packages in.** `cmake
-  -DKLANG_BUILTIN_LIBS=all` fetches the blessed packages with CMake's own
+  -DK_BUILTIN_LIBS=all` fetches the blessed packages with CMake's own
   fetcher and links them into `klang`, which then runs their programs with no
   git, CMake or C compiler on the machine. The default is none: the core
   compiler builds quickly on its own, and the first program that imports
@@ -69,7 +69,7 @@ implemented, one working commit at a time. The user-facing documentation is
   on the machine, and a missing tool gives a readable error that names the
   tool, the package that needs it and what to do. There are no prebuilt
   binaries in v1.
-* **The cache is global**: `KLANG_HOME`, by default `~/.klang`. A program's
+* **The cache is global**: `K_HOME`, by default `~/.klang`. A program's
   executable is written beside its root source; everything intermediate
   goes under the cache.
 * **Imports resolve against the importing file's package**, not the program's
@@ -80,18 +80,18 @@ implemented, one working commit at a time. The user-facing documentation is
 * **Deferred**: a compiler version number (a commit count baked in when
   needed, never a hand-assigned number), lockfiles, automatic transitive
   dependencies, prebuilt binaries, fetching without git, and the runners
-  calling `klang build` (last, once it is solid).
+  calling `k build` (last, once it is solid).
 
 ## 2. What there is today
 
-A JIT run is `klang foo.k`. An AOT build of the same program is
+A JIT run is `k foo.k`. An AOT build of the same program is
 
-    klang --emit-runtime klang_runtime.c && cc -O2 -c klang_runtime.c
-    klang -o foo.c foo.k && cc -O2 foo.c klang_runtime.o -o foo -lm -pthread
+    k --emit-runtime k_runtime.c && cc -O2 -c k_runtime.c
+    k -o foo.c foo.k && cc -O2 foo.c k_runtime.o -o foo -lm -pthread
 
 and with graphics, physics and ui on top
 
-    cc cube.c klang_runtime.o -o cube @$(klang --ui-link cc) @$(klang --gfx-link cc) @$(klang --physics-link cc)
+    cc cube.c k_runtime.o -o cube @$(k --ui-link cc) @$(k --gfx-link cc) @$(k --physics-link cc)
 
 in that order, because GNU ld resolves static archives left to right. The
 logic for doing this is in `scripts/toolchain.py`, which the test, sample
@@ -110,7 +110,7 @@ A native stdlib module (gfx, audio, physics, ui) touches eight places:
 * a submodule under `third_party/`;
 * `src/<m>.h`, with `have_<m>` and the response-file lookup;
 * symbol registration in `jit.h`;
-* prefix sniffing of `gs_<m>_` in `codegen_calls.h` and `typecheck.h`
+* prefix sniffing of `k_<m>_` in `codegen_calls.h` and `typecheck.h`
   (which native layer a program calls, and the main-thread-only rule for
   `thread_fn`);
 * the runners' skip logic.
@@ -118,7 +118,7 @@ A native stdlib module (gfx, audio, physics, ui) touches eight places:
 The JIT gets a layer's functions by address, by calling `tcc_add_symbol` on
 functions linked into `klang` itself. This is why a layer the compiler was
 not built with cannot be run. The layers never call back into the program
-(`gs_gfx_error` fills a caller's slice), so they can be shared libraries.
+(`k_gfx_error` fills a caller's slice), so they can be shared libraries.
 
 `import a.b;` resolves `a/b.k` against the root program's directory, then
 the stdlib; `import .a.b;` resolves against the importing file. A library
@@ -130,11 +130,11 @@ linking.
 
 ## 3. The command line
 
-The command line is `klang <verb> [options] file.k [-- program args]`.
+The command line is `k <verb> [options] file.k [-- program args]`.
 If the first argument is not a verb, the command line is read exactly as
-today, so `klang foo.k`, `klang -o foo.c foo.k`,
-`klang --emit-runtime r.c` and the rest keep working; `klang foo.k` is
-`klang run foo.k`.
+today, so `k foo.k`, `k -o foo.c foo.k`,
+`k --emit-runtime r.c` and the rest keep working; `k foo.k` is
+`k run foo.k`.
 
 | Verb | Does |
 |---|---|
@@ -149,7 +149,7 @@ Options of `build`:
 
 * `-O0`/`-O1`/`-O2`: K inlining; the C compiler optimizes at every
   level.
-* `--debug`: `-DGS_DEBUG=1` for the generated C, and debug information and
+* `--debug`: `-DK_DEBUG=1` for the generated C, and debug information and
   no optimization for the C compiler; packages stay release builds.
 * `--standalone`: no runtime object.
 * `-o <exe>`.
@@ -173,7 +173,7 @@ a CMake project (§5), and whatever else it wants. A program is a package
 whose entry is its root file, whose package root is that file's directory,
 and whose sidecar is `foo.build`. A **module** is one `.k` file;
 `import pkg.sub;` is the module `<pkg root>/sub.k`. The standard
-library is a package, found as today (`--stdlib`, `KLANG_STDLIB`, then
+library is a package, found as today (`--stdlib`, `K_STDLIB`, then
 beside the compiler). Its modules that have native parts move out of it
 (§7), and the pure ones stay.
 
@@ -184,7 +184,7 @@ declare, which nothing enforces.
 ### 4.2 Declaring a dependency
 
 ```klang
-import gfx from "aardappel/goose_gfx@v1";                 // GitHub, tag v1
+import gfx from "./packages/gfx";                         // bundled package
 import mylib from "github.com/joe/mylib@3f2c1a9";         // a host, a commit
 import other from "https://git.example.com/x/other.git@main";  // any git URL, a branch
 import local from "../local";                             // a path, relative to this file
@@ -199,7 +199,7 @@ string:
   Anything with `://` or a `user@host:` prefix is passed to git unchanged.
 * `@ref` is required for a git source. A tag or a commit hash is a pin; a
   branch name is accepted and behaves like a pin until
-  `klang fetch --update`. The docs give this as the reason to prefer tags.
+  `k fetch --update`. The docs give this as the reason to prefer tags.
 * A path (`.`, `..`, `./`, `../`, `/`, or a drive letter) is a directory
   used in place, relative to the importing file. No git is involved. This
   form is for developing a library beside the program that uses it.
@@ -262,11 +262,11 @@ The blessed packages are listed in a table in the compiler,
 `src/blessed.txt`, which CMake generates into the binary and also reads for
 §7:
 
-    # import-name  package  source                             ref
-    physics        physics  github.com/aardappel/goose_physics  v1
-    gfx            gfx      github.com/aardappel/goose_gfx      v1
-    audio          gfx      github.com/aardappel/goose_gfx      v1
-    ui             gfx      github.com/aardappel/goose_gfx      v1
+    # import-name  package  source             ref
+    physics        physics  ./packages/physics  -
+    gfx            gfx      ./packages/gfx      -
+    audio          gfx      ./packages/gfx      -
+    ui             gfx      ./packages/gfx      -
 
 A naked `import gfx;` that step 1 of §4.4 does not satisfy, and that the
 root did not declare, is read as if the root had written the table's line;
@@ -279,13 +279,13 @@ the ref.
 
 ### 4.6 Fetching and the cache
 
-`KLANG_HOME`, default `~/.klang` (`%USERPROFILE%\.k` on Windows):
+`K_HOME`, default `~/.klang` (`%USERPROFILE%\.k` on Windows):
 
     pkg/<host>/<owner>/<repo>/<ref>/                 the checkout, submodules included
     build/pkg/<host>/<owner>/<repo>/<ref>/<toolchain>/   its native part built: objects or archives,
                                                      the JIT shared library, link-cc.rsp, link-msvc.rsp, logs
     build/pkg/local/<hash of the absolute path>/<toolchain>/   the same for a path source
-    build/runtime/<runtime hash>/<toolchain>-<config>/klang_runtime.o
+    build/runtime/<runtime hash>/<toolchain>-<config>/k_runtime.o
     build/prog/<stem>-<hash of the root's absolute path>/   a program's C, objects, logs
     config                                           optional settings (§6.1)
 
@@ -303,10 +303,10 @@ they are.
 
 Without git on PATH:
 
-    cannot find `git` on PATH, needed to fetch the package gfx from
-    github.com/aardappel/goose_gfx@v1. Install git, or clone that repository
+    cannot find `git` on PATH, needed to fetch the package mylib from
+    github.com/joe/mylib@3f2c1a9. Install git, or clone that repository
     yourself and declare it in foo.k as
-        import gfx from "<the directory>";
+        import mylib from "<the directory>";
 
 Building a fetched package runs its C compiler, and a CMake package runs
 CMake: code from the repository runs on the machine at build time, as with
@@ -368,7 +368,7 @@ Inputs are stamped. A path package is rebuilt when any of its C sources (by
 path, modification time and size), its sidecar or the set of its extern fns
 changes. Every package, including a git checkout, is rebuilt when `klang.h`
 changes. `klang.h` is the header the compiler gives native C for the values
-that C cannot declare itself (a builder's `gs_rref`, spec §7.10).
+that C cannot declare itself (a builder's `k_rref`, spec §7.10).
 
 Every program and process that reaches a package builds it in that one
 directory, under a cross-process lock on its persistent `build.lock`. A
@@ -384,8 +384,8 @@ includes, defines and flags. The object is named after the file's name and
 a hash of its path, so that two files with the same name in different
 directories do not share an object. The AOT form is the objects
 themselves, listed in the response file ahead of `c_libs`, so no archiver
-is needed. The JIT form links the objects, `klang_symbols.c` (§5.3) and
-the system libraries into `klang_jit_<name>.{dll,so,dylib}` through the
+is needed. The JIT form links the objects, `k_symbols.c` (§5.3) and
+the system libraries into `k_jit_<name>.{dll,so,dylib}` through the
 same driver (`-shared`, or `/LD`). Only `.c` is compiled this way; C++ goes through CMake.
 
 ### 5.2 CMake packages
@@ -396,7 +396,7 @@ CMakeLists directly:
 
 ```cmake
 cmake_minimum_required(VERSION 3.20)
-project(klang_pkg_physics C)
+project(k_pkg_physics C)
 # C++, and on macOS Objective-C and Objective-C++, where there is a compiler.
 include(CheckLanguage)
 check_language(CXX)
@@ -409,11 +409,11 @@ if(NOT TARGET <cmake_target>)
     message(FATAL_ERROR "... names the CMake target <cmake_target>, which ... does not define")
 endif()
 # The JIT library: the symbol table pulls what it names out of the target.
-add_library(klang_jit_physics SHARED klang_symbols.c)
-target_link_libraries(klang_jit_physics PRIVATE <cmake_target>)
+add_library(k_jit_physics SHARED k_symbols.c)
+target_link_libraries(k_jit_physics PRIVATE <cmake_target>)
 # A probe whose link line is the package's whole link closure.
-add_executable(klang_linkprobe klang_linkprobe.c)
-target_link_libraries(klang_linkprobe PRIVATE <cmake_target>)
+add_executable(k_linkprobe k_linkprobe.c)
+target_link_libraries(k_linkprobe PRIVATE <cmake_target>)
 ```
 
 The wrapper is configured with `-DCMAKE_BUILD_TYPE=Release`, the discovered
@@ -433,7 +433,7 @@ in order. CMake has no generator expression for a transitive closure; today
 `cmake/sdl.cmake` extracts the closure from SDL's collector target by hand.
 The general solution is CMake's file API. Before configuring, the compiler
 writes `.cmake/api/v1/query/codemodel-v2` into the build directory. It then
-reads the reply's target object for `klang_linkprobe`, whose
+reads the reply's target object for `k_linkprobe`, whose
 `link.commandFragments` are the link line (with roles `libraries`,
 `libraryPath`, `frameworkPath` and `flags`) as the generator would pass
 them. Paths relative to the build directory are made absolute. This needs a
@@ -445,7 +445,7 @@ K.
 Without cmake on PATH:
 
     cannot find `cmake` on PATH, needed to build the C part of the package
-    physics (github.com/aardappel/goose_physics@v1, target goose_physics).
+    physics (packages/physics, target k_physics).
     Install CMake 3.20 or later.
 
 ### 5.3 The symbol table and the JIT
@@ -457,13 +457,13 @@ package's own declarations, and every package's JIT library is linked with
 that file:
 
 ```c
-/* klang_symbols.c, generated for the package physics. */
-typedef struct { const char *name; const void *addr; } klang_symbol;
-void gs_phys_create_world(void); void gs_phys_step(void); /* … */
-KLANG_EXPORT const klang_symbol *klang_symbols(void) {
-    static const klang_symbol table[] = {
-        { "gs_phys_create_world", (const void *)&gs_phys_create_world },
-        { "gs_phys_step", (const void *)&gs_phys_step },
+/* k_symbols.c, generated for the package physics. */
+typedef struct { const char *name; const void *addr; } k_symbol;
+void k_phys_create_world(void); void k_phys_step(void); /* … */
+K_EXPORT const k_symbol *k_symbols(void) {
+    static const k_symbol table[] = {
+        { "k_phys_create_world", (const void *)&k_phys_create_world },
+        { "k_phys_step", (const void *)&k_phys_step },
         /* … */
         { 0, 0 } };
     return table;
@@ -481,17 +481,17 @@ into the shared library.
 
 A JIT run then handles each package whose extern functions the program's
 code reaches (codegen already collects `usedexterns`, and each extern's
-declaring file knows its package). It loads `klang_jit_<name>` with
-`LoadLibrary` or `dlopen`, calls `klang_symbols`, and passes every entry to
+declaring file knows its package). It loads `k_jit_<name>` with
+`LoadLibrary` or `dlopen`, calls `k_symbols`, and passes every entry to
 `tcc_add_symbol` before relocation. Today `AddGfxSymbols` and its siblings
 do this from static tables. A package compiled into the compiler (§7) has
-the same table linked in under the name `klang_symbols_<name>`, listed in a
+the same table linked in under the name `k_symbols_<name>`, listed in a
 generated `builtin_packages.h`. A builtin package needs no library; a
 declared package always goes through its library. `NativeLayers` and the
-`gs_<m>_` prefix sniffing are removed.
+`k_<m>_` prefix sniffing are removed.
 
 A package may declare an `extern fn` only for a function that its own C
-part, or the C library, defines. The runtime's `gs_os_*` and `gs_sqrt`
+part, or the C library, defines. The runtime's `k_os_*` and `k_sqrt`
 belong to `os` and `math`, which stay in the stdlib. A package that
 declared one of them would fail to link its JIT library, and the error
 names the symbol and says that it belongs to the runtime.
@@ -526,15 +526,15 @@ package. gfx, audio, physics and ui all set it.
 
 ### 6.1 Toolchains
 
-The C compiler is chosen in this order: `--cc`, then `KLANG_CC`, then
-`cc = "…";` in `KLANG_HOME/config` (the sidecar format), then discovery:
+The C compiler is chosen in this order: `--cc`, then `K_CC`, then
+`cc = "…";` in `K_HOME/config` (the sidecar format), then discovery:
 
 * **Windows**: `cl` if it is already on PATH (a developer prompt); else
   `clang-cl` or `clang` from the Visual Studio LLVM directory or PATH (both
   find the MSVC headers and the Windows SDK by themselves, with no
   environment needed); else `cl` through vswhere and `vcvars64.bat`. That
   environment is imported the way `toolchain.py` does it, and cached in
-  `KLANG_HOME` keyed on the installation's path and version, since
+  `K_HOME` keyed on the installation's path and version, since
   importing it takes a second or two.
 * **Linux**: `cc`, then `gcc`, then `clang`, on PATH.
 * **macOS**: `cc` (Apple clang).
@@ -553,7 +553,7 @@ split that `toolchain.py`'s `CC` class and `--gfx-link msvc|cc` make today.
 Each toolchain also has an *id*,
 `<name>-<version>-<8 hex of the driver's path and style>`, which names the
 cache directories. `cmake` and `git` are found on PATH, and on Windows
-cmake is also looked for where Visual Studio installs it. `klang toolchain`
+cmake is also looked for where Visual Studio installs it. `k toolchain`
 prints all of this.
 
 Processes are started by a small cross-platform runner (`src/process.h`:
@@ -564,24 +564,24 @@ processes run, `src/progress.h` keeps the user informed without flooding a
 log. Each step that does real work (a fetch, a package's native part, the
 runtime object) prints one line. Only when stderr is a terminal is there
 also a live line, redrawn in place, that shows the running command, its
-running time and the last line it printed. `KLANG_PROGRESS=plain|live`
+running time and the last line it printed. `K_PROGRESS=plain|live`
 overrides the terminal check.
 
 Without any C compiler, on Windows:
 
     cannot find a C compiler (looked for cl, clang-cl and clang on PATH and in
     Visual Studio, for clang in Program Files\LLVM, and for gcc and cc on PATH);
-    install Visual Studio with C++ or LLVM, or set KLANG_CC
+    install Visual Studio with C++ or LLVM, or set K_CC
 
 ### 6.2 The runtime object
 
 The runtime object is
-`build/runtime/<runtime hash>/<toolchain>-<config>/klang_runtime.o`. It is
+`build/runtime/<runtime hash>/<toolchain>-<config>/k_runtime.o`. It is
 written from `--emit-runtime` and compiled on first use, as
 `toolchain.py`'s `KlangRuntime` does. The hash is `RuntimeVersion()`, so a
 new compiler never links a stale object. `--standalone` skips it.
 
-### 6.3 What `klang build` does
+### 6.3 What `k build` does
 
 1. Parse the root; fetch declared packages that are missing (§4.6); parse
    the rest; typecheck; generate C into `build/prog/<stem>-<hash>/foo.c`.
@@ -600,9 +600,9 @@ today, `-o foo.c`, `--emit-runtime`, `--gfx-link` and the others, remain as
 the plumbing for the same purpose; `--<m>-link` becomes a thin alias for
 "the response file of package m" and is kept until the runners move (§10).
 
-### 6.4 `klang run` with packages
+### 6.4 `k run` with packages
 
-`klang run` does the same up to step 2; then the program is compiled
+`k run` does the same up to step 2; then the program is compiled
 in-process and the packages' JIT libraries are loaded (§5.3). A `thread_fn`
 program still needs `build` (TinyCC cannot place thread-local storage in
 memory; this is unchanged).
@@ -621,32 +621,21 @@ package ship a font or a table without a runtime file, which
 
 ### 7.1 Builtin packages
 
-`KLANG_BUILTIN_LIBS` is a CMake cache variable: empty by default, `all`, or
-a list of blessed package names. For each, CMake reads `src/blessed.txt` and
-
-```cmake
-FetchContent_Declare(klang_pkg_gfx
-    GIT_REPOSITORY https://github.com/aardappel/goose_gfx
-    GIT_TAG v1 GIT_SHALLOW TRUE GIT_SUBMODULES_RECURSE TRUE
-    SOURCE_DIR "${CMAKE_BINARY_DIR}/pkg/github.com/aardappel/goose_gfx/v1")
-FetchContent_MakeAvailable(klang_pkg_gfx)
-```
-
-fetches it at configure time with CMake's own fetcher (no Python, and no
-klang yet) into the cache layout of §4.6 under the build directory. CMake
-then adds the package's project, links its `cmake_target` into `klang`, and
-generates its symbol table. This is the same `klang_symbols.c`, produced by
+`K_BUILTIN_LIBS` is a CMake cache variable: empty by default, `all`, or
+a list of blessed package names. For each, CMake reads `src/blessed.txt`,
+adds the package's project, links its `cmake_target` into `k`, and
+generates its symbol table. This is the same `k_symbols.c`, produced by
 a CMake regex over `extern fn name` lines and their trailing `= "…"`, since
 no compiler exists yet to parse them. Finally CMake writes `link-cc.rsp`
 and `link-msvc.rsp` under `pkg/…/<config>/`, through the same wrapper and
 file-API probe as §5.2 (`cmake/package.cmake`, shared by the two). The
-compiler is built knowing that directory, as it knows `GOOSE_GFX_LINK_PATH`
-today. It looks for a builtin package's response file there, then beside
+compiler records that directory and looks for a builtin package's response
+file there, then beside
 its own binary, as it does for the package's sources. A builtin package
 with a plain-C sidecar is built the same way, minus `add_subdirectory`:
 CMake compiles the `c_sources` itself.
 
-`FETCHCONTENT_SOURCE_DIR_KLANG_PKG_GFX` points a build at a local checkout,
+`FETCHCONTENT_SOURCE_DIR_K_PKG_GFX` points a build at a local checkout,
 which is also how a package is developed against the compiler.
 
 The release binaries and CI configure with `all`. A developer's first
@@ -660,7 +649,7 @@ builtin package is in `pkg/<name>/` beside the compiler: its sources
 without their vendored dependencies, and the static libraries of its link
 closure in `lib/`, which its response files there name by paths relative
 to themselves. A link uses a copy of those response files under
-`KLANG_HOME/build/builtin/` with the paths made absolute, one copy per
+`K_HOME/build/builtin/` with the paths made absolute, one copy per
 place the compiler is unpacked.
 
 ### 7.2 What stays in the compiler
@@ -680,8 +669,8 @@ the sources `cmake/libtcc.cmake` builds (`libtcc.c`, `tcc.c`, the `.c` and
 `.h` of the x86-64, i386 and arm64 targets, `tccpe.c`, `tccmacho.c`,
 `include/`, `lib/`, `win32/include` and `win32/lib`), `VERSION`, `COPYING`,
 `RELICENSING`, and a README recording the upstream commit and how to update,
-like `third_party/cute_spirv/README.md`. `KLANG_LIBTCC` and
-`KLANG_HAVE_LIBTCC` are removed, and `have_jit` is always true. The
+like `third_party/cute_spirv/README.md`. `K_LIBTCC` and
+`K_HAVE_LIBTCC` are removed, and `have_jit` is always true. The
 fallback where `klang` without `-o` writes the C, and the runners'
 `have_jit` probe, are removed too. The compiler builds on x86-64 and arm64,
 the only platforms it has been tested on.
@@ -700,11 +689,11 @@ the only platforms it has been tested on.
 * Git sources: the runner creates a bare repository with `git init` and a
   tag, and a fixture declares it as `file://…@tag` and as `@<hash>`, so the
   fetch path is tested offline. These tests are skipped without git.
-* `klang build` of every sample that `run_samples.py` builds, compared
+* `k build` of every sample that `run_samples.py` builds, compared
   against the same expected output, once the runners move (§10, last step).
 * The blessed packages' own tests (`test/gfx/`, `test/physics/`, `test/ui/`,
   `test/audio/`) stay in this repository's suite while the packages are
-  blessed. CI configures with `KLANG_BUILTIN_LIBS=all`, since its gfx tests
+  blessed. CI configures with `K_BUILTIN_LIBS=all`, since its gfx tests
   need the Linux packages it installs anyway; the sanitizer job configures
   with none, which exercises the no-package paths as it does today.
   `api_check.py` moves with each package to its repository.
@@ -723,12 +712,12 @@ The following documentation is updated:
 * `stdlib.md` (gfx, audio, physics and ui documented in their repositories,
   linked).
 * `testing.md`.
-* `README.md` (build with `-DKLANG_BUILTIN_LIBS=all`, and
-  `klang build foo.k` in place of the cc lines).
+* `README.md` (build with `-DK_BUILTIN_LIBS=all`, and
+  `k build foo.k` in place of the cc lines).
 * `samples/README.md`.
 * `tutorial.md`, where it builds programs.
 * The design docs of the moved packages, which move with them.
-* `vscode/`: a Build command calling `klang build`.
+* `vscode/`: a Build command calling `k build`.
 
 ## 10. The plan
 
@@ -737,18 +726,18 @@ are ordered so that nothing is built twice and the old path keeps working
 until the new one covers it.
 
 1. **Vendor TinyCC and make the JIT mandatory** (§7.3). Delete the submodule
-   entry and the `KLANG_LIBTCC` option; remove every `have_jit` branch, the
+   entry and the `K_LIBTCC` option; remove every `have_jit` branch, the
    `.c`-fallback and the runners' probe. CI drops nothing else yet.
 2. **Verbs and the process runner.** `src/process.h`; `Main` dispatches on
-   a verb and otherwise reads the command line as today; `klang run`,
-   `klang check`, `klang version` (runtime hash only). No new behaviour.
-3. **Toolchains and `klang toolchain`** (§6.1): `src/toolchain.h`, the
-   discovery order, the vcvars import with its cache, `KLANG_HOME` and
-   `KLANG_HOME/config`.
-4. **`klang build` for what exists**: the runtime object cache (§6.2), the
+   a verb and otherwise reads the command line as today; `k run`,
+   `k check`, `k version` (runtime hash only). No new behaviour.
+3. **Toolchains and `k toolchain`** (§6.1): `src/toolchain.h`, the
+   discovery order, the vcvars import with its cache, `K_HOME` and
+   `K_HOME/config`.
+4. **`k build` for what exists**: the runtime object cache (§6.2), the
    program's C, the link, `-o`, `--standalone`, `--debug`, `-v`,
    `--dry-run`, with the native modules linked through today's response
-   files found as `--gfx-link` finds them. From here `klang build
+   files found as `--gfx-link` finds them. From here `k build
    samples/27_gfx_cube.k` works. The README shows it; the runners are
    untouched.
 5. **Package roots** (§4.4 step 1): the driver gets `Package` records,
@@ -772,7 +761,7 @@ until the new one covers it.
     reader, the response files. A fixture with a tiny CMakeLists, skipped
     without cmake.
 12. **Builtin packages and the blessed table** (§4.5, §5.4, §7.1):
-    `src/blessed.txt`, `KLANG_BUILTIN_LIBS`, `cmake/package.cmake` with the
+    `src/blessed.txt`, `K_BUILTIN_LIBS`, `cmake/package.cmake` with the
     CMake-side symbol table, `builtin_packages.h`, `main_thread_only`. The
     four in-tree modules are **re-expressed as packages in place** first:
     `packages/physics/` holding `physics.k`, `physics.build`, a
@@ -782,18 +771,14 @@ until the new one covers it.
     `cmake/physics.cmake`, `src/physics.h`, the prefix sniffing and
     `jit.h`'s registration are removed, one module per commit: physics, ui,
     audio, gfx.
-13. **Move physics out** to `aardappel/goose_physics`: the repository holds
-    what `packages/physics/` held plus the Box3D submodule, `api_check.py`
-    and its design doc; `blessed.txt` points at it; the in-tree copy and
-    the submodule go; CI configures with `KLANG_BUILTIN_LIBS=all`.
-14. **Move ui, then gfx and audio** the same way, into `goose_gfx` (ui's
-    place there, or a repository of its own, decided when it moves). The
-    SDL and Nuklear submodules go, the blob header gets its version
-    constant, the Linux build dependencies in `ci.yml` stay because the
-    builtin build needs them.
-15. **The runners call the compiler**: `toolchain.py` asks `klang toolchain
+13. **Package physics** with its API check and documentation under
+    `packages/physics`. Its CMake build resolves the pinned Box3D source.
+14. **Package gfx, audio and ui** together under `packages/gfx`. Its CMake
+    build resolves pinned SDL and Nuklear sources. CI builds these optional
+    packages with `K_BUILTIN_LIBS=all`.
+15. **The runners call the compiler**: `toolchain.py` asks `k toolchain
     --json` instead of discovering, and the samples runner builds with
-    `klang build`; the test runner keeps driving the C compiler itself
+    `k build`; the test runner keeps driving the C compiler itself
     where it needs per-level flags, a second front end or multi-program
     batches. `--<m>-link` is retired. The VS Code extension gets Build.
 
@@ -801,14 +786,14 @@ until the new one covers it.
 
 * **A version number.** When a library needs to say "compiler N or
   later", CMake bakes `git rev-list --count HEAD` and the commit date into
-  `klang version`; a build from a branch reports that it is a branch build.
+  `k version`; a build from a branch reports that it is a branch build.
   Nothing is hand-assigned and no tag is needed.
 * **Transitive dependencies** on request (§4.3), a lockfile if branch refs
   turn out to be used in anger, `klang vendor`.
 * **Fetching without git** (GitHub tarballs over HTTPS), and prebuilt
   package binaries, when building for three platforms times the
   configurations is worth the effort. `klang.h` repeats layouts codegen
-  emits (`gs_stack`, `gs_rhdr`, `gs_rref`), and a part built from source is
+  emits (`k_stack`, `k_rhdr`, `k_rref`), and a part built from source is
   rebuilt when it changes; a prebuilt part would need those layouts to carry
   a version that it is checked against.
 * **Package data at run time**: a library's files reachable through a

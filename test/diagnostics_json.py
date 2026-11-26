@@ -1,4 +1,4 @@
-"""Diagnostics as data: `klang check --diagnostics json` prints the errors and
+"""Diagnostics as data: `k check --diagnostics json` prints the errors and
 warnings a check found as a JSON array on stdout, one object each with its
 severity, message, place and related lines, and the text the text mode would
 have printed; the progress lines go to stderr. Checks the two modes agree, and

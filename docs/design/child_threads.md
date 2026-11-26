@@ -40,10 +40,8 @@
 
 </details>
 
-Research note, November 2026. Nothing here is implemented, and every piece
-of syntax is a placeholder. The question, from
-[goose#234](https://github.com/aardappel/goose/issues/234), is how a K
-program can split work over a large array across cores *without copying
+Research note, November 2026. The proposed syntax shows how a K
+program could split work over a large array across cores *without copying
 the array*: threads that read the parent's data in place and each write a
 disjoint part of an output, started and joined cheaply enough to be used
 once per pass of a query engine or an image pipeline. The second question is
@@ -117,7 +115,7 @@ section 6 the alternatives, section 7 the order to build in.
 
 K's threads share nothing: a worker is a separate program with its own
 data stacks and its own copies of the globals it uses, fed by typed queues
-of flat values ([spec §11.2](../klang_spec.md#112-concurrency)). That is
+of flat values ([spec §11.2](../k_spec.md#112-concurrency)). That is
 why the language has no locks and no data races, and it is the right shape
 for servers and pipelines. For a kernel over one large array it is the
 wrong shape, because the data is already in place and the work is a loop
@@ -201,14 +199,14 @@ most languages do not have:
 
 * **Addresses are stable.** Growth "never moves memory; references into a
   data stack are stable for the life of the data beneath them"
-  ([spec §1.2](../klang_spec.md#12-memory-model)). A child holding a
+  ([spec §1.2](../k_spec.md#12-memory-model)). A child holding a
   slice of a parent's growable array holds raw addresses that cannot
   change, whatever the parent's array is (it cannot grow anyway, by the
   point above).
 * **The outlives rule is already checked.** The body is a block of the
   parent, so a reference made inside it dies inside it, by the same rules
-  as any block ([spec §9.1](../klang_spec.md#91-the-outlives-rule),
-  [§9.2](../klang_spec.md#92-roots-and-the-depth-check)). Nothing a child
+  as any block ([spec §9.1](../k_spec.md#91-the-outlives-rule),
+  [§9.2](../k_spec.md#92-roots-and-the-depth-check)). Nothing a child
   makes can escape to the parent except through a write to a captured
   place, which [4.3](#43-what-a-body-may-touch) governs.
 
@@ -230,7 +228,7 @@ nothing to add.
 
 Whether a reference or slice may be written through is "inferred per
 instantiation, in the same way as roots, with no annotation needed"
-([spec §9.5](../klang_spec.md#95-writability)), and the language already
+([spec §9.5](../k_spec.md#95-writability)), and the language already
 has bindings that are read-only views of writable data: a by-value `for`
 binding, a `match` binding, a field of a `const` value. The rule a child
 needs, "every variable of the parent is read-only inside the body except
@@ -247,7 +245,7 @@ which three existing mechanisms give:
 
 * A nested function or function value already receives "the free
   variables of a nested function or function value (fixed ones by pointer,
-  resizables as header pointer plus stack, pools as `gs_pref`)"
+  resizables as header pointer plus stack, pools as `k_pref`)"
   ([implementation.md §6.4](../implementation.md#64-the-calling-convention-c3)).
   An outlined body is a nested function whose free variables are packed
   into one struct, with the loop's chunk bounds beside them.
@@ -267,20 +265,20 @@ at runtime" ([halide-pldi13]).
 
 The recursion rule, "no function in the cycle may call into the cycle
 while one of its nonfixed locals is in scope"
-([spec §7.8](../klang_spec.md#78-recursion)), is the coroutine rule
+([spec §7.8](../k_spec.md#78-recursion)), is the coroutine rule
 ([coroutines.md §2.2](coroutines.md#22-the-recursion-rule-is-the-coroutine-rule)),
 and it is the rule for a body that runs on another thread's native stack
 with no data stacks of its own: no nonfixed local, so nothing to put on a
 stack the thread does not have. llm_frontier §4.3 states it as its rule 2.
 Codegen already decides this per specialization: a body that builds
-nothing on a stack "needs no `gs_sp`" and `EmitSpec` rejects one that
+nothing on a stack "needs no `k_sp`" and `EmitSpec` rejects one that
 allocates without it ([implementation.md §6.4](../implementation.md#64-the-calling-convention-c3)).
 That is the **stackless** shape.
 
 The other shape is what the thread machinery already builds: a thread
 program is compiled "as a separate program with its own stack assignment
 (its own N′)", and "each thread carries a pointer to its own block of
-N′ stacks" ([spec §11.2](../klang_spec.md#112-concurrency)). A body with
+N′ stacks" ([spec §11.2](../k_spec.md#112-concurrency)). A body with
 growable locals can be compiled the same way, as a **child program** whose
 block a pool thread reserves once and keeps, and the functions it calls
 specialize per program as they do for workers today ("any static stack use
@@ -291,33 +289,33 @@ makes safe.
 
 ### 2.5 Program instances, and what a pool thread must adopt
 
-Every global that is not a static lives in one `gs_globals_t` per program
-instance, reached through the thread-local `gs_gl` in a program with
+Every global that is not a static lives in one `k_globals_t` per program
+instance, reached through the thread-local `k_gl` in a program with
 workers, and a thread program's stacks are reached through the
-thread-local `gs_stks` ([implementation.md §6.3](../implementation.md#63-globals-and-program-instances),
+thread-local `k_stks` ([implementation.md §6.3](../implementation.md#63-globals-and-program-instances),
 [§7](../implementation.md#7-the-runtime)). A pool thread running a child of
-instance X sets its `gs_gl` to X's globals for the task and, for a
-stackless child, its `gs_stks` to X's block (the child never allocates on
-it, but a captured resizable global's header is read through `gs_gl`, and
+instance X sets its `k_gl` to X's globals for the task and, for a
+stackless child, its `k_stks` to X's block (the child never allocates on
+it, but a captured resizable global's header is read through `k_gl`, and
 a captured resizable local's header and stack arrive as free variables
 either way). Two thread-local stores per task; nothing else about
-instances changes. A child program's `gs_stks` is its own kept block. The
+instances changes. A child program's `k_stks` is its own kept block. The
 read-only statics (`static const` globals, string literals) are shared
 already.
 
 ### 2.6 Backends without threads run the loop
 
-"Programs with threads need a real C compiler (`klang build`), since the
+"Programs with threads need a real C compiler (`k build`), since the
 in-process TinyCC backend cannot place thread-local storage"
 ([reference §22](../reference.md#22-threads)). Neither `par` nor `simd`
 has a meaning of its own, so under TinyCC and wasm a loop marked with
 either runs as the plain loop, iteration by iteration on the calling
-thread, and in any build `KLANG_THREADS=1` does the same to every `par`;
+thread, and in any build `K_THREADS=1` does the same to every `par`;
 the program's output is the same. This is also the debugging mode: a
-marked loop that gives a different answer at `KLANG_THREADS=1` or under
-`klang run` has broken a rule the compiler should have caught, which is a
-compiler bug, never a program bug. `klang run` keeps working on every
-program; `klang build` parallelizes.
+marked loop that gives a different answer at `K_THREADS=1` or under
+`k run` has broken a rule the compiler should have caught, which is a
+compiler bug, never a program bug. `k run` keeps working on every
+program; `k build` parallelizes.
 
 ### 2.7 What the checker knows about effects today
 
@@ -501,7 +499,7 @@ The meaning is the `for` loop's. Both words are permissions, not
 instructions: the compiler may run the iterations as the word says once it
 has checked that doing so is unobservable, and may always run them
 sequentially instead. `simd` on a loop is `simd` on a function
-([spec §7.12](../klang_spec.md#712-simd-fn-versions-per-instruction-set))
+([spec §7.12](../k_spec.md#712-simd-fn-versions-per-instruction-set))
 scaled down to one loop, with the same rule: no meaning of its own, every
 lowering computes what the baseline computes. The rules a body must meet
 are the same for all three spellings and are in
@@ -718,7 +716,7 @@ the particle update.
 **Stackful.** A body with a nonfixed local (a scratch `u8[>..]`, a local
 hash table, a `str()` result) is compiled as a **child program**: its own
 stack assignment with N″ stacks, like a `thread_fn`'s N′
-([spec §11.2](../klang_spec.md#112-concurrency)), with these differences:
+([spec §11.2](../k_spec.md#112-concurrency)), with these differences:
 
 * Its references and slices point into the parent, and it copies no
   globals and no arguments: it receives the parent's environment by
@@ -727,7 +725,7 @@ stack assignment with N″ stacks, like a `thread_fn`'s N′
   a child program, where N″ is the largest any child program in the
   program needs, and keeps it for the program's life. Between tasks the
   block is rewound to its base, which keeps its pages committed
-  ([spec §1.2](../klang_spec.md#12-memory-model)), so the second pass pays
+  ([spec §1.2](../k_spec.md#12-memory-model)), so the second pass pays
   no page faults; `trim_memory()` from the parent would ask the pool to
   trim its blocks too. This is the issue's point 4.
 * The chunk the parent's own thread runs needs no block: from the
@@ -737,7 +735,7 @@ stack assignment with N″ stacks, like a `thread_fn`'s N′
   A nonfixed local has no lane form.
 * `hardware_threads()` already reports "no more workers than the
   implementation's address space for data stacks holds beside the main
-  program" ([spec §11.2](../klang_spec.md#112-concurrency)); the pool's
+  program" ([spec §11.2](../k_spec.md#112-concurrency)); the pool's
   size for child programs is capped the same way, with N″ in the place of
   N′. A stackless pool has no such cap. The budget is 32 TB by default and
   a block is N″ times 2 GB, so the cap is in the thousands and never
@@ -772,7 +770,7 @@ How a value gets out of an iteration, in order of preference:
    chunk order at the join. Integers are exact in any order, so the result
    is the sequential result. Floats are **not** admitted as reductions:
    they go through (1), where the order is the program's. This is the
-   exactness rule of `simd` ([spec §7.12](../klang_spec.md#712-simd-fn-versions-per-instruction-set))
+   exactness rule of `simd` ([spec §7.12](../k_spec.md#712-simd-fn-versions-per-instruction-set))
    applied to threads, and it is stricter than every system in
    [3.4](#34-reductions) because K's claim is that the schedule is
    unobservable, not merely that the answer is close.
@@ -789,7 +787,7 @@ How a value gets out of an iteration, in order of preference:
 Determinism follows from the rules: iterations have no effects but writes
 to places only they own (R1 to R3), reductions are exact, and the chunk
 count never changes a result. A program may therefore be run with
-`KLANG_THREADS=1`, under TinyCC, or on a machine with another core count,
+`K_THREADS=1`, under TinyCC, or on a machine with another core count,
 and print the same bytes.
 
 ### 4.7 Aborts
@@ -858,13 +856,13 @@ A few hundred lines of C beside `runtime_threads.h`:
   [futex]; `os_sync_wait_on_address` or a condition variable on macOS)
   after a bounded spin. Native stacks
   the size of main's: Windows gives a created thread the executable's
-  reserve (64 MB since `klang build` sets it); POSIX needs
+  reserve (64 MB since `k build` sets it); POSIX needs
   `pthread_attr_setstacksize`, since a default pthread stack is 8 MB on
   glibc and 512 KB on macOS, and a child body may call anything.
 * **A fork.** The parent writes a job (the outlined function, the
   environment pointer, the range, the chunk count), bumps the generation
   word, wakes all, runs chunk 0 itself, then waits on a done counter. A
-  child adopts the parent's `gs_gl` and stack block
+  child adopts the parent's `k_gl` and stack block
   ([2.5](#25-program-instances-and-what-a-pool-thread-must-adopt)), runs
   its chunk, increments the counter, and wakes the parent when it is the
   last. Fork is a release, join an acquire; nothing else in the program
@@ -876,7 +874,7 @@ A few hundred lines of C beside `runtime_threads.h`:
   mode claims fixed-size blocks from an atomic counter; the mapping of
   blocks to threads then varies, but no result depends on it
   ([4.6](#46-results-reductions-determinism)), so the mode is a runtime
-  choice (`KLANG_PAR_BLOCK=n`) and never syntax. No stealing in v1.
+  choice (`K_PAR_BLOCK=n`) and never syntax. No stealing in v1.
 * **Busy pool.** A fork claims the pool threads that are idle at that
   moment and runs the remaining chunks on its own thread. A pool thread
   never forks, nor does the parent's thread while it runs chunk 0
@@ -892,8 +890,8 @@ A few hundred lines of C beside `runtime_threads.h`:
   bounces at the boundary and nothing else; ISPC pads its spans "to avoid
   false-sharing" ([ispc-mandel]). A `chunk` of a byte array could round
   its boundaries to 64 bytes; this is a tuning, not a rule.
-* **Knobs.** `KLANG_THREADS=n` (1 runs every `par for` sequentially),
-  `KLANG_SPIN=n` spins before parking, both read once at the first fork.
+* **Knobs.** `K_THREADS=n` (1 runs every `par for` sequentially),
+  `K_SPIN=n` spins before parking, both read once at the first fork.
   No API: a program that wants fewer threads is asking for a deployment
   setting, as `OMP_NUM_THREADS` is.
 * **Not provided.** Per-child state, thread ids visible to the program,
@@ -1089,10 +1087,10 @@ is the form the issue's prototype used; the inner `simd for` is unchanged.
    records global writes, queue and thread builtins, output, non-`pure`
    externs. Measurable by itself through `klang claims` or a flag.
 3. **`par for`, option A**: the keyword, R1 to R5 with structural R2, the
-   outlining, the pool, `KLANG_THREADS`, the sequential fallback for
+   outlining, the pool, `K_THREADS`, the sequential fallback for
    TinyCC and wasm, the spec section. Fixtures per rule in
    `test/errors_tc`, and a differential run of every `par for` program at
-   `KLANG_THREADS=1` and at the core count, which must print the same
+   `K_THREADS=1` and at the core count, which must print the same
    bytes. Measure the issue's two workloads (reconstructed in `bench/`),
    `samples/22_image_filters.k`, `samples/23_mandelbrot_threads.k`
    rewritten without queues, and the `blur`, `particles` and `scene` rows.
@@ -1123,7 +1121,7 @@ cores; steps 1 and 2 are small and independent and can land at any time.
   depend on the schedule (lines never interleave, so the content would
   not). Allowing it under a documented "order unspecified" would help
   debugging at the cost of the "no meaning of its own" claim; the
-  alternative is `KLANG_THREADS=1`, where any `print` outside the body
+  alternative is `K_THREADS=1`, where any `print` outside the body
   tells the story.
 * **Growable results** of child programs: the `into out` form of
   [4.6](#46-results-reductions-determinism), one copy per result at the
@@ -1135,7 +1133,7 @@ cores; steps 1 and 2 are small and independent and can land at any time.
   the harder case, and a measurement on a thread-per-core server that also
   forks is the way to decide.
 * **A pool under TinyCC.** The runtime object could own the pool and the
-  thread-local state the JIT cannot place, so that `klang run` also
+  thread-local state the JIT cannot place, so that `k run` also
   parallelizes. Sequential is correct and simpler; speed in the JIT is not
   what it is for.
 * **Float reductions** with a fixed tree over a fixed chunk count, as
@@ -1150,18 +1148,18 @@ cores; steps 1 and 2 are small and independent and can land at any time.
 ## References
 
 Spec and implementation sections referred to above:
-[§1.2 memory model](../klang_spec.md#12-memory-model),
-[§1.3 the stack invariant](../klang_spec.md#13-the-stack-invariant),
-[§6.5 `for`](../klang_spec.md#65-for),
-[§7.6 static function values](../klang_spec.md#76-static-function-values),
-[§7.8 recursion](../klang_spec.md#78-recursion),
-[§7.12 `simd fn`](../klang_spec.md#712-simd-fn-versions-per-instruction-set),
-[§9.1 the outlives rule](../klang_spec.md#91-the-outlives-rule),
-[§9.2 roots](../klang_spec.md#92-roots-and-the-depth-check),
-[§9.5 writability](../klang_spec.md#95-writability),
-[§10.3 stack assignment](../klang_spec.md#103-stack-assignment-deterministic-recipe),
-[§10.4 runtime environment](../klang_spec.md#104-runtime-environment),
-[§11.2 concurrency](../klang_spec.md#112-concurrency);
+[§1.2 memory model](../k_spec.md#12-memory-model),
+[§1.3 the stack invariant](../k_spec.md#13-the-stack-invariant),
+[§6.5 `for`](../k_spec.md#65-for),
+[§7.6 static function values](../k_spec.md#76-static-function-values),
+[§7.8 recursion](../k_spec.md#78-recursion),
+[§7.12 `simd fn`](../k_spec.md#712-simd-fn-versions-per-instruction-set),
+[§9.1 the outlives rule](../k_spec.md#91-the-outlives-rule),
+[§9.2 roots](../k_spec.md#92-roots-and-the-depth-check),
+[§9.5 writability](../k_spec.md#95-writability),
+[§10.3 stack assignment](../k_spec.md#103-stack-assignment-deterministic-recipe),
+[§10.4 runtime environment](../k_spec.md#104-runtime-environment),
+[§11.2 concurrency](../k_spec.md#112-concurrency);
 [implementation.md §6.3](../implementation.md#63-globals-and-program-instances),
 [§6.4](../implementation.md#64-the-calling-convention-c3),
 [§6.8](../implementation.md#68-threads-and-queues),
@@ -1175,7 +1173,6 @@ Spec and implementation sections referred to above:
 [coroutines.md §2.2](coroutines.md#22-the-recursion-rule-is-the-coroutine-rule);
 [analysis_inventory.md §2](analysis_inventory.md#2-what-is-tracked-where),
 [§5.6](analysis_inventory.md#6-loops-two-iteration-check-instead-of-name-scans-small-effort-independent).
-The issue: [goose#234](https://github.com/aardappel/goose/issues/234).
 The measurements: `bench/fork_cost/spawn_cost.k`,
 `bench/fork_cost/pool_cost.c`.
 

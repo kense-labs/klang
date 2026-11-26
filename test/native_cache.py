@@ -1,4 +1,4 @@
-"""A package's native part, built into one directory under KLANG_HOME for
+"""A package's native part, built into one directory under K_HOME for
 every program that uses it: concurrent first builds compile its C once, the
 others waiting for that build and linking what it made, and a warm build
 compiles nothing. The controlled C compiler, runtime_cache_cc.c, holds the
@@ -37,8 +37,8 @@ def check_native_cache(exe, cc, base):
 def _check_case(exe, compiler, base):
     home = base / "home"
     # A live progress line on the pipe as well, which says what a build waits for.
-    env = dict(os.environ, KLANG_HOME=str(home), KLANG_CACHE_TEST=str(base),
-               KLANG_PROGRESS="live", COLUMNS="200")
+    env = dict(os.environ, K_HOME=str(home), K_CACHE_TEST=str(base),
+               K_PROGRESS="live", COLUMNS="200")
     pkg = base / "pkgs" / "shared"
     pkg.mkdir(parents=True)
     tc.write_text(pkg / "shared.k", "namespace shared;\nextern fn shared_one() -> i64;\n"

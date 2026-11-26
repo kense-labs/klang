@@ -25,7 +25,7 @@ for src in sorted(glob.glob(os.path.join(ROOT, "bench", "*.md"))):
     name = os.path.basename(src)
     pages.append(("bench/" + name, "bench/" + name[:-3] + ".html"))
 pages.append(("vscode/README.md", "vscode/index.html"))
-pages.append(("test/klang_in_klang/README.md", "test/klang_in_klang/index.html"))
+pages.append(("test/k_in_k/README.md", "test/k_in_k/index.html"))
 
 def slug(h):
     # Matches pandoc's gfm auto identifiers

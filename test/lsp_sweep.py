@@ -1,5 +1,5 @@
-"""A robustness and latency sweep of `klang lsp` (docs/design/language_server.md
-§12) over the repository's K programs: every sample, the klang_in_klang
+"""A robustness and latency sweep of `k lsp` (docs/design/language_server.md
+§12) over the repository's K programs: every sample, the k_in_k
 bootstrap, every stdlib module, every positive fixture, and every errors/ and
 errors_tc/ fixture, each opened as a root of its own. For each, the sweep
 waits for the diagnostics, then asks hover, definition, completion and
@@ -12,7 +12,7 @@ the text back and waits for the diagnostics to be the first ones again, and
 closes the file. It fails on a server exit, a reply that is an error, a
 request slower than the limit, or a server that stops answering.
 
-    python test/lsp_sweep.py [--exe build/Release/klang.exe] [--quick]
+    python test/lsp_sweep.py [--exe build/Release/k.exe] [--quick]
         [--jobs N] [--limit SECONDS] [--positions N] [--filter TEXT]
         [--group NAME] [--seed N] [--json OUT] [--top N]
 
@@ -44,7 +44,7 @@ QUICK = [
     "samples/01_tour.k",
     "samples/18_json.k",
     "stdlib/vec.k",
-    "test/klang_in_klang/main.k",
+    "test/k_in_k/main.k",
     "test/syntax/parser_all.k",
     "test/typing/const_params.k",
     "test/errors/missing_semi.k",
@@ -65,10 +65,10 @@ def corpus(quick):
         return [(group_of(REPO / f), REPO / f) for f in QUICK if (REPO / f).exists()]
     files = []
     files += [("samples", f) for f in sorted((REPO / "samples").glob("*.k"))]
-    files += [("klang_in_klang", REPO / "test" / "klang_in_klang" / "main.k")]
+    files += [("k_in_k", REPO / "test" / "k_in_k" / "main.k")]
     files += [("stdlib", f) for f in sorted((REPO / "stdlib").glob("*.k"))]
     files += [("fixtures", f) for f in sorted((REPO / "test").glob("*/*.k"))
-              if f.parent.name not in ("errors", "errors_tc", "lsp", "klang_in_klang")]
+              if f.parent.name not in ("errors", "errors_tc", "lsp", "k_in_k")]
     files += [("errors", f) for f in sorted((REPO / "test" / "errors").rglob("*.k"))]
     files += [("errors_tc", f) for f in sorted((REPO / "test" / "errors_tc").rglob("*.k"))]
     return files
@@ -78,7 +78,7 @@ def group_of(path):
     parts = path.relative_to(REPO).parts
     if parts[0] != "test":
         return parts[0]
-    return parts[1] if parts[1] in ("errors", "errors_tc", "klang_in_klang") else "fixtures"
+    return parts[1] if parts[1] in ("errors", "errors_tc", "k_in_k") else "fixtures"
 
 
 # --- the text ---------------------------------------------------------------------
@@ -168,7 +168,7 @@ class Hang(Exception):
 
 
 class Server:
-    """One `klang lsp`, with a thread reading its messages so that a reply
+    """One `k lsp`, with a thread reading its messages so that a reply
     can be waited for with a timeout."""
 
     def __init__(self, exe, cwd, env, errpath):
@@ -450,7 +450,7 @@ def sweep_file(item):
 # --- the sweep ----------------------------------------------------------------------------
 
 def run_sweep(exe, quick=False, jobs=None, limit=2.0, positions=None, filt=None, group=None,
-              seed=1, edits=True, hang=60.0, analysis=120.0, errdir=None, klang_home=None,
+              seed=1, edits=True, hang=60.0, analysis=120.0, errdir=None, k_home=None,
               progress=None):
     """Sweeps the corpus; (records, failures) with each failure a line."""
     exe = str(Path(exe).resolve())
@@ -460,9 +460,9 @@ def run_sweep(exe, quick=False, jobs=None, limit=2.0, positions=None, filt=None,
     if group:
         files = [f for f in files if f[0] == group]
     env = dict(os.environ)
-    home = klang_home or env.get("KLANG_HOME") or (REPO / "build" / "klang-home")
+    home = k_home or env.get("K_HOME") or (REPO / "build" / "klang-home")
     if Path(home).is_dir():
-        env["KLANG_HOME"] = str(home)
+        env["K_HOME"] = str(home)
     errdir = Path(errdir or (REPO / "build" / "lsp_sweep"))
     errdir.mkdir(parents=True, exist_ok=True)
     options = {"limit": limit, "hang": hang, "analysis": analysis, "seed": seed, "edits": edits,
@@ -531,19 +531,19 @@ def report(records, failures, seconds, top=20):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--exe", default=str(REPO / "build" / "Release" / "klang.exe"))
+    ap.add_argument("--exe", default=str(REPO / "build" / "Release" / "k.exe"))
     ap.add_argument("--quick", action="store_true", help="a handful of files, a few dozen positions each")
     ap.add_argument("--jobs", type=int, help="servers at once (default: up to 8, one per core)")
     ap.add_argument("--limit", type=float, default=2.0, help="seconds a request may take (default 2)")
     ap.add_argument("--positions", type=int, help="positions per file at most, spread over the file "
                                                  "(default: all; 60 with --quick)")
     ap.add_argument("--filter", help="only files whose path has this text")
-    ap.add_argument("--group", help="only this group: samples, klang_in_klang, stdlib, fixtures, errors, errors_tc")
+    ap.add_argument("--group", help="only this group: samples, k_in_k, stdlib, fixtures, errors, errors_tc")
     ap.add_argument("--seed", type=int, default=1, help="of the random edits")
     ap.add_argument("--no-edits", action="store_true", help="skip the burst of edits")
     ap.add_argument("--hang", type=float, default=60.0, help="seconds without a reply before the server is killed")
     ap.add_argument("--analysis", type=float, default=120.0, help="seconds to wait for diagnostics")
-    ap.add_argument("--klang-home", help="KLANG_HOME for the servers (default: $KLANG_HOME, else build/klang-home)")
+    ap.add_argument("--klang-home", help="K_HOME for the servers (default: $K_HOME, else build/klang-home)")
     ap.add_argument("--json", help="write the per-file records here")
     ap.add_argument("--top", type=int, default=20, help="files in the slowest-first listing")
     ap.add_argument("--verbose", action="store_true", help="a line per file as it finishes")
@@ -566,7 +566,7 @@ def main():
     records, failures = run_sweep(args.exe, quick=args.quick, jobs=args.jobs, limit=args.limit,
                                   positions=args.positions, filt=args.filter, group=args.group,
                                   seed=args.seed, edits=not args.no_edits, hang=args.hang,
-                                  analysis=args.analysis, klang_home=args.klang_home, progress=progress)
+                                  analysis=args.analysis, k_home=args.k_home, progress=progress)
     seconds = time.perf_counter() - started
     if args.json:
         Path(args.json).write_text(json.dumps(records, indent=1), encoding="utf-8")

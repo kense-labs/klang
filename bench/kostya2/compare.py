@@ -48,7 +48,7 @@ REPO = HERE.parent.parent
 IS_WINDOWS = os.name == "nt"
 # What a program's runtime links besides libm and threads: dlopen, in libdl on
 # Linux before glibc 2.34.
-KLANG_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
+K_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
 EXE = ".exe" if IS_WINDOWS else ""
 
 
@@ -146,7 +146,7 @@ def libnotify():
 
 # --- K ---------------------------------------------------------------------
 
-KLANG_TESTS = {
+K_TESTS = {
     "bf": "brainfuck/bf.k",
     "base64": "base64/test.k",
     "json": "json/test.k",
@@ -156,27 +156,27 @@ KLANG_TESTS = {
 }
 
 
-def klang_exe():
+def k_exe():
     for sub in ("Release", "", "RelWithDebInfo"):
-        p = REPO / "build" / sub / ("klang" + EXE)
+        p = REPO / "build" / sub / ("k" + EXE)
         if p.exists():
             return p
-    sys.exit("no klang binary under build/ (or pass --klang)")
+    sys.exit("no k binary under build/ (or pass --klang)")
 
 
 def build_klang(args):
-    klang = args.k or klang_exe()
+    klang = args.k or k_exe()
     out = BUILD / "klang"
     out.mkdir(parents=True, exist_ok=True)
     notify = libnotify()
-    env = dict(os.environ, KLANG_STDLIB=os.environ.get("KLANG_STDLIB", str(REPO / "stdlib")))
-    for name, src in KLANG_TESTS.items():
+    env = dict(os.environ, K_STDLIB=os.environ.get("K_STDLIB", str(REPO / "stdlib")))
+    for name, src in K_TESTS.items():
         if args.only and name not in args.only:
             continue
         c = out / f"{name}.c"
         sh([klang, "-O2", "--standalone", "--include", HERE / "common" / "notify.h", "-o", c, HERE / src], env=env)
         sh([tool("clang"), *cflags(), "-std=c23", "-o", out / (name + EXE), c, *notify] +
-           ([] if IS_WINDOWS else ["-lm", "-pthread"] + KLANG_LIBS))
+           ([] if IS_WINDOWS else ["-lm", "-pthread"] + K_LIBS))
         print(f"klang: {name}")
 
 

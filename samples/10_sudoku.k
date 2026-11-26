@@ -6,7 +6,7 @@
 // recursion, and nothing is allocated anywhere.
 //
 // Build and run (from this directory):
-//   klang -o sudoku.c 10_sudoku.k && cl sudoku.c && sudoku
+//   k -o sudoku.c 10_sudoku.k && cl sudoku.c && sudoku
 
 import std;
 import os;

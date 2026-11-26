@@ -1,4 +1,4 @@
-// runtime-define: GS_MAX_STACKS=1
+// runtime-define: K_MAX_STACKS=1
 // The receiving array is the only data stack. Both an ordinary callee and
 // its inlined form must build the named limited result there, then remove
 // the packed header and unused slots. Rendering would need another stack.

@@ -20,9 +20,9 @@ build. The compiler also embeds TinyCC. Without `-o`, it compiles that same C
 into its own process and calls the program's `main` there. No file is written
 and no C toolchain has to be installed.
 
-    klang 01_tour.k            # compiled and run in one process
-    klang -o tour.c 01_tour.k  # the C file, as before
-    klang --jit prog.k         # the same, asked for explicitly
+    k 01_tour.k            # compiled and run in one process
+    k -o tour.c 01_tour.k  # the C file, as before
+    k --jit prog.k         # the same, asked for explicitly
 
 A program whose only C is a shared library bound by name (an
 `extern "SDL2" { ... }` block, spec §7.10) needs no toolchain either: the
@@ -70,8 +70,8 @@ have produced:
   needs.
 
 These, TinyCC's runtime headers and, on Windows, its import definitions are
-staged into one directory. Packagers can set `KLANG_TCC_LIB_PATH` in CMake
-to their installation directory. `KLANG_TCCLIB` overrides it at run time,
+staged into one directory. Packagers can set `K_TCC_LIB_PATH` in CMake
+to their installation directory. `K_TCCLIB` overrides it at run time,
 and a `tcclib` directory beside the compiler binary takes precedence over
 the configured path. Ordinary JIT programs use only the bundled `tccdefs.h` and
 `libtcc1.a`; their small C declaration surface is embedded. Explicitly
@@ -121,7 +121,7 @@ A program that spawns a worker or uses a queue (§11.2) is refused under this
 backend. TinyCC's in-memory runner rejects any section with `SHF_TLS`
 (`tccrun.c`: *thread-local storage not supported with -run*), and the runtime
 puts each thread program's globals pointer in thread-local storage whenever
-`GS_NEED_THREADS` is set. The native runtime's TLS is supported by its host
+`K_NEED_THREADS` is set. The native runtime's TLS is supported by its host
 compiler, but the generated unit still needs TinyCC TLS support. The test
 runner reports the skipped fixtures and sample.
 

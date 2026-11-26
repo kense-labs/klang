@@ -3,6 +3,7 @@
 test/**
 src/**
 node_modules/**
+__pycache__/**
 package-lock.json
 build_vsix.py
 .gitignore

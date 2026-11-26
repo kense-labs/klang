@@ -18,8 +18,8 @@
 </details>
 
 This note describes what it would take to turn the VS Code extension in
-`vscode/`, which runs `klang check` on save and parses its text output, into
-a language server: a `klang lsp` verb in the compiler that speaks the
+`vscode/`, which runs `k check` on save and parses its text output, into
+a language server: a `k lsp` verb in the compiler that speaks the
 Language Server Protocol over stdio, with the extension as one of its
 clients. It records what the extension and the compiler do today, the
 measurements the design is based on, the proposed design, the compiler
@@ -41,7 +41,7 @@ configuration, snippets, an outline built by a small lexical scan
 `import` lines that resolve the module the way `StdlibDirs` does.
 
 **Through the compiler:** when a file in a trusted workspace is opened or
-saved, `klang check <entry>` runs with a timeout (`diagnostics.js`). The
+saved, `k check <entry>` runs with a timeout (`diagnostics.js`). The
 entry is `klang.entryFile` if that is set, and otherwise the file itself.
 Its stderr is parsed by regular expression:
 `file:line[:col]: error|warning: message`, a caret line two lines down for
@@ -68,7 +68,7 @@ of configuration.
 ## 2. What the compiler gives a server, and what it lacks
 
 The front end is structured so that most of a server's questions have an
-answer in the data that exists after `klang check`. The gaps are in
+answer in the data that exists after `k check`. The gaps are in
 positions, in how errors come out, and in what happens after the first one.
 
 **Positions.** `Line` (`ast.h`) is a line number and a file index; nothing
@@ -152,7 +152,7 @@ the process figures with `time`:
 | | files | lines | process start | parse and resolve | typecheck and optimize | with BCE |
 |---|---|---|---|---|---|---|
 | `samples/18_json.k` (with `std` and `os`) | 3 | 1,780 | 34 ms | 4 ms | | 10 ms |
-| `test/klang_in_klang/main.k` | 14 | 3,318 | 34 ms | 10 ms | 82 ms | 104 ms |
+| `test/k_in_k/main.k` | 14 | 3,318 | 34 ms | 10 ms | 82 ms | 104 ms |
 | `samples/31_mini_doom.k`, first run | | | | 15.3 s | | |
 | `samples/31_mini_doom.k`, after | | | | 53 ms | | 75 ms |
 
@@ -166,7 +166,7 @@ easy to replace a complete analysis.
 
 ## 3. Decisions
 
-1. **The server is the compiler.** `klang lsp` is a verb of the single
+1. **The server is the compiler.** `k lsp` is a verb of the single
    compiler executable, so the server is always the same version as the
    compiler it serves, needs no separate distribution, and reuses the front
    end rather than approximating it. The alternative is a server written in
@@ -214,7 +214,7 @@ easy to replace a complete analysis.
    failing node). Then the parser recovers per statement and declaration,
    then the checker per root. Each stage reports more, never less, and the
    CLI's behavior under errors is unchanged until the last one, which is
-   when `klang check` can print every error too.
+   when `k check` can print every error too.
 
 7. **The server never waits on the network or the shader compiler.** A
    package that has not been fetched is reported as a diagnostic at its
@@ -231,7 +231,7 @@ easy to replace a complete analysis.
 
 **Where.** The server is a set of headers included by `main.cpp` after the
 passes, like the rest of the compiler, and a `verb == "lsp"` branch in
-`Main` (`klang lsp` takes `--stdlib` and nothing else; the client passes
+`Main` (`k lsp` takes `--stdlib` and nothing else; the client passes
 settings through the protocol). There are four files:
 
 | File | Holds |
@@ -373,14 +373,14 @@ over the specializations that completed. With this, an error in one
 function means that only the functions that reach it lose their
 diagnostics, which is what an editor user expects of a whole-program
 checker. The CLI keeps
-stopping at the first error until this is in; after that, `klang check`
+stopping at the first error until this is in; after that, `k check`
 prints all errors, in root order. The `errors_tc/` fixtures are written to
 have one error each and stay as they are.
 
 **E. No fetching.** An `Ast::nofetch` flag. When it is set, `PackageRoot`
 reports a package that is not in the cache as a diagnostic at the import
-(`klang fetch` fetches it) instead of calling `FetchPackage`. `klang lsp`
-sets it; `klang check --offline` could too.
+(`k fetch` fetches it) instead of calling `FetchPackage`. `k lsp`
+sets it; `k check --offline` could too.
 
 **F. Cancellation.** The `Ast` gets a `const atomic<bool> *cancel`, which
 `ParseTopDecl`, `CheckSpecBody` and `CheckStmt` poll. When it is set, they
@@ -400,14 +400,14 @@ syntax: the standard library's existing comments become hover text where
 they sit directly above a declaration, and a banner followed by a blank
 line is not attached to anything.
 
-**I. `klang lsp`.** The server itself (§4): roughly the size of `bce.h`
+**I. `k lsp`.** The server itself (§4): roughly the size of `bce.h`
 once the features of §6 are in, and little of it compiler-specific beyond
 `lsp_analysis.h`.
 
 Not needed: an incremental parser, a separate symbol database, a change
 to how specializations are keyed or cloned, or a formatter of its own
 (`Dump` drops comments and prints a `guard` as the `if` it became, so it
-cannot serve as one; `klang format` is, built on the tokens rather than the
+cannot serve as one; `k format` is, built on the tokens rather than the
 tree, and its `Format` in `format.h` is pure, which the server calls).
 
 ## 6. Features, and what each needs
@@ -436,7 +436,7 @@ parameter bound to a fresh opaque type, as far as that check gets.
 
 ## 7. The extension
 
-`src/client.js` starts `klang lsp` with the configured `compilerPath`
+`src/client.js` starts `k lsp` with the configured `compilerPath`
 through `vscode-languageclient` (LSP 3.18 is the current protocol version;
 3.17 is enough for everything here). It passes the settings as
 `initializationOptions` and later through `didChangeConfiguration`, adds a
@@ -449,7 +449,7 @@ tasks, the run and build commands and keybindings stay as they are. The
 status bar item derives its state from the server's published diagnostics
 instead of the check queue.
 
-Fallback: at activation the client runs `klang lsp --probe`, which prints
+Fallback: at activation the client runs `k lsp --probe`, which prints
 the protocol version and exits. With a compiler that lacks the verb, the
 extension keeps its current behavior, with `diagnostics.js` reading
 `check --diagnostics json` where the flag exists and the text output
@@ -473,7 +473,7 @@ expected list, run with `check` once the CLI reports them all, and through
 the JSON flag before that.
 
 **The server.** `test/lsp_protocol.py`, beside `cli_paths.py`, starts
-`klang lsp` with a pipe, initializes, opens fixtures from `test/lsp/`, and
+`k lsp` with a pipe, initializes, opens fixtures from `test/lsp/`, and
 runs the queries the fixtures ask for in comments
 (`// lsp: hover 12:7 "x: i64"`, `// lsp: definition 12:7 -> 3:4`,
 `// lsp: complete 20:9 has push`), comparing the answers. It also edits a
@@ -505,7 +505,7 @@ import) and H (`Lexer::doc` on declarations, fields and variants, printed
 by `--dump-docs`). The extension's reading of the JSON is a task of its
 own.
 
-**Phase 1, a server:** F, G, `klang lsp` with the transport, workspace and
+**Phase 1, a server:** F, G, `k lsp` with the transport, workspace and
 analysis of §4, and diagnostics on change, hover, go to definition,
 document and workspace symbols, semantic tokens and signature help, all of
 which the annotations of a first-error analysis already support. The
@@ -515,13 +515,13 @@ This is in. The server is described in `docs/implementation.md` §12
 `lsp.h`, with `Ast::CheckCancel` and the shader cache in `CompileShader`);
 its index holds one occurrence per name per file rather than a
 node-per-position table. The extension's client is `vscode/src/client.js`:
-a probe with `klang lsp --probe`, a `vscode-languageclient` client bundled
+a probe with `k lsp --probe`, a `vscode-languageclient` client bundled
 with esbuild, and the check-on-save mode, kept for a compiler without the
 verb or with `klang.useLanguageServer` off.
 
 **Phase 2, more than one error:** D1, then D2; completion (both kinds),
 references and rename, inlay hints, folding and selection ranges.
-`klang check` reports every error. D1 and D2 are in
+`k check` reports every error. D1 and D2 are in
 (`docs/implementation.md` §2 and §3.1):
 
 * The parser recovers per statement (`Block::brokenat`,
@@ -685,7 +685,7 @@ these:
   a builtin given an opaque value, a type parameter called as a function
   value (`F(x)`), indexing, iterating or testing an opaque value.
 
-**The check.** The server sets `Ast::exemplars`; `klang check` never does. After
+**The check.** The server sets `Ast::exemplars`; `k check` never does. After
 checking real roots and applying whole-program fixups, it creates an exemplar
 for each top-level function that has type parameters or untyped parameters and
 was not specialized by any root.
@@ -730,9 +730,9 @@ the exemplar stopped before it.
 `test/lsp_sweep.py` is the server's robustness and latency sweep over the
 repository's K programs, run by hand (`--quick` is the subset a test
 suite could afford; `run_tests.py` does not run it today). Every file under
-`samples/`, `test/klang_in_klang/main.k`, every stdlib module, every
+`samples/`, `test/k_in_k/main.k`, every stdlib module, every
 positive fixture under `test/*/` (except `errors/`, `errors_tc/`, `lsp/`
-and `klang_in_klang/`), and every `errors/` and `errors_tc/` fixture is
+and `k_in_k/`), and every `errors/` and `errors_tc/` fixture is
 opened as a root of its own on one of eight servers. For each file, the
 sweep:
 
@@ -762,7 +762,7 @@ slowest request per method, every failure, and the totals shown below.
 | Requests | 1,058,698 |
 | Slowest request | 3.5 ms (completion, `test/ui/ui_popups.k`) |
 | Slowest per method | semantic tokens 2.8 ms; signature help 1.7 ms; hover, definition 0.3 ms; code lens, symbols 0.2 ms; inlay hints, folding 0.1 ms |
-| Analysis (didOpen to its diagnostics) | median 0.6 ms, 90th percentile 4 ms, slowest 154 ms (`klang_in_klang/main.k`) |
+| Analysis (didOpen to its diagnostics) | median 0.6 ms, 90th percentile 4 ms, slowest 154 ms (`k_in_k/main.k`) |
 | Analysis after the burst of edits | median 161 ms, of which 150 ms is the debounce |
 | Whole sweep | 123 s |
 
@@ -802,8 +802,8 @@ What the numbers mean, for the next person:
   Whether such an error should also be reported at the instantiating
   call in the root is open.
 * **Package errors are as `--offline` reports them.** A sample or fixture
-  importing a package not in `KLANG_HOME/pkg` (the sweep points the
-  servers at `build/klang-home` where it exists, else at `$KLANG_HOME`)
+  importing a package not in `K_HOME/pkg` (the sweep points the
+  servers at `build/klang-home` where it exists, else at `$K_HOME`)
   gets the "not fetched" error at its import and is otherwise analyzed;
-  the gfx `_err_` fixtures report their shader errors as `klang check`
+  the gfx `_err_` fixtures report their shader errors as `k check`
   does.

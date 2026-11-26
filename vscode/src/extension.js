@@ -20,9 +20,9 @@ async function activate(context) {
     let reportedFailure = '';
 
     // The extension runs in one of two modes. With a compiler that serves an
-    // editor (`klang lsp`), the language server analyzes the programs as they
+    // editor (`k lsp`), the language server analyzes the programs as they
     // are edited and answers the editor's queries; otherwise, and in an
-    // untrusted workspace, the saved files are checked with `klang check`
+    // untrusted workspace, the saved files are checked with `k check`
     // (the check-on-save mode: the queue, the outline and the import links
     // below). `server` is the language server's state: off, starting or
     // running, with the setup it was started for.

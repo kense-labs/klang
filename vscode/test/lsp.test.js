@@ -10,7 +10,7 @@ const { compilerPath } = require('../src/config');
 const { probe } = require('../src/client');
 
 const root = path.resolve(__dirname, '../..');
-const compiler = process.env.KLANG_TEST_COMPILER || compilerPath('', root);
+const compiler = process.env.K_TEST_COMPILER || compilerPath('', root);
 const available = fs.existsSync(compiler);
 
 // A file URI as VS Code spells one: the drive letter in lower case, and
@@ -85,8 +85,8 @@ class Client {
 }
 
 test('the real language server publishes diagnostics as the text changes and answers a hover', async t => {
-    if (!available) { t.skip('Build K or set KLANG_TEST_COMPILER to run language server tests.'); return; }
-    if (!await probe(compiler, root)) { t.skip(`${compiler} serves no language server (klang lsp --probe).`); return; }
+    if (!available) { t.skip('Build K or set K_TEST_COMPILER to run language server tests.'); return; }
+    if (!await probe(compiler, root)) { t.skip(`${compiler} serves no language server (k lsp --probe).`); return; }
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'klang vscode lsp '));
     const client = new Client(compiler, dir);
     try {

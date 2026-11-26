@@ -5,7 +5,7 @@
 // in one place. Plus the ones that end the program: assert and abort.
 //
 // Build and run (from this directory):
-//   klang -o errors.c 04_errors.k && cl errors.c && errors
+//   k -o errors.c 04_errors.k && cl errors.c && errors
 
 import std;
 

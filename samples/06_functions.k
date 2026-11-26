@@ -5,7 +5,7 @@
 // there are no function pointers and nothing is boxed.
 //
 // Build and run (from this directory):
-//   klang -o functions.c 06_functions.k && cl functions.c && functions
+//   k -o functions.c 06_functions.k && cl functions.c && functions
 
 import std;
 

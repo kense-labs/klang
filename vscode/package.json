@@ -79,10 +79,10 @@
     "configuration": {
       "title": "K",
       "properties": {
-        "klang.compilerPath": { "type": "string", "default": "", "scope": "resource", "description": "Compiler executable or command on PATH. Empty searches klang and build/{Release,Debug}/klang in the workspace, then PATH. Relative paths use the workspace folder. Supports ${workspaceFolder}." },
+        "klang.compilerPath": { "type": "string", "default": "", "scope": "resource", "description": "Compiler executable or command on PATH. Empty searches k and build/{Release,Debug}/k in the workspace, then PATH. Relative paths use the workspace folder. Supports ${workspaceFolder}." },
         "klang.entryFile": { "type": "string", "default": "", "scope": "resource", "description": "Program entry file, relative to the workspace folder. Empty checks/runs the current file. Set this when editing imported modules. Supports ${workspaceFolder}." },
-        "klang.stdlibPath": { "type": "string", "default": "", "scope": "resource", "description": "Standard-library directory passed as --stdlib. Empty uses the compiler's default lookup (including KLANG_STDLIB). Supports ${workspaceFolder}." },
-        "klang.useLanguageServer": { "type": "boolean", "default": true, "scope": "window", "description": "Start the compiler's language server (klang lsp) for diagnostics as you type, hover, go to definition, symbols, semantic highlighting and signature help. A compiler without it, or this off, checks saved files instead (klang.checkOnSave)." },
+        "klang.stdlibPath": { "type": "string", "default": "", "scope": "resource", "description": "Standard-library directory passed as --stdlib. Empty uses the compiler's default lookup (including K_STDLIB). Supports ${workspaceFolder}." },
+        "klang.useLanguageServer": { "type": "boolean", "default": true, "scope": "window", "description": "Start the compiler's language server (k lsp) for diagnostics as you type, hover, go to definition, symbols, semantic highlighting and signature help. A compiler without it, or this off, checks saved files instead (klang.checkOnSave)." },
         "klang.checkOnSave": { "type": "boolean", "default": true, "scope": "resource", "description": "Without the language server: check saved K files on open and save. Checks wait until open K files in the same workspace folder are saved." },
         "klang.useRunKeybindings": { "type": "boolean", "default": true, "description": "Run with JIT on Ctrl+Shift+B (Cmd+Shift+B on macOS), F5, and Ctrl+F5 while editing K. Disable to use VS Code's usual task/debug keybindings." },
         "klang.checkTimeout": { "type": "number", "default": 15000, "minimum": 1000, "maximum": 300000, "scope": "resource", "description": "Maximum time in milliseconds for a background compiler check." },
@@ -92,7 +92,7 @@
     "taskDefinitions": [{
       "type": "klang", "required": ["action"],
       "properties": {
-        "action": { "type": "string", "enum": ["run", "check", "build", "generateC"], "description": "Compiler operation. Run uses the JIT and is the contributed build task; build makes an executable beside the source with `klang build`." },
+        "action": { "type": "string", "enum": ["run", "check", "build", "generateC"], "description": "Compiler operation. Run uses the JIT and is the contributed build task; build makes an executable beside the source with `k build`." },
         "file": { "type": "string", "description": "Source file relative to the workspace folder. Defaults to klang.entryFile or the active file. Supports ${workspaceFolder} and ${file}." },
         "output": { "type": "string", "description": "C output file for generateC; defaults to the source basename with .c." }
       }

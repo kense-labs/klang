@@ -121,13 +121,13 @@ fn main() {
         let at = if step >= 1 && step <= 2 { field } else { ui::rect(FAR, FAR, 0, 0) };
         frame_input(ctx, (at.x + 20.0) as! i64, (at.y + at.h / 2.0) as! i64,
                     step == 1 || step == 9);
-        if step == 3 { ui::input_char(ctx, 'G'); }
-        if step == 4 { ui::input_unicode(ctx, 'o'); }
+        if step == 3 { ui::input_char(ctx, 'S'); }
+        if step == 4 { ui::input_unicode(ctx, 't'); }
         if step == 5 {
             let o: u8[1] = ['o'];
             ui::input_glyph(ctx, o);
         }
-        if step == 6 { ui::input_text(ctx, "se!"); }
+        if step == 6 { ui::input_text(ctx, "ne!"); }
         if step == 7 { tap(ctx, ui::KEY_BACKSPACE); }
         if step == 8 { tap(ctx, ui::KEY_ENTER); }
         ui::input_end(ctx);

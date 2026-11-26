@@ -1,4 +1,4 @@
-// runtime-define: GS_STACK_RESERVE=4194304
+// runtime-define: K_STACK_RESERVE=4194304
 // Fixed values above the C backend's native-value threshold live on data
 // stacks. A large return can unwind through other large locals, and a
 // continue or break leaves a loop body holding one. Repeat exits often enough

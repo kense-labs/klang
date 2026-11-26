@@ -5,7 +5,7 @@
 // a region reservation per worker to the measurement.
 //
 // Build and run (from this directory):
-//   klang build spawn_cost.k && ./spawn_cost
+//   k build spawn_cost.k && ./spawn_cost
 import std;
 import os;
 

@@ -36,7 +36,7 @@
 This is the reference for the K language: every feature, topic by topic,
 with examples. It sits between the two other descriptions of the language.
 The [tutorial](tutorial.md) teaches by example and spends its time on what
-is different about K; the [specification](klang_spec.md) states the
+is different about K; the [specification](k_spec.md) states the
 exact rules in the language an implementor needs. This document is for the
 programmer who has read the tutorial and wants a description of the whole
 language. It is as complete as the specification, but easier to read, and
@@ -54,12 +54,12 @@ body of a `main` or a set of declarations, and is written so that it can
 be pasted into a program. Run any of them with
 
 ```bash
-klang example.k
+k example.k
 ```
 
 which compiles the program into the compiler's own process and runs it
-there, with no C compiler and no build step. `klang check` typechecks
-without running, and `klang build` makes an executable
+there, with no C compiler and no build step. `k check` typechecks
+without running, and `k build` makes an executable
 ([command_line.md](command_line.md) has the rest of the command line).
 
 ---
@@ -88,7 +88,7 @@ byte's value, and it accepts the same escapes as a string literal.
 Underscores (`_`) may appear as digit separators for readability. A separator
 must sit between two digits of the same digit run (`1_000_000`, `0xFF_AA`);
 `1__0`, `1_`, and `0x_1` are errors. The separators are not part of the
-value, and `klang format` keeps them as written.
+value, and `k format` keeps them as written.
 
 **Float literals** have a `.`, an exponent, or both: `1.5`, `2.5e-3`, `1e9`.
 A `.` begins a fraction only when a digit follows it, so `1..2` is a range
@@ -2518,7 +2518,7 @@ The legacy declarations `reusable var pool: T[>..] = [];` and
 directly on the array, with hidden metadata. Their parameter type is `T[>..]&`;
 pool provenance carries the metadata through calls. Existing `push` and
 `append` operations add at the end without using freed spans. Their unchanged
-semantics are specified in [spec §5.4](klang_spec.md#54-reusable-arrays-safe-allocation-escape-hatch).
+semantics are specified in [spec §5.4](k_spec.md#54-reusable-arrays-safe-allocation-escape-hatch).
 
 To migrate, import the appropriate module, declare `slot_pool<T> {}` or
 `slice_pool<T> {}`, update owner parameters to the corresponding root reference,
@@ -3114,7 +3114,7 @@ fn blur_row(above: u8[:], here: u8[:], below: u8[:], out: u8[:]) {
 }
 ```
 
-`klang --bce-lines` reports, per line, which checks survived. The other
+`k --bce-lines` reports, per line, which checks survived. The other
 aborts that remain in every build are division by zero, a limited
 array's capacity overflow, shrinking below empty, a relative-reference
 offset that does not fit its width, a failed `assert`, and data-stack
@@ -3787,12 +3787,12 @@ variables to functions. Namespaces affect only name resolution, type
 identity and generated C names. There is no privacy, no re-export and no
 nesting of namespaces. Spec §11.1, `docs/design/namespaces.md`.
 
-`namespace g = klang_gfx2d;`, before a file's declarations, lets that file
-write `g::Sprite` for `klang_gfx2d::Sprite`, in any qualified name. The
+`namespace g = k_gfx2d;`, before a file's declarations, lets that file
+write `g::Sprite` for `k_gfx2d::Sprite`, in any qualified name. The
 alias holds in that file alone, so a library's aliases never reach the
 files that import it, and it may even take the name of another namespace
 without affecting any other file. Its target must be a namespace some file
-declares. Errors and `--dump` name the target: `klang_gfx2d::Sprite`.
+declares. Errors and `--dump` name the target: `k_gfx2d::Sprite`.
 
 ### Globals and initialization
 
@@ -3938,7 +3938,7 @@ waits for it. Queued messages outlive their sender. Workers still running
 when `main` returns are killed. A global that is not flat is an error in
 any function a `thread_fn` reaches, unless it is a `let` whose references
 all lead to static data, as a string literal's do. Programs with threads
-need a real C compiler (`klang build`), since the in-process TinyCC
+need a real C compiler (`k build`), since the in-process TinyCC
 backend cannot place thread-local storage. Spec §11.2.
 
 ### Contained workers
@@ -4084,7 +4084,7 @@ What may cross is exactly what has a plain C shape:
 * `T&` to such a `T`, as a pointer;
 * `T[:]` of such a `T`, as a `{ data, len }` struct;
 * `T[>..]&` of such a `T`, a builder C may write and append whole elements
-  to (`gs_bld_append` appends bytes to a `u8[>..]&`).
+  to (`k_bld_append` appends bytes to a `u8[>..]&`).
 
 Results are one scalar or flat fixed-size value, or nothing. Everything
 else (`varint`s, references inside structs, variable or resizable values
@@ -4092,10 +4092,10 @@ by value, optionals) is rejected at the declaration. A parameter is as
 writable as its type says, so a read-only argument needs it declared
 `const`. C must not keep a borrowed argument beyond the call. The
 program's own C goes in a sidecar `foo.build` beside `foo.k`
-(`c_sources = ["impl.c"];`). A program run in-process (`klang run`) links
+(`c_sources = ["impl.c"];`). A program run in-process (`k run`) links
 only against the compiler itself, which supplies the C99 `<math.h>`
 functions in both widths (all but `nexttoward`) and little else of the C
-library; other C library functions need `klang build`, the program's own
+library; other C library functions need `k build`, the program's own
 C or an `extern "lib"` block
 ([command_line.md](command_line.md#2-running-a-program)). Headers supplied by `c_headers` in that sidecar
 or by `--include header.h` can use K's generated types directly; see
@@ -4205,27 +4205,27 @@ NUL-terminated).
 export fn hello_world() -> const u8[:] { return "Hello, world!" }
 export "c_add" fn add(a: i32, b: i32) -> i32 { a + b }
 
-fn main() { print(hello_world(), " ", add(20, 22)); }     // runs once, inside klang_init
+fn main() { print(hello_world(), " ", add(20, 22)); }     // runs once, inside k_init
 ```
 
 ```
 Hello, world! 42
 ```
 
-`klang --standalone --header hello.h -o hello.c hello.k` builds the C
+`k --standalone --header hello.h -o hello.c hello.k` builds the C
 for a C host. The C has no `main` of its own, and comes with a header
-declaring `klang_init(argc, argv)`, which the host calls once before
+declaring `k_init(argc, argv)`, which the host calls once before
 anything else. That function sets up the runtime and the globals and runs
 the K `main`, if there is one, so `main` is where a library keeps its
 start-up code. Exported functions are not thread-safe: call them from the
-thread that called `klang_init`. Only the host calls them, between its
+thread that called `k_init`. Only the host calls them, between its
 calls into K: C that K code called calling an export back before
 it returns (a toolkit's handler, a `qsort` comparator) is a runtime error.
 Where K and C must interleave, have the C return to K rather than
-call it back. `klang_exit()` ends the program and
-releases what the start set up, so that `klang_init` can start it, or
+call it back. `k_exit()` ends the program and
+releases what the start set up, so that `k_init` can start it, or
 another build of it, again in the same process; it is a runtime error
-while a worker of the program still runs. `klang build --shared --header
+while a worker of the program still runs. `k build --shared --header
 hello.h hello.k` builds the same C straight into a shared library
 (`libhello.so`, `libhello.dylib` or `hello.dll`) with the header beside the
 source ([command_line.md §3](command_line.md#3-building-an-executable)).

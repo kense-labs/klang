@@ -1,1 +1,1 @@
-klang runtime error: klang_init must be called before exported functions
+klang runtime error: k_init must be called before exported functions

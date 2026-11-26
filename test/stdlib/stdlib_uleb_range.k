@@ -1,6 +1,6 @@
 // runtime-debug: format_uleb and parse_uleb carry every i64, a negative one as the ten bytes of
 // its 64 bits (§3.6: 1-10 bytes, full 64-bit range), and parse_uleb refuses what does not fit in
-// 64 bits or is longer than the shortest encoding; valid input must not trip GS_DEBUG's `as`
+// 64 bits or is longer than the shortest encoding; valid input must not trip K_DEBUG's `as`
 // check inside std.
 import std;
 

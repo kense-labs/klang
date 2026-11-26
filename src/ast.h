@@ -171,7 +171,7 @@ inline int64_t EuclidMod(int64_t a, int64_t b) {
 
 // The constant an integer operation folds to at storage `s`, false where it
 // has none. Unsigned arithmetic wraps modulo the width by definition (§6.2)
-// and so does a shift of either signedness (runtime.h's gs_shl_*), so those
+// and so does a shift of either signedness (runtime.h's k_shl_*), so those
 // always fold; a signed result that leaves the type does not, since a debug
 // build aborts on it and folding would define it away, and neither does a
 // zero divisor, which aborts in every build. Comparisons are not here: they
@@ -353,7 +353,7 @@ inline bool IsArrayKind(const TypeExpr *t, ArrayKind k) {
 }
 // Whether a variable or parameter of this type bound to a reusable pool is a
 // pool reference (§5.4), carrying the pool's freelist beside the address (a
-// gs_pref in the generated C): a plain reference to a grow-only array. One of
+// k_pref in the generated C): a plain reference to a grow-only array. One of
 // any other type refers to the pool as to any array.
 inline bool CarriesPool(const TypeExpr *t) {
     return IsPlainRef(t) && IsArrayKind(t->ref->sub, A_GROW);
@@ -1546,7 +1546,7 @@ struct SFunction {
     // of its cached tops before the call (CodeGen::CollectSpecs, SyncReach).
     bool readsalltops = false;
     // A runtime entry point that reports a failure where the program called
-    // the standard library: it takes a trailing const gs_loc * (runtime.h),
+    // the standard library: it takes a trailing const k_loc * (runtime.h),
     // which its callers pass as they do a library function's (CodeGen::CallerLoc).
     bool takesloc = false;
     bool isnested = false;
@@ -1638,7 +1638,7 @@ inline int LastRealField(const vector<Field> &fields) {
 
 // Whether fields lay out no bytes: no field, and no pad with a size (a bare
 // pad aligns only a field after it, §3.2). C has no empty structs and gives
-// such a struct or variant type one byte (gs_empty). A struct takes it in
+// such a struct or variant type one byte (k_empty). A struct takes it in
 // its layout too, but a variant's payload takes no bytes behind its ADT's
 // tag: its type is never a field or an element (§3.4), and a fixed-mode
 // ADT's union has no member for it.
@@ -2429,7 +2429,7 @@ struct FnSpec {
     // too, since it inlines a function with one caller whatever its size.
     bool outofline = false;
     // K wanted to inline this function at some call but could not
-    // (Optimizer::TryInline), so it is declared GS_INLINE in C and the C
+    // (Optimizer::TryInline), so it is declared K_INLINE in C and the C
     // compiler inlines it.
     bool cinline = false;
 };
@@ -2498,7 +2498,7 @@ struct Package {
     string name;
     string root;          // With its trailing separator, or "" for the working directory.
     bool stdlib = false;
-    string cachekey;      // A git source's place under KLANG_HOME/pkg; "" for a path.
+    string cachekey;      // A git source's place under K_HOME/pkg; "" for a path.
     int builtin = -1;     // Its index in builtin_packages when compiled into the compiler.
     // The sidecar beside its entry, `<name>.build` (docs/design/packages.md
     // §4.7), read when the package is loaded: the C it compiles, which makes
@@ -2613,7 +2613,7 @@ struct Ast {
         auto pkg = filepkg[fileidx];
         return pkg >= 0 && pkg < (int)packages.size() && packages[pkg].stdlib;
     }
-    // Whether this file is in a package fetched into KLANG_HOME/pkg, whose
+    // Whether this file is in a package fetched into K_HOME/pkg, whose
     // deprecated spellings are its authors' to change, not the program's:
     // a published version keeps working on older compilers without warning.
     bool FetchedOrBuiltinFile(int fileidx) const {

@@ -42,7 +42,7 @@ def check_exit_race(exe, base):
         r = subprocess.run([str(exe), "build", "-o", str(app), str(source)], cwd=root,
                            capture_output=True, text=True, errors="replace", timeout=300)
         if r.returncode != 0:
-            raise RuntimeError(f"exit race: klang build:\n{r.stdout}{r.stderr}")
+            raise RuntimeError(f"exit race: k build:\n{r.stdout}{r.stderr}")
         for i in range(RUNS):
             with open(root / "out.txt", "wb") as out, open(root / "err.txt", "wb") as err:
                 code = subprocess.run([str(app)], cwd=root, stdout=out, stderr=err,

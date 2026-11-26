@@ -14,7 +14,7 @@
   - [3.5 Testing](#35-testing)
   - [3.6 What it cannot do](#36-what-it-cannot-do)
 - [4. The JIT](#4-the-jit)
-- [5. Option B: `klang dap`, a debugger in the compiler](#5-option-b-klang-dap-a-debugger-in-the-compiler)
+- [5. Option B: `k dap`, a debugger in the compiler](#5-option-b-klang-dap-a-debugger-in-the-compiler)
   - [5.1 Shape](#51-shape)
   - [5.2 Stopping: statement sites](#52-stopping-statement-sites)
   - [5.3 Frames and values](#53-frames-and-values)
@@ -22,7 +22,7 @@
   - [5.5 Built programs and threads](#55-built-programs-and-threads)
   - [5.6 What it cannot do](#56-what-it-cannot-do)
   - [5.7 What it costs to keep](#57-what-it-costs-to-keep)
-- [6. Option C: `klang dap` in front of lldb-dap](#6-option-c-klang-dap-in-front-of-lldb-dap)
+- [6. Option C: `k dap` in front of lldb-dap](#6-option-c-klang-dap-in-front-of-lldb-dap)
   - [6.1 Shape](#61-shape)
   - [6.2 The debug map](#62-the-debug-map)
   - [6.3 What the adapter shows](#63-what-the-adapter-shows)
@@ -43,9 +43,9 @@ C names and C types. Three options are compared. Option A gives the C
 compilers' debug information K's source lines and names, and leaves
 the debugging to the native debuggers that already speak the Debug Adapter
 Protocol, with visualizers inside them for K values. Option B builds a
-debugger into the compiler, `klang dap`, which runs the program itself and
+debugger into the compiler, `k dap`, which runs the program itself and
 shows it in K terms. Option C, which a prototype on a fork implements,
-is also a `klang dap`, but one that stands in front of LLDB's adapter: LLDB
+is also a `k dap`, but one that stands in front of LLDB's adapter: LLDB
 runs the program, and the compiler's adapter turns what LLDB reports into
 K. Section 3 is A, section 5 is B, section 6 is C, section 7 compares
 them, section 8 gives the recommendation and the order to build it in.
@@ -54,8 +54,8 @@ them, section 8 gives the recommendation and the order to build it in.
 
 **Option C** is recommended. `#line` directives map the generated C back to
 K lines in every C compiler's debug information (PDB or DWARF), which
-every option needs. `klang build --debug` writes a map of each function's
-locals and each type's representation, and `klang dap` speaks DAP to the
+every option needs. `k build --debug` writes a map of each function's
+locals and each type's representation, and `k dap` speaks DAP to the
 editor while driving `lldb-dap` underneath: LLDB does breakpoints,
 stepping, threads and unwinding, and the adapter reads values out of
 memory by their K types, names frames and locals as the source does,
@@ -88,13 +88,13 @@ TinyCC's own backtracer (section 4).
 
 ## 1. What a debugger sees today
 
-`klang build --debug` compiles the C with `/Od /Zi` or `-O0 -g`
+`k build --debug` compiles the C with `/Od /Zi` or `-O0 -g`
 (`src/build.h`) and turns on the overflow, range and tag checks. On master
 that is all the support there is. The VS Code extension contributes a `klang`
 debug type, but it only runs the program with the JIT in a task
 (`noDebug`) and refuses `attach`.
 
-The C that `klang -o shapes.c samples/05_shapes.k` writes shows what a
+The C that `k -o shapes.c samples/05_shapes.k` writes shows what a
 C debugger has to work with:
 
 * **No line mapping.** There is no `#line`, so breakpoints and steps are
@@ -126,14 +126,14 @@ C debugger has to work with:
   The debugger shows the tag as a number and every union member, and a
   slice as a pointer to its first element.
 * **Resizables have lost their element type.** Every resizable array's
-  header is the same `gs_rhdr { uint8_t *base; int64_t len; }`, so nothing
+  header is the same `k_rhdr { uint8_t *base; int64_t len; }`, so nothing
   in the debug information says that `shapes_g` holds `Shape_g` values. No
   visualizer can show its elements. This is the one representation that
   blocks Option A's visualizers; A fixes it in the C (section 3.2), and C
   by naming the element type in its map (section 6.2).
 * **The rest is bytes.** Variable-mode ADT values and arrays of them
   (`r_Shape_g_vm` is a `uint8_t *`), varints, self-relative and
-  pool-relative references (integers), fat references (`gs_rref`, a header
+  pool-relative references (integers), fat references (`k_rref`, a header
   pointer and a stack) and root structs (a descriptor of field references)
   all need code to decode.
 
@@ -181,7 +181,7 @@ information follows `#line` too, which section 4 relies on.
   debugger steps by line.
 * The column is lost: two K statements on one line are one step.
 * Every C line after the first `#line` belongs to some K line. Helpers
-  generated per type (`gs_size_Shape_g_vm`) take the line of the type's
+  generated per type (`k_size_Shape_g_vm`) take the line of the type's
   declaration, so stepping into one lands on the enum; everything with no
   K line goes before the first `#line`, where it keeps its C lines.
 * Paths are absolute, so the debugger needs no source map.
@@ -189,7 +189,7 @@ information follows `#line` too, which section 4 relies on.
   them is what a user asks for with "step in", and it shows the library's
   source rather than C.
 
-Runtime functions (`gs_*`) have no K source. Debuggers can be told to
+Runtime functions (`k_*`) have no K source. Debuggers can be told to
 step over them: LLDB's `target.process.thread.step-avoid-regexp`, and
 Visual Studio's Just My Code rules for native code (`.natjmc`), whose
 effect under `cppvsdbg` is still to be checked.
@@ -204,13 +204,13 @@ Under `--debug` only, the code generator changes the shape of what it
 writes, never what it does:
 
 * **Typed resizable headers.** One header type per element type,
-  `struct gs_rhdr_Shape_g { Shape_g *base; int64_t len; }`, laid out like
-  `gs_rhdr`, so the runtime functions that take a `gs_rhdr *` take it by a
+  `struct k_rhdr_Shape_g { Shape_g *base; int64_t len; }`, laid out like
+  `k_rhdr`, so the runtime functions that take a `k_rhdr *` take it by a
   cast. With this, a resizable shows its elements the way a slice does.
 * **Every struct has a tag.** `typedef struct sl_u8 { ... } sl_u8;`, so
   that natvis, GDB and LLDB all have the same name to match.
 * **Temporaries out of the way.** The compiler's temporaries become fields
-  of one local struct, `gs_tmp`, which a Locals view shows as one
+  of one local struct, `k_tmp`, which a Locals view shows as one
   collapsed entry. At `-O0` this costs nothing: every local lives in memory
   anyway.
 * **Locals in C blocks** where the K scopes allow it, so a shadowed
@@ -262,7 +262,7 @@ can name). Walking an array of variable-mode values needs natvis's
 `/NATVIS:` option embeds the file in the PDB, so Visual Studio and VS
 Code's `cppvsdbg` find it with no configuration.
 
-**LLDB** gets one Python module, `klang_lldb.py`, kept in the repository
+**LLDB** gets one Python module, `k_lldb.py`, kept in the repository
 and the same for every program. LLDB matches formatters by regular
 expression on type names (`type summary add -x`, `type synthetic add -x`),
 so the module registers one formatter per kind and looks the type up in
@@ -294,12 +294,12 @@ In VS Code the extension changes in two places:
   a `.k` file (short of `debug.allowBreakpointsEverywhere`).
 * The `klang` debug type (`vscode/src/extension.js`, where it resolves a
   launch) keeps running the JIT task for `noDebug`. For a debug launch it
-  runs `klang build --debug` as a task, so build errors land in the
+  runs `k build --debug` as a task, so build errors land in the
   Problems view, then starts the native session with
   `vscode.debug.startDebugging` and ends the `klang` one. The native
   configuration is `cppvsdbg` for an MSVC or clang-cl build when the C/C++
   extension is installed, and otherwise `lldb-dap` or CodeLLDB with
-  `command script import klang_lldb.py` in its initial commands. A launch
+  `command script import k_lldb.py` in its initial commands. A launch
   with neither installed says which extension to install.
 
 Microsoft's debugger is licensed for Microsoft's own editors only (VS Code
@@ -318,7 +318,7 @@ that runs the debugger in batch mode, sets a breakpoint by K line,
 prints the locals and the stack, and compares them with expected text:
 
 ```bash
-lldb -b -o "command script import klang_lldb.py" -o "b shapes.k:120" \
+lldb -b -o "command script import k_lldb.py" -o "b shapes.k:120" \
      -o run -o "frame variable" -o bt ./shapes
 ```
 
@@ -334,7 +334,7 @@ breaks a visualizer then fails a test instead of a user's session.
   its K name. Visualizers change how values look, not what can be
   typed.
 * **No debugging under the JIT** (section 4), and a debug session needs a
-  C compiler and a debugger installed. On Windows, `klang run` needs
+  C compiler and a debugger installed. On Windows, `k run` needs
   neither.
 * **Scopes are approximate.** Grouping temporaries and declaring locals in
   blocks hides most of the C; what remains shows.
@@ -371,11 +371,11 @@ possible on Windows too. That is unverified, and the runtime's own fault
 handling (it commits stack pages on a fault on Windows) has to keep
 running in front of TinyCC's.
 
-## 5. Option B: `klang dap`, a debugger in the compiler
+## 5. Option B: `k dap`, a debugger in the compiler
 
 ### 5.1 Shape
 
-`klang dap` would be a command beside `klang lsp`, speaking DAP on stdin
+`k dap` would be a command beside `k lsp`, speaking DAP on stdin
 and stdout. DAP's base protocol is the same Content-Length framing as
 LSP's, so the language server's transport (`src/lsp_rpc.h`: the reader
 thread and the JSON writer) carries over. The requests are fewer than the
@@ -384,7 +384,7 @@ stackTrace, scopes, variables, continue, next, stepIn, stepOut, pause,
 evaluate, setVariable, disconnect, and the stopped, output and exited
 events.
 
-The program runs in the compiler's process through the JIT, as `klang run`
+The program runs in the compiler's process through the JIT, as `k run`
 does. The compile already has a thread of its own and the program the main
 thread; the protocol server would be a third. Every editor with a DAP
 client gets the same debugger, and nothing outside `klang` is needed.
@@ -395,18 +395,18 @@ The code generator numbers every place a stop can happen (each statement,
 and each loop's back edge) and emits a check there:
 
 ```c
-GS_DBG_SITE(17);    // if (gs_dbg_armed) gs_dbg_stop(17, &gs_f);
+K_DBG_SITE(17);    // if (k_dbg_armed) k_dbg_stop(17, &k_f);
 total_g = 0.0;
 ```
 
 A site table records each site's file, line, column, function and the
-locals in scope there. `gs_dbg_armed` is set whenever any breakpoint,
-step or pause is pending, and `gs_dbg_stop` checks the site against them
+locals in scope there. `k_dbg_armed` is set whenever any breakpoint,
+step or pause is pending, and `k_dbg_stop` checks the site against them
 and, to stop, blocks the program's thread until the protocol server says
 to go on. A breakpoint marks the sites on its line. Stepping compares the
 depth of the frame stack (5.3): over stops at the next site at the same
 depth or shallower, in at the next site, out at the next shallower one. A
-pause sets `gs_dbg_armed` from the server's thread. Since a site knows its
+pause sets `k_dbg_armed` from the server's thread. Since a site knows its
 column, stepping can go statement by statement within a line, which A and
 C cannot.
 
@@ -456,7 +456,7 @@ tops must be restored afterwards.
 A built executable runs in its own process, where the compiler is not.
 Option B either stays JIT-only, or the debug runtime linked into a
 `--debug` executable listens on a pipe and serves a small protocol of its
-own (read memory, mark sites, resume, list frames) that `klang dap` drives:
+own (read memory, mark sites, resume, list frames) that `k dap` drives:
 a `gdbserver` written for K. The printer stays in the compiler. The
 expression compiler cannot load code into another process, so expressions
 in a built program would be limited to what can be interpreted: names,
@@ -474,7 +474,7 @@ read) reaches no site, and the debugger has to report it as running.
 * **C is invisible.** Extern functions, packages' C and the runtime have
   no sites and no frame records: no stepping into them, and a crash in one
   shows only the K frames above it.
-* **No crash dumps, no attaching** to a process not started by `klang dap`,
+* **No crash dumps, no attaching** to a process not started by `k dap`,
   **no optimized builds** (the sites and frame records keep the program's
   shape), and **no data breakpoints** except by checking at every site.
 * **The program shares the debugger's process.** K code cannot write
@@ -501,31 +501,31 @@ read) reaches no site, and the debugger has to report it as running.
   but each has its quirks, as `docs/editors.md` records for the language
   server.
 
-B tests well: like the language server, the suite can drive `klang dap`
+B tests well: like the language server, the suite can drive `k dap`
 from Python (`test/lsp_protocol.py`'s client, with DAP messages) and
 compare stops, stacks and values without any debugger installed.
 
-## 6. Option C: `klang dap` in front of lldb-dap
+## 6. Option C: `k dap` in front of lldb-dap
 
 A prototype on a fork implements this option (`pdoane/klang`, branch
 `dap-prototype`, commits `190a9e6a` and `4f2c161e`, November 2026). Its
-`#line` half comes from the source-debugging part of goose#169. This
+`#line` mapping supplies the source-debugging part of the prototype. This
 section describes that prototype as its code reads; it has not been built
 or run for this note.
 
 ### 6.1 Shape
 
-`klang dap` speaks DAP on stdin and stdout, like `klang lsp`, and starts
+`k dap` speaks DAP on stdin and stdout, like `k lsp`, and starts
 `lldb-dap` as a child process that it speaks DAP to in turn (`src/dap.h`,
 about 1,400 lines). A launch whose program is a `.k` file runs
-`klang build --debug -O0` on it and launches the executable under
+`k build --debug -O0` on it and launches the executable under
 `lldb-dap`. LLDB places the breakpoints (through the `#line` information),
 runs, steps, stops and unwinds the program, and reads its memory. The
 adapter answers `stackTrace`, `scopes`, `variables`, `threads`, `evaluate`
 and `exceptionInfo` itself, adds to `setFunctionBreakpoints`, and looks at
 every stop before the editor sees it; every other request and event passes
 through unchanged. It finds `lldb-dap` through `--lldb-dap`,
-`KLANG_LLDB_DAP`, `xcrun` on macOS, or `PATH`.
+`K_LLDB_DAP`, `xcrun` on macOS, or `PATH`.
 
 Compared with A, the debugger underneath is the same, but the K
 knowledge sits in front of it rather than inside it, and the editor talks
@@ -535,7 +535,7 @@ does.
 
 ### 6.2 The debug map
 
-`klang build --debug` writes `<program>.debug.json` into the build
+`k build --debug` writes `<program>.debug.json` into the build
 directory (`src/codegen_debugmap.h`):
 
 * For each type: its kind, and its size when it is fixed. The kinds are
@@ -579,7 +579,7 @@ into their uses, so that a `let` stays a variable a debugger can read.
   line. While a `return … from` is unwinding (the runtime's in-flight flag
   is set), a step carries on until it lands.
 * **Failed checks** stop as an exception, through a function breakpoint on
-  the runtime's `gs_fail` that the adapter always sets, with the check's
+  the runtime's `k_fail` that the adapter always sets, with the check's
   message and the failing K line.
 * **The console** evaluates a small K expression language over memory:
   names in scope, fields, indexing, `.len`, arithmetic (with K's
@@ -616,7 +616,7 @@ only a fixture that covers that shape notices.
 
 LLDB is the only debugger underneath. Microsoft's debugger is licensed only
 for use with Microsoft's editors (section 3.4), which rules it out behind
-`klang dap` in other editors and makes it doubtful in VS Code too, so
+`k dap` in other editors and makes it doubtful in VS Code too, so
 Visual Studio and `cppvsdbg` get none of the K view. On Windows the
 adapter is `lldb-dap` reading an MSVC build's PDB or a clang build's debug
 information; `lldb-dap.exe` ships with Visual Studio's LLVM component. The
@@ -643,7 +643,7 @@ Windows yet.
 ### 6.6 What to tighten
 
 * **`#line` only where the line changes, and only for debug builds.** The
-  prototype writes `#if GS_DEBUG`, `#line` and `#endif` before every line
+  prototype writes `#if K_DEBUG`, `#line` and `#endif` before every line
   of generated C in every build, four lines for each, in release output and
   in the C the JIT compiles too. For code the compiler writes itself it
   writes `#line 0`, outside the range C allows for `#line` (1 to
@@ -670,7 +670,7 @@ Windows yet.
 
 ## 7. The three compared
 
-| | A: native debuggers, visualizers | C: `klang dap` in front of `lldb-dap` | B: `klang dap` alone |
+| | A: native debuggers, visualizers | C: `k dap` in front of `lldb-dap` | B: `k dap` alone |
 |---|---|---|---|
 | Runs the program: breakpoints, steps, threads | the native debugger | `lldb-dap` | the compiler, through hooks in the generated C |
 | Needs a C compiler and a debugger | yes | yes, and `lldb-dap` | no, under the JIT |
@@ -705,10 +705,10 @@ Option C, in steps that are each useful on their own:
 1. **Source lines.** `#line` in debug builds where the K line changes,
    and `--debug` implying `-O0` and kept variables (6.6). This alone gives
    every native debugger K lines, and every later step needs it.
-2. **`klang dap` in front of `lldb-dap`**, from the prototype, with the
+2. **`k dap` in front of `lldb-dap`**, from the prototype, with the
    layout in the map and run on all three platforms.
 3. **VS Code**: the `breakpoints` contribution (3.4), and the `klang` debug
-   type's debug launch served by `klang dap` as its adapter executable,
+   type's debug launch served by `k dap` as its adapter executable,
    while `noDebug` keeps running the JIT task. Other editors get a snippet
    each in `docs/editors.md`, as they have for the language server.
 4. **The console on the compiler's front end** (6.6).
@@ -768,4 +768,3 @@ configuration. C is a step toward B rather than away from it.
 * Rust's embedded debugger visualizers: https://doc.rust-lang.org/reference/attributes/debugger.html
 * The licence of Microsoft's debugger: https://github.com/OmniSharp/omnisharp-vscode/wiki/Microsoft-.NET-Core-Debugger-licensing-and-Microsoft-Visual-Studio-Code
 * The Option C prototype: https://github.com/pdoane/klang/tree/dap-prototype
-* goose#169, whose `#line` mapping the prototype uses: https://github.com/aardappel/goose/pull/169

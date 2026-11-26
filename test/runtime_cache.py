@@ -31,7 +31,7 @@ def check_runtime_cache(exe, cc, base):
 
 def _check_case(exe, compiler, base, debug):
     home = base / "home"
-    env = dict(os.environ, KLANG_HOME=str(home), KLANG_CACHE_TEST=str(base))
+    env = dict(os.environ, K_HOME=str(home), K_CACHE_TEST=str(base))
     flags = ["--debug"] if debug else []
 
     def command(name, extra=()):
@@ -49,8 +49,8 @@ def _check_case(exe, compiler, base, debug):
             raise RuntimeError(f"runtime cache ({base.name}): {message}")
 
     def cached_objects():
-        return list(home.glob("build/runtime/*/*/klang_runtime.o")) + \
-               list(home.glob("build/runtime/*/*/klang_runtime.obj"))
+        return list(home.glob("build/runtime/*/*/k_runtime.o")) + \
+               list(home.glob("build/runtime/*/*/k_runtime.obj"))
 
     def wait_for(predicate, message):
         deadline = time.monotonic() + 20
@@ -59,7 +59,7 @@ def _check_case(exe, compiler, base, debug):
             time.sleep(0.01)
 
     dry = run("dry", ["--dry-run"])
-    require(dry.returncode == 0 and "klang_runtime" in dry.stdout + dry.stderr,
+    require(dry.returncode == 0 and "k_runtime" in dry.stdout + dry.stderr,
             dry.stdout + dry.stderr)
     require(not (home / "build/runtime").exists(), "dry run changed the runtime cache")
 

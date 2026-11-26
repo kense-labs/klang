@@ -182,7 +182,7 @@ FileLock::~FileLock() {
     #endif
 }
 
-// The table's entry, as native.h's klang_symbols.c lays it out.
+// The table's entry, as native.h's k_symbols.c lays it out.
 struct KlangSymbolEntry {
     const char *name;
     const void *addr;
@@ -200,7 +200,7 @@ bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &o
             err = cat("cannot load ", path, " (Windows error ", (unsigned)GetLastError(), ")");
             return false;
         }
-        table = (TableFn)GetProcAddress(h, "klang_symbols");
+        table = (TableFn)GetProcAddress(h, "k_symbols");
     #else
         auto h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!h) {
@@ -208,10 +208,10 @@ bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &o
             err = cat("cannot load ", path, ": ", why ? why : "unknown error");
             return false;
         }
-        table = (TableFn)dlsym(h, "klang_symbols");
+        table = (TableFn)dlsym(h, "k_symbols");
     #endif
     if (!table) {
-        err = cat(path, " has no klang_symbols table");
+        err = cat(path, " has no k_symbols table");
         return false;
     }
     for (auto e = table(); e->name; e++) out.emplace_back(e->name, e->addr);

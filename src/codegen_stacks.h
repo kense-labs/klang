@@ -2,13 +2,13 @@
 // members, codegen.h): the static count of data stacks the main program and
 // each worker can have in use at once, which the generated program hands the
 // runtime to reserve as each thread program starts and for the cap on
-// hardware_threads() (gs_rt_init, klang_spec.md 11.2), and the --stacks
+// hardware_threads() (k_rt_init, k_spec.md 11.2), and the --stacks
 // report of it.
 #pragma once
 
 namespace klang {
 
-// An emitted function's stacks are gs_sp + k for constants k below its own
+// An emitted function's stacks are k_sp + k for constants k below its own
 // count, and a callee's index starts above what the caller has in use at the
 // call (SpTop), so a function's count is the larger of its own and, over its
 // calls, the index handed on plus the callee's count. A call into a
@@ -71,7 +71,7 @@ inline void CodeGen::BoundStacks() {
     if (!index.count(nullptr)) visit(nullptr);
 }
 
-// A program's count: over its entry points, and what runs with gs_sp at 0
+// A program's count: over its entry points, and what runs with k_sp at 0
 // (the nullptr function: the global initializers and render functions).
 inline int64_t CodeGen::ProgramStacks(const vector<FnSpec *> &roots) {
     auto n = stackneed[nullptr];
@@ -100,12 +100,12 @@ inline vector<pair<string, FnSpec *>> CodeGen::WorkerEntries() {
     return workers;
 }
 
-// GS_MAX_STACKS, as the program is configured, is a compile-time limit on a
+// K_MAX_STACKS, as the program is configured, is a compile-time limit on a
 // thread program's count: the runtime reserves whatever it is told.
 inline void CodeGen::CheckStackLimit(const string &what, int64_t stacks, Line ln) {
     if (maxstacks > 0 && stacks > maxstacks)
-        Fail(ln, cat(what, " needs ", stacks, " data stacks at once, more than GS_MAX_STACKS (",
-                     maxstacks, ") allows; `klang --stacks` shows each function's share"));
+        Fail(ln, cat(what, " needs ", stacks, " data stacks at once, more than K_MAX_STACKS (",
+                     maxstacks, ") allows; `k --stacks` shows each function's share"));
 }
 
 // A size in the largest unit that holds it exactly.
@@ -123,10 +123,10 @@ inline void CodeGen::StackReport(FILE *out, const StackConfig &cfg) {
     auto per = cfg.reserve + cfg.gap;
     uint64_t total = per ? cfg.budget / per : 0;
     fprintf(out, "data stacks: %s reserved per stack, %s guard gap, %s budget: %llu regions, "
-                 "GS_MAX_STACKS %lld\n",
+                 "K_MAX_STACKS %lld\n",
             FmtSize(cfg.reserve).c_str(), FmtSize(cfg.gap).c_str(), FmtSize(cfg.budget).c_str(),
             (unsigned long long)total, (long long)cfg.maxstacks);
-    // One program's line; what it comes to is what gs_rt_init is told.
+    // One program's line; what it comes to is what k_rt_init is told.
     auto describe = [&](const string &what, int64_t stacks, int regions, const char *extra) {
         fprintf(out, "%s: %lld data stacks + %d %s = %lld regions\n", what.c_str(),
                 (long long)stacks, regions, extra, (long long)(stacks + regions));
@@ -140,7 +140,7 @@ inline void CodeGen::StackReport(FILE *out, const StackConfig &cfg) {
         workerregions = std::max(workerregions,
                                  describe(cat("worker `", name, "`"), ProgramStacks({ sp }),
                                           thunkregions[sp], "argument and global stacks"));
-    // As gs_rt_start computes it: workers that hold no regions leave
+    // As k_rt_start computes it: workers that hold no regions leave
     // hardware_threads() uncapped.
     if (workers.empty()) {
         fprintf(out, "thread cap: none, no workers\n");

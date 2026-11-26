@@ -1,0 +1,927 @@
+// Adapted for K.
+// The K standard library: `gfx` (docs/stdlib.md), graphics on SDL3's GPU
+// API: a window, input, buffers, textures, pipelines, render and compute
+// passes, and reading results back. The functions are C, the layer in
+// src/gfx/ over SDL_GPU, declared here as extern fns against the list in
+// src/gfx/gfx_api.h; the test suite checks the two agree.
+//
+// Text rendering (including game HUDs) is in ui: ui::label for layout,
+// ui::draw_text for positioned text, built-in/TrueType fonts and ui::render
+// to draw over gfx. See docs/stdlib.md's "Text rendering and game HUDs".
+//
+// Shaders are GLSL 450, compiled into the program by the builtin
+// embed_shader when it is compiled, for every backend at once: SPIR-V for
+// Vulkan, MSL for Metal, HLSL for Direct3D 12. A shader is written in the
+// program after its stage, `embed_shader("frag", """ ... """)` (also "vert"
+// and "comp"), or read from a file, `embed_shader("file.frag")`. It declares
+// its resources where SDL_GPU expects them, which the compiler checks:
+//
+//   vertex    set 0: samplers, then storage textures, then storage buffers;
+//             set 1: uniform blocks
+//   fragment  set 2: samplers, then storage textures, then storage buffers;
+//             set 3: uniform blocks
+//   compute   set 0: samplers, read-only storage textures, read-only storage
+//             buffers; set 1: read-write storage textures, then read-write
+//             storage buffers; set 2: uniform blocks
+//
+// Bindings number each set from 0 in that order. The slot a bind_* call
+// takes counts within one kind: the first storage buffer is slot 0 however
+// many samplers come before it. Uniform blocks are laid out by std140, a
+// K struct is packed: pad a struct pushed as uniforms to match (a vec3
+// or vec4 member starts on a 16-byte boundary, a block's size rounds up to
+// 16), which push_uniforms checks against the shader's block size.
+//
+// Clip space is SDL_GPU's on every backend: y up, depth from 0 to 1, and
+// texture coordinates with (0, 0) at the top left. perspective() and
+// look_at() below produce matrices for it.
+//
+// Errors: a call that can fail for reasons outside the program returns
+// false or a zero handle, and error() says why. A call the program should
+// not have made -- drawing with no pipeline bound, a released handle, a
+// uniform block of the wrong size -- is reported as it happens and aborts
+// the program at the next frame(), check() or read back.
+
+namespace gfx;
+
+import std;
+import vec;
+import math;
+
+// --- constants: K_GFX_CONSTANTS in src/gfx/gfx_api.h -----------------------
+
+// open() and open_headless() flags.
+let WINDOW_RESIZABLE: i32 = 1;
+let WINDOW_HIDDEN: i32 = 2;
+let WINDOW_FULLSCREEN: i32 = 4;
+let NO_VSYNC: i32 = 16;
+let DEBUG: i32 = 32;            // validation layers, where installed; on in a debug build of gfx
+// A frame that drew nothing isn't presented, and the next frame() waits for an
+// event, up to a second: an idle program uses no GPU and next to no CPU. A
+// resize leaves the screen black, so redraw when screen_size() changes.
+let WAIT_WHEN_IDLE: i32 = 256;
+// A window, input, events and time, and no GPU device: another renderer draws
+// into native_window() and tells presented() what it showed each frame.
+let WINDOW_ONLY: i32 = 64;
+// native_kind() on Linux: what native_window() and native_display() are.
+let NATIVE_WAYLAND: i32 = 1;
+let NATIVE_X11: i32 = 2;
+
+// System cursor shapes.
+let CURSOR_DEFAULT: i32 = 0;
+let CURSOR_TEXT: i32 = 1;
+let CURSOR_WAIT: i32 = 2;
+let CURSOR_CROSSHAIR: i32 = 3;
+let CURSOR_PROGRESS: i32 = 4;
+let CURSOR_NWSE_RESIZE: i32 = 5;
+let CURSOR_NESW_RESIZE: i32 = 6;
+let CURSOR_EW_RESIZE: i32 = 7;
+let CURSOR_NS_RESIZE: i32 = 8;
+let CURSOR_MOVE: i32 = 9;
+let CURSOR_NOT_ALLOWED: i32 = 10;
+let CURSOR_POINTER: i32 = 11;
+let CURSOR_NW_RESIZE: i32 = 12;
+let CURSOR_N_RESIZE: i32 = 13;
+let CURSOR_NE_RESIZE: i32 = 14;
+let CURSOR_E_RESIZE: i32 = 15;
+let CURSOR_SE_RESIZE: i32 = 16;
+let CURSOR_S_RESIZE: i32 = 17;
+let CURSOR_SW_RESIZE: i32 = 18;
+let CURSOR_W_RESIZE: i32 = 19;
+
+// Shader stages.
+let VERTEX: i32 = 0;
+let FRAGMENT: i32 = 1;
+let COMPUTE: i32 = 2;
+
+// Buffer usage, combined with |.
+let BUFFER_VERTEX: i32 = 1;
+let BUFFER_INDEX: i32 = 2;
+let BUFFER_INDIRECT: i32 = 4;
+let BUFFER_STORAGE: i32 = 8;          // read by vertex and fragment shaders
+let BUFFER_COMPUTE_READ: i32 = 16;
+let BUFFER_COMPUTE_WRITE: i32 = 32;
+
+// Texture kinds.
+let TEXTURE_2D: i32 = 0;
+let TEXTURE_2D_ARRAY: i32 = 1;
+let TEXTURE_3D: i32 = 2;
+let TEXTURE_CUBE: i32 = 3;
+
+// Texture usage, combined with |. A multisampled texture is a target only.
+let SAMPLED: i32 = 1;
+let COLOR_TARGET: i32 = 2;
+let DEPTH_TARGET: i32 = 4;
+let STORAGE_READ: i32 = 8;            // read as a storage texture by vertex and fragment shaders
+let COMPUTE_READ: i32 = 16;
+let COMPUTE_WRITE: i32 = 32;
+let COMPUTE_READ_WRITE: i32 = 64;
+
+// Texture formats. DEPTH is DEPTH32F where it can also be sampled, else
+// DEPTH24.
+let RGBA8: i32 = 1;
+let BGRA8: i32 = 2;
+let RGBA8_SRGB: i32 = 3;
+let R8: i32 = 4;
+let RG8: i32 = 5;
+let RGBA16F: i32 = 6;
+let RGBA32F: i32 = 7;
+let R16F: i32 = 8;
+let RG16F: i32 = 9;
+let R32F: i32 = 10;
+let RG32F: i32 = 11;
+let R32UI: i32 = 12;
+let RGBA8UI: i32 = 13;
+let RGB10A2: i32 = 14;
+let RG11B10F: i32 = 15;
+let DEPTH16: i32 = 16;
+let DEPTH24: i32 = 17;
+let DEPTH32F: i32 = 18;
+let DEPTH24_STENCIL8: i32 = 19;
+let DEPTH: i32 = 20;
+// Block-compressed, SAMPLED only, uploaded a whole mip at a time (region w 0)
+// in whole blocks: BC on desktop GPUs, ASTC on mobile and Apple GPUs. Ask
+// format_supported before using one.
+let BC1: i32 = 21;
+let BC3: i32 = 22;
+let BC7: i32 = 23;
+let ASTC_4x4: i32 = 24;
+let ASTC_5x5: i32 = 25;
+let ASTC_6x6: i32 = 26;
+let ASTC_8x8: i32 = 27;
+
+// Samplers.
+let NEAREST: i32 = 0;
+let LINEAR: i32 = 1;
+let REPEAT: i32 = 0;
+let MIRROR: i32 = 1;
+let CLAMP: i32 = 2;
+let COMPARE_NEVER: i32 = 1;
+let COMPARE_LESS: i32 = 2;
+let COMPARE_EQUAL: i32 = 3;
+let COMPARE_LESS_EQUAL: i32 = 4;
+let COMPARE_GREATER: i32 = 5;
+let COMPARE_NOT_EQUAL: i32 = 6;
+let COMPARE_GREATER_EQUAL: i32 = 7;
+let COMPARE_ALWAYS: i32 = 8;
+
+// Pipelines.
+let TRIANGLES: i32 = 0;
+let TRIANGLE_STRIP: i32 = 1;
+let LINES: i32 = 2;
+let LINE_STRIP: i32 = 3;
+let POINTS: i32 = 4;
+let CULL_NONE: i32 = 0;
+let CULL_FRONT: i32 = 1;
+let CULL_BACK: i32 = 2;
+let BLEND_NONE: i32 = 0;
+let BLEND_ALPHA: i32 = 1;
+let BLEND_ADD: i32 = 2;
+let BLEND_PREMULTIPLIED: i32 = 3;
+let BLEND_MULTIPLY: i32 = 4;
+
+// Vertex attribute formats, for PipelineDesc.formats: what a vertex buffer
+// holds for a shader input when that is not the input's own type as 32-bit
+// components (float for a vec, i32 for an ivec, u32 for a uvec).
+let VERTEX_FLOAT: u8 = 1;
+let VERTEX_FLOAT2: u8 = 2;
+let VERTEX_FLOAT3: u8 = 3;
+let VERTEX_FLOAT4: u8 = 4;
+let VERTEX_INT: u8 = 5;
+let VERTEX_INT2: u8 = 6;
+let VERTEX_INT3: u8 = 7;
+let VERTEX_INT4: u8 = 8;
+let VERTEX_UINT: u8 = 9;
+let VERTEX_UINT2: u8 = 10;
+let VERTEX_UINT3: u8 = 11;
+let VERTEX_UINT4: u8 = 12;
+let VERTEX_UBYTE4_NORM: u8 = 13;      // four u8, read as floats from 0 to 1: colors
+let VERTEX_BYTE4_NORM: u8 = 14;
+let VERTEX_UBYTE4: u8 = 15;
+let VERTEX_SHORT2: u8 = 16;
+let VERTEX_SHORT4: u8 = 17;
+let VERTEX_USHORT2_NORM: u8 = 18;
+let VERTEX_USHORT4_NORM: u8 = 19;
+let VERTEX_HALF2: u8 = 20;
+let VERTEX_HALF4: u8 = 21;
+
+// load_texture() flags.
+let LOAD_MIPS: i32 = 1;
+let LOAD_SRGB: i32 = 2;
+
+// Mouse buttons.
+let MOUSE_LEFT: i32 = 1;
+let MOUSE_MIDDLE: i32 = 2;
+let MOUSE_RIGHT: i32 = 3;
+let MOUSE_X1: i32 = 4;
+let MOUSE_X2: i32 = 5;
+
+// Input events (Event.kind), and the modifier keys held with a key.
+let EVENT_KEY: i32 = 1;
+let EVENT_TEXT: i32 = 2;
+let EVENT_MOUSE_MOTION: i32 = 3;
+let EVENT_MOUSE_BUTTON: i32 = 4;
+let EVENT_MOUSE_WHEEL: i32 = 5;
+let EVENT_FOCUS_GAINED: i32 = 6;
+let EVENT_FOCUS_LOST: i32 = 7;
+let MOD_SHIFT: i32 = 1;
+let MOD_CTRL: i32 = 2;
+let MOD_ALT: i32 = 4;
+let MOD_GUI: i32 = 8;
+
+// --- handles and descriptions: the structs of src/gfx/gfx_api.h -------------
+
+// A GPU object, by handle. A released handle is an error to use, not a
+// crash; a zero handle is none.
+struct Buffer { id: u32 }
+struct Texture { id: u32 }
+struct Sampler { id: u32 }
+struct Pipeline { id: u32 }
+struct ComputePipeline { id: u32 }
+
+// Field defaults cannot name the constants above (a default may run before
+// any global is initialized), so they spell the values, and say which.
+struct TextureDesc {
+    kind: i32 = 0,          // TEXTURE_2D
+    format: i32 = 1,        // RGBA8
+    usage: i32 = 1,         // SAMPLED
+    width: i32,
+    height: i32,
+    depth: i32 = 1,         // a 3D texture's depth, or an array's layers
+    mips: i32 = 1,          // 0: the full chain
+    samples: i32 = 1,
+}
+
+// Part of one mip of one layer of a texture; w == 0 is the whole mip.
+struct Region {
+    mip: i32 = 0,
+    layer: i32 = 0,         // array layer, or cube face (+x, -x, +y, -y, +z, -z)
+    x: i32 = 0,
+    y: i32 = 0,
+    z: i32 = 0,
+    w: i32 = 0,
+    h: i32 = 0,
+    d: i32 = 0,
+}
+
+struct SamplerDesc {
+    min_filter: i32 = 1,    // LINEAR
+    mag_filter: i32 = 1,
+    mip_filter: i32 = 1,
+    wrap_u: i32 = 0,        // REPEAT
+    wrap_v: i32 = 0,
+    wrap_w: i32 = 0,
+    max_anisotropy: f32 = 1.0,
+    compare: i32 = 0,       // a COMPARE_*, for a shadow sampler
+}
+
+// A pipeline is not tied to the formats it draws into: it is made for the
+// targets of each pass it is bound in, the first time.
+struct PipelineDesc {
+    primitive: i32 = 0,     // TRIANGLES
+    cull: i32 = 0,          // CULL_NONE
+    clockwise: bool = false,        // front faces wind clockwise
+    wireframe: bool = false,
+    depth_test: bool = false,
+    depth_write: bool = false,
+    depth_compare: i32 = 2, // COMPARE_LESS
+    blend: i32 = 0,         // BLEND_NONE
+    // The vertex shader's inputs, in location order, read one after the
+    // other from one packed element, the way a K struct lays out its
+    // fields: from vertex buffer 0, and from this location on per instance
+    // from vertex buffer 1. -1: nothing is per instance.
+    instance_location: i32 = -1,
+    depth_bias: f32 = 0.0,
+    depth_bias_slope: f32 = 0.0,
+    formats: u8[16] = [0; 16],      // by location, a VERTEX_* override
+}
+
+// One input event of the last frame. The fields a kind has are the ones
+// that mean something for it.
+struct Event {
+    kind: i32,              // EVENT_*
+    scancode: i32,          // key: where it is on the keyboard (key_name names it)
+    keycode: i32,           // key: what it means in the keyboard's layout: a character, for most
+    mods: i32,              // key: the MOD_* held down with it
+    down: bool,             // key, button: pressed rather than released
+    repeat: bool,           // key: repeated by being held down
+    button: i32,            // button: MOUSE_*
+    clicks: i32,            // button: 1, 2 for a double click, ...
+    codepoint: u32,         // text: one character typed
+    x: f32,                 // motion, button: where the pointer is, in pixels; wheel: how far
+    y: f32,
+}
+
+struct PassDesc {
+    color: Texture[4] = [Texture { 0 }; 4],     // targets, up to the first zero handle
+    resolve: Texture[4] = [Texture { 0 }; 4],   // where a multisampled target resolves to
+    depth: Texture = Texture { 0 },
+    layer: i32 = 0,                             // of the color targets: a face, a slice
+    mip: i32 = 0,
+    clear_color: bool = true,
+    clear_depth: bool = true,
+    color_value: float4 = float4 { 0.0, 0.0, 0.0, 1.0 },
+    depth_value: f32 = 1.0,
+}
+
+// --- device, window and frames -----------------------------------------------
+
+// Whether the gfx layer is linked in. A compiler without it refuses to run
+// a gfx program in-process, so this is true wherever it runs.
+extern fn available() -> bool = "k_gfx_available";
+
+// A window of width x height in the display's own coordinates, and the GPU
+// device, or false with error() set. The screen has every pixel of the
+// window, which a high-density display has more of: screen_size() says how
+// many.
+extern fn open(title: const u8[:], width: i64, height: i64, flags: i64) -> bool = "k_gfx_open";
+fn open(title: const u8[:], width: i64, height: i64) -> bool { open(title, width, height, 0) }
+// The device alone, drawing into a screen of width x height that no window
+// shows: for tests, and for tools that only compute or render to files.
+extern fn open_headless(width: i64, height: i64, flags: i64) -> bool = "k_gfx_open_headless";
+fn open_headless(width: i64, height: i64) -> bool { open_headless(width, height, 0) }
+// WINDOW_ONLY: the window's native handle for the renderer that draws into
+// it, as a u64: a CAMetalLayer on Apple's systems, the HWND on Windows, the
+// ANativeWindow on Android (a new one each time the app comes back to the
+// foreground, 0 in the background), on Linux the wl_surface on Wayland or the
+// X11 window's number; 0 headless.
+extern fn native_window() -> u64 = "k_gfx_native_window";
+// WINDOW_ONLY on Linux: the wl_display or X11 Display* that native_window()
+// belongs to; 0 elsewhere and headless.
+extern fn native_display() -> u64 = "k_gfx_native_display";
+// WINDOW_ONLY on Linux: NATIVE_WAYLAND or NATIVE_X11, whichever SDL opened
+// (Wayland where there is one; SDL_VIDEO_DRIVER chooses); 0 elsewhere.
+extern fn native_kind() -> i64 = "k_gfx_native_kind";
+// WINDOW_ONLY: whether the renderer showed this frame. A frame that showed
+// nothing makes the next frame() wait for an event, as gfx's own frames do.
+extern fn presented(shown: bool) = "k_gfx_presented";
+// WINDOW_ONLY: the window was exposed, shown or resized, so the renderer
+// presents this frame though nothing changed.
+extern fn needs_present() -> bool = "k_gfx_needs_present";
+extern fn close_raw() = "k_gfx_close";
+fn close() {
+    check();
+    close_raw();
+}
+
+extern fn error_into(out: u8[:]) -> i64 = "k_gfx_error";
+extern fn misuse_count() -> i64 = "k_gfx_misuse_count";
+// Why the last call that failed did, as text.
+fn error() -> u8[>..] {
+    var text: u8[>..] = [];
+    text.resize(1024, 0);
+    let n = error_into(text);
+    text.resize(min(n, 1024));
+    return text;
+}
+// Aborts, saying why, if the program has used gfx wrongly.
+fn check() {
+    if misuse_count() > 0 { abort(str("gfx: ", error())); }
+}
+
+extern fn driver_into(out: u8[:]) -> i64 = "k_gfx_driver";
+// The GPU backend in use: "vulkan", "direct3d12" or "metal".
+fn driver() -> u8[>..] {
+    var name: u8[>..] = [];
+    name.resize(64, 0);
+    let n = driver_into(name);
+    name.resize(min(n, 64));
+    return name;
+}
+
+// Ends the frame drawn since the last call, showing the screen in the
+// window, and handles the window's events: false once it has been asked to
+// close, quit() was called, or the GPU device was lost. Called at the top of
+// the loop, before the first frame is drawn.
+extern fn frame_raw() -> bool = "k_gfx_frame";
+fn frame() -> bool {
+    let running = frame_raw();
+    check();
+    running
+}
+extern fn quit() = "k_gfx_quit";
+// Submits everything drawn so far and waits until the GPU has done it.
+extern fn flush_raw() = "k_gfx_flush";
+fn flush() {
+    flush_raw();
+    check();
+}
+extern fn set_title(title: const u8[:]) = "k_gfx_set_title";
+// Borderless fullscreen at the desktop's resolution, or back to a window
+// (false if the window can't change). SDL changes it asynchronously, so
+// fullscreen() can lag a frame or two behind. maximize fills the desktop
+// as a window.
+extern fn set_fullscreen(on: bool) -> bool = "k_gfx_set_fullscreen";
+extern fn fullscreen() -> bool = "k_gfx_fullscreen";
+extern fn maximize() = "k_gfx_maximize";
+
+// The screen: what a frame draws into, an RGBA8 texture of the window's
+// size in pixels. Its depth texture is made on the first screen_depth(), so
+// a 2D program that wants none passes Texture { 0 } to begin_pass instead
+// of calling begin_screen. Both keep their handles when the window resizes.
+extern fn screen() -> Texture = "k_gfx_screen";
+extern fn screen_depth() -> Texture = "k_gfx_screen_depth";
+extern fn screen_size_into(out: int2&) = "k_gfx_screen_size";
+fn screen_size() -> int2 {
+    var size = int2_0;
+    screen_size_into(size);
+    size
+}
+// The screen's pixels to each unit of the window's own coordinates: 2 on most
+// high-density displays, 1 elsewhere, including Windows at any scale setting.
+extern fn pixel_density() -> f32 = "k_gfx_pixel_density";
+// The pixel density times the system's content scale: what the system draws
+// its own text and controls at, 2 on a high-density Mac, 1.5 on Windows set to
+// 150%. Reported, never applied: the window and the screen stay as they are,
+// and it is up to the program whether to use it, as with ui::set_scale.
+// Both change as the window moves between displays; read them each frame to
+// follow it. 1 headless and with no window open.
+extern fn display_scale() -> f32 = "k_gfx_display_scale";
+
+extern fn time() -> f64 = "k_gfx_time";               // seconds since open
+extern fn delta_time() -> f64 = "k_gfx_delta_time";   // seconds the last frame took
+extern fn frame_count() -> i64 = "k_gfx_frame_count";
+// How many times gfx has been opened in this process: handles made before it
+// last changed were released by close().
+extern fn open_count() -> i64 = "k_gfx_open_count";
+
+// --- input -------------------------------------------------------------------
+
+// Keys by SDL's scancode names: "A", "1", "Space", "Return", "Escape",
+// "Left", "Left Shift", "F1". The ones SDL names after a platform's labels
+// go by any of them everywhere: "Left Alt" or "Left Option", "Left GUI",
+// "Left Command" or "Left Windows", "Application". Down now; pressed or
+// released by the events the latest frame() collected. A press and release
+// between frames makes both true, even though down is false. Repeated events
+// that leave the held state unchanged do not count as presses or releases.
+// These queries do not consume input; the next frame() clears the edges.
+// The mouse is in the screen's pixels, which on a high-density display
+// outnumber the window's own coordinates.
+extern fn key_down(name: const u8[:]) -> bool = "k_gfx_key_down";
+extern fn key_pressed(name: const u8[:]) -> bool = "k_gfx_key_pressed";
+extern fn key_released(name: const u8[:]) -> bool = "k_gfx_key_released";
+extern fn mouse_down(button: i64) -> bool = "k_gfx_mouse_down";
+extern fn mouse_pressed(button: i64) -> bool = "k_gfx_mouse_pressed";
+extern fn mouse_released(button: i64) -> bool = "k_gfx_mouse_released";
+extern fn mouse_pos_into(out: float2&) = "k_gfx_mouse_pos";
+extern fn mouse_delta_into(out: float2&) = "k_gfx_mouse_delta";
+extern fn mouse_wheel() -> f32 = "k_gfx_mouse_wheel";
+// Whether the mouse is over the window, or holds a button pressed in it,
+// as SDL's mouse focus says: for a window opened under the mouse, from its
+// first move at the latest. mouse_pos is the mouse's place from open on,
+// and where it left the window while it is outside. Headless, whether the last
+// position injected is on the screen; an injected move decides it in a
+// window too.
+extern fn mouse_in_window() -> bool = "k_gfx_mouse_in_window";
+
+// Gamepads, in slots 0..MAX_GAMEPADS-1, filled as pads connect (SDL's
+// standard layout: GAMEPAD_SOUTH is A on Xbox, Cross on PlayStation). A
+// slot frees when its pad disconnects; gamepad_changes counts connects and
+// disconnects, so a program can notice either. Buttons are held state plus
+// the latest frame()'s edges, like keys. Sticks are -1..1, triggers 0..1,
+// with no deadzone applied. gamepad_type is SDL's SDL_GamepadType (0 when
+// the slot is empty). Rumble strengths are 0..1; it returns false when
+// the pad cannot rumble.
+let MAX_GAMEPADS = 4;
+let GAMEPAD_SOUTH = 0;
+let GAMEPAD_EAST = 1;
+let GAMEPAD_WEST = 2;
+let GAMEPAD_NORTH = 3;
+let GAMEPAD_BACK = 4;
+let GAMEPAD_GUIDE = 5;
+let GAMEPAD_START = 6;
+let GAMEPAD_LEFT_STICK = 7;
+let GAMEPAD_RIGHT_STICK = 8;
+let GAMEPAD_LEFT_SHOULDER = 9;
+let GAMEPAD_RIGHT_SHOULDER = 10;
+let GAMEPAD_DPAD_UP = 11;
+let GAMEPAD_DPAD_DOWN = 12;
+let GAMEPAD_DPAD_LEFT = 13;
+let GAMEPAD_DPAD_RIGHT = 14;
+let AXIS_LEFT_X = 0;
+let AXIS_LEFT_Y = 1;
+let AXIS_RIGHT_X = 2;
+let AXIS_RIGHT_Y = 3;
+let AXIS_LEFT_TRIGGER = 4;
+let AXIS_RIGHT_TRIGGER = 5;
+extern fn gamepad_connected(slot: i64) -> bool = "k_gfx_gamepad_connected";
+extern fn gamepad_changes() -> i64 = "k_gfx_gamepad_changes";
+extern fn gamepad_type(slot: i64) -> i64 = "k_gfx_gamepad_type";
+extern fn gamepad_axis(slot: i64, axis: i64) -> f32 = "k_gfx_gamepad_axis";
+extern fn gamepad_down(slot: i64, button: i64) -> bool = "k_gfx_gamepad_down";
+extern fn gamepad_pressed(slot: i64, button: i64) -> bool = "k_gfx_gamepad_pressed";
+extern fn gamepad_released(slot: i64, button: i64) -> bool = "k_gfx_gamepad_released";
+extern fn gamepad_rumble(slot: i64, low: f32, high: f32, ms: i64) -> bool = "k_gfx_gamepad_rumble";
+fn mouse_pos() -> float2 {
+    var p = float2_0;
+    mouse_pos_into(p);
+    p
+}
+fn mouse_delta() -> float2 {
+    var d = float2_0;
+    mouse_delta_into(d);
+    d
+}
+
+// Keyboard focus, updated at frame(). Losing focus clears held keys and
+// buttons and motion/wheel deltas, releases relative mode, and restores a
+// visible cursor. Input while unfocused is ignored. Focus changes are also
+// EVENT_FOCUS_GAINED / EVENT_FOCUS_LOST in events(), with no payload fields.
+// Held keys/buttons get released edges and up events before EVENT_FOCUS_LOST.
+// Headless, focus starts true and inject_focus can change it for tests.
+extern fn focused() -> bool = "k_gfx_focused";
+
+// First-person mouse look: hide the cursor, confine it to the window, and
+// keep mouse_delta() moving past the window edges. Use deltas, not mouse_pos,
+// for turning. False on failure (including no focus); error() says why.
+// Changing modes discards pending motion and this frame's delta, to avoid
+// a camera jump. Setting the current mode again leaves motion alone.
+// Focus gain does not recapture: call again when the player resumes.
+// Headless, these keep the same state without touching the system mouse.
+extern fn set_mouse_relative(on: bool) -> bool = "k_gfx_set_mouse_relative";
+extern fn mouse_relative() -> bool = "k_gfx_mouse_relative";
+
+// Select a system cursor shape, for example set_cursor(CURSOR_POINTER).
+// False on failure, with details in error(). Visibility is unchanged.
+// Headless calls validate the shape without changing the desktop cursor.
+// close() restores the default cursor and frees cached shapes.
+extern fn set_cursor(shape: i64) -> bool = "k_gfx_set_cursor";
+
+// Visibility outside relative mode; useful when drawing your own cursor.
+// Relative mode always hides it, then restores this preference when disabled.
+// Focus loss resets the preference to visible. Hiding without focus fails.
+// cursor_visible reports the effective visibility within the gfx window;
+// headless it reports the simulated state. close() restores the system cursor.
+extern fn set_cursor_visible(visible: bool) -> bool = "k_gfx_set_cursor_visible";
+extern fn cursor_visible() -> bool = "k_gfx_cursor_visible";
+
+// Input as if from the keyboard or mouse, seen at the next frame(): what a
+// test drives a program with. The mouse goes to pixel x, y; a button of 0
+// only moves it.
+extern fn inject_key(name: const u8[:], down: bool) -> bool = "k_gfx_inject_key";
+extern fn inject_mouse(x: f32, y: f32, button: i64, down: bool) = "k_gfx_inject_mouse";
+// Text as if typed: an EVENT_TEXT per character at the next frame().
+extern fn inject_text(text: const u8[:]) -> bool = "k_gfx_inject_text";
+// A focus change at the next frame(), in order with other injected input.
+// Does not move operating-system focus; intended for headless tests.
+extern fn inject_focus(focused: bool) -> bool = "k_gfx_inject_focus";
+
+// The last frame's input in the order it came, key repeats and typed text
+// included: what text editing needs, where the state above loses what
+// happened between two frames.
+extern fn events_into(out: Event[:]) -> i64 = "k_gfx_events";
+fn events() -> Event[>..] {
+    var out: Event[>..] = [];
+    let n = events_into(out);
+    out.resize(n, default<Event>());
+    events_into(out);
+    return out;
+}
+// Typed text comes as EVENT_TEXT only while text input is on: off by
+// default, since on some platforms it shows an on-screen keyboard.
+extern fn text_input(on: bool) = "k_gfx_text_input";
+// The scancode of the key of that name, as key_down takes it, 0 for none;
+// and the name the platform has for a key, as a label to show.
+extern fn scancode(name: const u8[:]) -> i64 = "k_gfx_scancode";
+extern fn key_name_into(scancode: i64, out: u8[:]) -> i64 = "k_gfx_key_name";
+fn key_name(scancode: i64) -> u8[>..] {
+    var name: u8[>..] = [];
+    let n = key_name_into(scancode, name);
+    name.resize(n, 0);
+    key_name_into(scancode, name);
+    return name;
+}
+
+// The system clipboard's text; headless, gfx's own.
+extern fn clipboard_into(out: u8[:]) -> i64 = "k_gfx_clipboard";
+fn clipboard() -> u8[>..] {
+    var text: u8[>..] = [];
+    let n = clipboard_into(text);
+    text.resize(n, 0);
+    clipboard_into(text);
+    return text;
+}
+extern fn set_clipboard(text: const u8[:]) -> bool = "k_gfx_set_clipboard";
+
+// --- buffers -----------------------------------------------------------------
+
+// A buffer of `size` bytes, holding `data` and zeros after it. Data comes
+// from bytes_of: gfx::vertex_buffer(bytes_of(vertices)).
+extern fn buffer(usage: i64, size: i64, data: const u8[:]) -> Buffer = "k_gfx_create_buffer";
+fn buffer(usage: i64, data: const u8[:]) -> Buffer { buffer(usage, data.len, data) }
+fn vertex_buffer(data: const u8[:]) -> Buffer { buffer(BUFFER_VERTEX, data.len, data) }
+fn index_buffer(data: const u8[:]) -> Buffer { buffer(BUFFER_INDEX, data.len, data) }
+extern fn update_buffer(b: Buffer, offset: i64, data: const u8[:]) -> bool = "k_gfx_update_buffer";
+fn update_buffer(b: Buffer, data: const u8[:]) -> bool { update_buffer(b, 0, data) }
+extern fn read_buffer_into(b: Buffer, offset: i64, out: u8[:]) -> bool = "k_gfx_read_buffer";
+extern fn buffer_size(b: Buffer) -> i64 = "k_gfx_buffer_size";
+extern fn release(b: Buffer) = "k_gfx_release_buffer";
+
+// Reads back `out.len` bytes from `offset`, once the GPU has done
+// everything submitted before. Not inside a pass.
+fn read_buffer(b: Buffer, offset: i64, out: u8[:]) -> bool {
+    let ok = read_buffer_into(b, offset, out);
+    check();
+    ok
+}
+// Appends the buffer's first `count` elements to `out`, as the elements of
+// out's type: gfx::read_buffer(results, floats, 256) into an f32[>..].
+fn read_buffer<T>(b: Buffer, out: T[>..]&, count: i64) -> bool {
+    var raw: u8[>..] = [];
+    raw.resize(count * elem_size(out), 0);
+    let ok = read_buffer(b, 0, raw);
+    append_as(raw, out);
+    ok
+}
+
+// --- textures and samplers -----------------------------------------------------
+
+// The extern fns taking a description by reference are wrapped by ones
+// taking it by value, which a struct literal can be passed to.
+extern fn create_texture(desc: const TextureDesc&) -> Texture = "k_gfx_create_texture";
+fn texture(desc: TextureDesc) -> Texture { create_texture(desc) }
+fn texture2d(width: i64, height: i64, format: i32, usage: i32) -> Texture {
+    texture(TextureDesc { format: format, usage: usage, width: width as i32,
+                          height: height as i32 })
+}
+fn texture2d(width: i64, height: i64) -> Texture { texture2d(width, height, RGBA8, SAMPLED) }
+// A texture to draw into and then sample.
+fn render_target(width: i64, height: i64, format: i32) -> Texture {
+    texture2d(width, height, format, COLOR_TARGET | SAMPLED)
+}
+// A depth buffer that can also be sampled, as a shadow map is.
+fn depth_target(width: i64, height: i64) -> Texture {
+    texture2d(width, height, DEPTH, DEPTH_TARGET | SAMPLED)
+}
+fn texture3d(width: i64, height: i64, depth: i64, format: i32, usage: i32) -> Texture {
+    texture(TextureDesc { kind: TEXTURE_3D, format: format, usage: usage, width: width as i32,
+                          height: height as i32, depth: depth as i32 })
+}
+fn texture_cube(size: i64, format: i32, usage: i32) -> Texture {
+    texture(TextureDesc { kind: TEXTURE_CUBE, format: format, usage: usage, width: size as i32,
+                          height: size as i32 })
+}
+fn texture_array(width: i64, height: i64, layers: i64, format: i32, usage: i32) -> Texture {
+    texture(TextureDesc { kind: TEXTURE_2D_ARRAY, format: format, usage: usage,
+                          width: width as i32, height: height as i32, depth: layers as i32 })
+}
+// A PNG (or .bmp) as an RGBA8 texture, with its mips when flags has
+// LOAD_MIPS.
+extern fn load_texture(path: const u8[:], flags: i64) -> Texture = "k_gfx_load_texture";
+
+extern fn update_texture_region(t: Texture, region: const Region&,
+                                data: const u8[:]) -> bool = "k_gfx_update_texture";
+fn update_texture(t: Texture, region: Region, data: const u8[:]) -> bool {
+    update_texture_region(t, region, data)
+}
+// The whole of mip 0 of layer 0: a 2D texture, or all of a 3D one.
+fn update_texture(t: Texture, data: const u8[:]) -> bool { update_texture(t, Region {}, data) }
+extern fn read_texture_into(t: Texture, region: const Region&,
+                            out: u8[:]) -> bool = "k_gfx_read_texture";
+fn read_texture(t: Texture, region: Region, out: u8[:]) -> bool {
+    let ok = read_texture_into(t, region, out);
+    check();
+    ok
+}
+// Appends the whole of mip 0 of layer 0 to `out`, as the elements of out's
+// type: u8 for the bytes of an RGBA8 texture, float4 for RGBA32F texels.
+fn read_texture<T>(t: Texture, out: T[>..]&) -> bool {
+    let info = texture_info(t);
+    var raw: u8[>..] = [];
+    raw.resize(texel_size(info.format) * info.width * info.height *
+               (if info.kind == TEXTURE_3D { info.depth } else { 1 }), 0);
+    let ok = read_texture(t, Region {}, raw);
+    append_as(raw, out);
+    ok
+}
+// The bytes of mip 0 of layer 0, fresh: an RGBA8 texture's pixels, four
+// bytes each, from the top left.
+fn read_pixels(t: Texture) -> u8[>..] {
+    var px: u8[>..] = [];
+    read_texture(t, px);
+    return px;
+}
+// An RGBA8 or BGRA8 texture's mip 0 as a PNG file; the screen as it is
+// shown, opaque.
+extern fn save_png_raw(t: Texture, path: const u8[:]) -> bool = "k_gfx_save_png";
+fn save_png(t: Texture, path: const u8[:]) -> bool {
+    let ok = save_png_raw(t, path);
+    check();
+    ok
+}
+fn screenshot(path: const u8[:]) -> bool { save_png(screen(), path) }
+// Fills mips 1 and up from mip 0. Not inside a pass.
+extern fn generate_mips(t: Texture) = "k_gfx_generate_mips";
+// Whether this device can make a 2D texture of `format` with `usage`. Ask
+// before using a compressed format, and fall back to another if not.
+extern fn format_supported(format: i32, usage: i32) -> bool = "k_gfx_format_supported";
+extern fn texture_info_into(t: Texture, out: TextureDesc&) -> bool = "k_gfx_texture_info";
+fn texture_info(t: Texture) -> TextureDesc {
+    var d = TextureDesc { width: 0, height: 0 };
+    texture_info_into(t, d);
+    d
+}
+extern fn release(t: Texture) = "k_gfx_release_texture";
+
+// The bytes one texel of `format` takes.
+fn texel_size(format: i32) -> i64 {
+    if format == R8 { return 1; }
+    if format == RG8 || format == R16F || format == DEPTH16 { return 2; }
+    if format == RGBA16F || format == RG32F { return 8; }
+    if format == RGBA32F { return 16; }
+    return 4;
+}
+
+extern fn create_sampler(desc: const SamplerDesc&) -> Sampler = "k_gfx_create_sampler";
+fn sampler(desc: SamplerDesc) -> Sampler { create_sampler(desc) }
+fn sampler(filter: i32, wrap: i32) -> Sampler {
+    sampler(SamplerDesc { min_filter: filter, mag_filter: filter, mip_filter: filter,
+                          wrap_u: wrap, wrap_v: wrap, wrap_w: wrap })
+}
+// For sampler2DShadow: a hardware depth comparison, filtered.
+fn shadow_sampler() -> Sampler {
+    sampler(SamplerDesc { wrap_u: CLAMP, wrap_v: CLAMP, wrap_w: CLAMP,
+                          compare: COMPARE_LESS_EQUAL })
+}
+extern fn release(s: Sampler) = "k_gfx_release_sampler";
+
+// --- pipelines ---------------------------------------------------------------
+
+// vs and fs are embed_shader() results.
+extern fn create_pipeline(vs: const u8[:], fs: const u8[:],
+                          desc: const PipelineDesc&) -> Pipeline = "k_gfx_create_pipeline";
+fn pipeline(vs: const u8[:], fs: const u8[:], desc: PipelineDesc) -> Pipeline {
+    create_pipeline(vs, fs, desc)
+}
+fn pipeline(vs: const u8[:], fs: const u8[:]) -> Pipeline { pipeline(vs, fs, PipelineDesc {}) }
+extern fn release(p: Pipeline) = "k_gfx_release_pipeline";
+extern fn compute_pipeline(cs: const u8[:]) -> ComputePipeline = "k_gfx_create_compute_pipeline";
+extern fn release(p: ComputePipeline) = "k_gfx_release_compute_pipeline";
+
+// --- render passes and drawing -------------------------------------------------
+
+// Draws go between begin_pass and end_pass, into the targets the pass
+// names; binds last until the pass ends.
+extern fn begin_pass_desc(desc: const PassDesc&) -> bool = "k_gfx_begin_pass";
+fn begin_pass(desc: PassDesc) -> bool { begin_pass_desc(desc) }
+extern fn end_pass() = "k_gfx_end_pass";
+// Into one target, with a depth target or Texture { 0 }, cleared.
+fn begin_pass(target: Texture, depth: Texture, clear: float4) -> bool {
+    var d = PassDesc { depth: depth, color_value: clear };
+    d.color[0] = target;
+    begin_pass_desc(d)
+}
+// Into the screen and its depth, cleared to `clear`.
+fn begin_screen(clear: float4) -> bool { begin_pass(screen(), screen_depth(), clear) }
+
+extern fn bind(p: Pipeline) = "k_gfx_bind_pipeline";
+// Vertex buffer 0 per vertex, 1 per instance (PipelineDesc.instance_location).
+extern fn bind_vertex_buffer(slot: i64, b: Buffer, offset: i64) = "k_gfx_bind_vertex_buffer";
+fn bind_vertex_buffer(b: Buffer) { bind_vertex_buffer(0, b, 0) }
+// Indices of index_size bytes: 2 for u16, 4 for u32.
+extern fn bind_index_buffer(b: Buffer, index_size: i64, offset: i64) = "k_gfx_bind_index_buffer";
+fn bind_index_buffer(b: Buffer, index_size: i64) { bind_index_buffer(b, index_size, 0) }
+// A sampler binding of `stage`, in a render pass, or a compute pass for
+// COMPUTE.
+extern fn bind_texture(stage: i64, slot: i64, t: Texture, s: Sampler) = "k_gfx_bind_texture";
+// Read-only storage resources of `stage`. A compute shader's read-write
+// ones are given to begin_compute.
+extern fn bind_storage_texture(stage: i64, slot: i64, t: Texture) = "k_gfx_bind_storage_texture";
+extern fn bind_storage_buffer(stage: i64, slot: i64, b: Buffer) = "k_gfx_bind_storage_buffer";
+// A uniform block's contents, for the draws or dispatches that follow, in
+// or out of a pass.
+extern fn push_uniforms(stage: i64, slot: i64, data: const u8[:]) = "k_gfx_push_uniforms";
+// Any flat struct as the contents of a uniform block.
+fn uniforms<T>(stage: i64, slot: i64, u: T) {
+    let one: T[1] = [u];
+    push_uniforms(stage, slot, bytes_of(one));
+}
+extern fn viewport(x: f32, y: f32, w: f32, h: f32) = "k_gfx_viewport";
+// w == 0: the whole target.
+extern fn scissor(x: i64, y: i64, w: i64, h: i64) = "k_gfx_scissor";
+
+extern fn draw(vertices: i64, instances: i64, first_vertex: i64,
+               first_instance: i64) = "k_gfx_draw";
+fn draw(vertices: i64) { draw(vertices, 1, 0, 0) }
+fn draw_instanced(vertices: i64, instances: i64) { draw(vertices, instances, 0, 0) }
+extern fn draw_indexed(indices: i64, instances: i64, first_index: i64,
+                       vertex_offset: i64, first_instance: i64) = "k_gfx_draw_indexed";
+fn draw_indexed(indices: i64) { draw_indexed(indices, 1, 0, 0, 0) }
+fn draw_indexed_instanced(indices: i64, instances: i64) { draw_indexed(indices, instances, 0, 0, 0) }
+
+// --- compute -------------------------------------------------------------------
+
+// A compute pass writing these buffers and textures: the shader's
+// read-write storage resources, in binding order.
+extern fn begin_compute(rw_buffers: const Buffer[:],
+                        rw_textures: const Texture[:]) -> bool = "k_gfx_begin_compute";
+fn begin_compute(rw_buffers: const Buffer[:]) -> bool {
+    let none: Texture[>..] = [];
+    begin_compute(rw_buffers, none)
+}
+extern fn end_compute() = "k_gfx_end_compute";
+extern fn bind(p: ComputePipeline) = "k_gfx_bind_compute_pipeline";
+// Runs x * y * z workgroups of the shader's local size.
+extern fn dispatch(x: i64, y: i64, z: i64) = "k_gfx_dispatch";
+
+// --- matrices ------------------------------------------------------------------
+
+// A column-major 4x4 matrix, as GLSL's mat4 is laid out in a uniform block.
+struct mat4 { c0: float4, c1: float4, c2: float4, c3: float4 }
+
+let mat4_identity = mat4 { c0: float4 { 1.0, 0.0, 0.0, 0.0 }, c1: float4 { 0.0, 1.0, 0.0, 0.0 },
+                           c2: float4 { 0.0, 0.0, 1.0, 0.0 }, c3: float4 { 0.0, 0.0, 0.0, 1.0 } };
+
+fn row(m: mat4, i: i64) -> float4 {
+    match i {
+        0 => float4 { m.c0.x, m.c1.x, m.c2.x, m.c3.x },
+        1 => float4 { m.c0.y, m.c1.y, m.c2.y, m.c3.y },
+        2 => float4 { m.c0.z, m.c1.z, m.c2.z, m.c3.z },
+        _ => float4 { m.c0.w, m.c1.w, m.c2.w, m.c3.w },
+    }
+}
+
+fn mul(m: mat4, v: float4) -> float4 {
+    float4 { dot(row(m, 0), v), dot(row(m, 1), v), dot(row(m, 2), v), dot(row(m, 3), v) }
+}
+
+fn mul(a: mat4, b: mat4) -> mat4 {
+    mat4 { c0: mul(a, b.c0), c1: mul(a, b.c1), c2: mul(a, b.c2), c3: mul(a, b.c3) }
+}
+
+fn translate(t: float3) -> mat4 {
+    var m = mat4_identity;
+    m.c3 = float4 { t.x, t.y, t.z, 1.0 };
+    m
+}
+
+fn scale(s: float3) -> mat4 {
+    mat4 { c0: float4 { s.x, 0.0, 0.0, 0.0 }, c1: float4 { 0.0, s.y, 0.0, 0.0 },
+           c2: float4 { 0.0, 0.0, s.z, 0.0 }, c3: float4 { 0.0, 0.0, 0.0, 1.0 } }
+}
+
+// A rotation of `angle` radians about `axis`, counterclockwise looking down
+// the axis.
+fn rotate(axis: float3, angle: f32) -> mat4 {
+    let a = normalize(axis);
+    let c = cos(angle);
+    let s = sin(angle);
+    let k = 1.0 - c;
+    mat4 { c0: float4 { c + a.x * a.x * k, a.y * a.x * k + a.z * s, a.z * a.x * k - a.y * s, 0.0 },
+           c1: float4 { a.x * a.y * k - a.z * s, c + a.y * a.y * k, a.z * a.y * k + a.x * s, 0.0 },
+           c2: float4 { a.x * a.z * k + a.y * s, a.y * a.z * k - a.x * s, c + a.z * a.z * k, 0.0 },
+           c3: float4 { 0.0, 0.0, 0.0, 1.0 } }
+}
+
+// Right-handed, looking down -z, to SDL_GPU's clip space with depth 0 at
+// `near` and 1 at `far`.
+fn perspective(fovy: f32, aspect: f32, near: f32, far: f32) -> mat4 {
+    let f = 1.0 / tan(fovy * 0.5);
+    mat4 { c0: float4 { f / aspect, 0.0, 0.0, 0.0 }, c1: float4 { 0.0, f, 0.0, 0.0 },
+           c2: float4 { 0.0, 0.0, far / (near - far), -1.0 },
+           c3: float4 { 0.0, 0.0, near * far / (near - far), 0.0 } }
+}
+
+fn ortho(left: f32, right: f32, bottom: f32, top: f32, near: f32, far: f32) -> mat4 {
+    mat4 { c0: float4 { 2.0 / (right - left), 0.0, 0.0, 0.0 },
+           c1: float4 { 0.0, 2.0 / (top - bottom), 0.0, 0.0 },
+           c2: float4 { 0.0, 0.0, 1.0 / (near - far), 0.0 },
+           c3: float4 { (left + right) / (left - right), (top + bottom) / (bottom - top),
+                        near / (near - far), 1.0 } }
+}
+
+fn look_at(eye: float3, target: float3, up: float3) -> mat4 {
+    let f = normalize(target - eye);
+    let s = normalize(cross(f, up));
+    let u = cross(s, f);
+    mat4 { c0: float4 { s.x, u.x, -f.x, 0.0 }, c1: float4 { s.y, u.y, -f.y, 0.0 },
+           c2: float4 { s.z, u.z, -f.z, 0.0 },
+           c3: float4 { -dot(s, eye), -dot(u, eye), dot(f, eye), 1.0 } }
+}
+
+// --- helpers -------------------------------------------------------------------
+
+// The bytes an element of `xs` takes: what bytes_of gives for one.
+fn elem_size<T>(xs: T[>..]&) -> i64 {
+    let one: T[1] = [default<T>()];
+    bytes_of(one).len
+}
+
+// Appends bytes read back from the GPU to `out` as elements of its flat T,
+// through from_bytes' image format: a LEB128 byte count, then the elements.
+fn append_as<T>(raw: const u8[:], out: T[>..]&) {
+    var image: u8[>..] = [];
+    var n = raw.len as u64;
+    loop {
+        let low = (n & 127) as u8;
+        n >>= 7;
+        if n == 0 {
+            image.push(low);
+            break;
+        }
+        image.push(low | 128);
+    }
+    image.append(raw);
+    var elems, ok = from_bytes<T[>..]>(image);
+    assert(ok);
+    out.append(elems);
+}

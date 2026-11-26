@@ -103,19 +103,19 @@ def measure_compilation(exe, out, reps):
         c = folder / "arena.c"
         commands[backend] = [str(x) for x in [exe, "-O2", "--standalone", "--stacks", "-o", c,
                              folder / "bench/kostya/klang/src/main.k"]]
-        measurements[backend] = dict(klang_seconds=[], klang_cycles=[])
+        measurements[backend] = dict(k_seconds=[], k_cycles=[])
     for rep in range(reps + 1):
         order = ("legacy", "library") if rep % 2 == 0 else ("library", "legacy")
         for backend in order:
             seconds, _, cycles = support.measure(commands[backend])
             if rep:
-                measurements[backend]["klang_seconds"].append(seconds)
+                measurements[backend]["k_seconds"].append(seconds)
                 if cycles is not None:
-                    measurements[backend]["klang_cycles"].append(cycles)
+                    measurements[backend]["k_cycles"].append(cycles)
     for values in measurements.values():
-        values["median_klang_seconds"] = statistics.median(values["klang_seconds"])
-        values["median_klang_cycles"] = (statistics.median(values["klang_cycles"])
-                                        if values["klang_cycles"] else None)
+        values["median_k_seconds"] = statistics.median(values["k_seconds"])
+        values["median_k_cycles"] = (statistics.median(values["k_cycles"])
+                                        if values["k_cycles"] else None)
     return measurements
 
 
@@ -154,7 +154,7 @@ def main():
         ap.error(f"unknown workloads: {sorted(unknown)}")
     os.environ["LANGARENA"] = str(args.arena.resolve())
     os.environ["KOSTYA"] = str(args.kostya.resolve())
-    os.environ["KLANG_STDLIB"] = str(ROOT / "stdlib")
+    os.environ["K_STDLIB"] = str(ROOT / "stdlib")
     arena = module("pool_arena", ROOT / "bench/kostya/compare.py")
     arena.pin_cpus(args.cpus)
     kostya = module("pool_kostya", ROOT / "bench/kostya2/compare.py")
@@ -172,7 +172,7 @@ def main():
                         compiler_sha256=digest(exe.read_bytes()),
                         library_sha256=digest((ROOT / "stdlib/slice_pool.k").read_bytes()),
                         internal_sha256=digest((ROOT / "stdlib/slice_pool_internal.k").read_bytes()),
-                        arena_cflags=[*arena.KLANG_CFLAGS, "-falign-functions=4096"],
+                        arena_cflags=[*arena.K_CFLAGS, "-falign-functions=4096"],
                         clang=checked([arena.clang_tools()[0], "--version"], out / "clang.log").strip(),
                         sources={}, builds={})
         for backend in ["legacy", "library"]:

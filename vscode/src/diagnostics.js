@@ -57,7 +57,7 @@ function linesOnDisk() {
     };
 }
 
-// The diagnostics `klang check --diagnostics json` prints on stdout, an array
+// The diagnostics `k check --diagnostics json` prints on stdout, an array
 // with one object per error or warning (docs/implementation.md §1), given as
 // parseDiagnostics gives the text's, with the range the compiler reports as
 // endLine and endColumn (0-based, one past the last character) and related

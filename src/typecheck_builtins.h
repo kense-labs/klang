@@ -184,7 +184,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         case B_EMBED_FILE: {
             // The shader compiled, or the file read, now, and the result a
             // read-only view of static data, like a string literal's (the
-            // gfx package's gfx.k, github.com/aardappel/goose_gfx, and
+            // gfx package's gfx.k, and
             // docs/design/packages.md §6.5).
             c->shaderblob = c->builtin == B_EMBED_FILE ? EmbedFile(c, args) : EmbedShader(c, args);
             c->rettypes.push_back(cu8slice);

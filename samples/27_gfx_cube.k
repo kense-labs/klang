@@ -10,13 +10,13 @@
 // `-- --frames N` stops after N frames. Either way the last frame is saved
 // as gfx_cube.png.
 //
-//   klang 27_gfx_cube.k
+//   k 27_gfx_cube.k
 //
 // Built from the generated C, the program links the gfx layer and SDL, whose
-// paths `klang --gfx-link` prints as a response file:
-//   klang -o gfx_cube.c 27_gfx_cube.k
-//   cl gfx_cube.c @<klang --gfx-link msvc>          (or clang-cl)
-//   cc gfx_cube.c -o gfx_cube @<klang --gfx-link cc>
+// paths `k --gfx-link` prints as a response file:
+//   k -o gfx_cube.c 27_gfx_cube.k
+//   cl gfx_cube.c @<k --gfx-link msvc>          (or clang-cl)
+//   cc gfx_cube.c -o gfx_cube @<k --gfx-link cc>
 
 import std;
 import vec;

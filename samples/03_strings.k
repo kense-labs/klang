@@ -5,7 +5,7 @@
 // and never copies a byte it does not have to.
 //
 // Build and run (from this directory):
-//   klang -o strings.c 03_strings.k && cl strings.c && strings
+//   k -o strings.c 03_strings.k && cl strings.c && strings
 
 import std;
 

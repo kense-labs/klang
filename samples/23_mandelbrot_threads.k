@@ -8,7 +8,7 @@
 // timing is measured too, for the comparison.
 //
 // Build and run (from this directory):
-//   klang -o mandelbrot_threads.c 23_mandelbrot_threads.k && cl mandelbrot_threads.c && mandelbrot_threads
+//   k -o mandelbrot_threads.c 23_mandelbrot_threads.k && cl mandelbrot_threads.c && mandelbrot_threads
 
 import std;
 import os;

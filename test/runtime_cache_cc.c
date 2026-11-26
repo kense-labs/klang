@@ -20,7 +20,7 @@ static int write_text(const char *path, const char *text) {
 
 static int marker_exists(const char *name) {
     char path[4096];
-    snprintf(path, sizeof path, "%s/%s", getenv("KLANG_CACHE_TEST"), name);
+    snprintf(path, sizeof path, "%s/%s", getenv("K_CACHE_TEST"), name);
     FILE *f = fopen(path, "rb");
     if (!f) return 0;
     fclose(f);
@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
         else if (!strncmp(argv[i], "/Fo:", 4) || !strncmp(argv[i], "/Fe:", 4)) {
             if (!out) out = argv[i] + 4;
         } else if (argv[i][0] == '@' && nrsps < 16) rsps[nrsps++] = argv[i] + 1;
-        else if (strstr(argv[i], "klang_runtime.")) object = argv[i];
+        else if (strstr(argv[i], "k_runtime.")) object = argv[i];
     }
     if (!out) return 2;
     if (compile) {
@@ -83,7 +83,7 @@ int main(int argc, char **argv) {
         #else
             unsigned long pid = (unsigned long)getpid();
         #endif
-        snprintf(marker, sizeof marker, "%s/started-%lu", getenv("KLANG_CACHE_TEST"), pid);
+        snprintf(marker, sizeof marker, "%s/started-%lu", getenv("K_CACHE_TEST"), pid);
         if (!write_text(marker, out)) return 4;
         if (marker_exists("fail")) {
             fputs("intentional runtime compile failure\n", stderr);

@@ -1477,14 +1477,14 @@ fn bug_fixes() {
 
 extern fn sqrt(x: f64) -> f64;
 extern fn abs_ex(x: f64) -> f64 = "fabs";
-extern fn getenv_ex(name: const u8[:], out: u8[>..]&) -> bool = "gs_os_getenv";
+extern fn getenv_ex(name: const u8[:], out: u8[>..]&) -> bool = "k_os_getenv";
 
 // extern fns (§7.10): libm through the emitted prototypes, and a
 // runtime-defined one taking a slice and a builder reference.
 fn externs() {
     print(sqrt(16.0) == 4.0, abs_ex(-2.5) == 2.5);   // truetrue
     var v: u8[>..] = [];
-    print(getenv_ex("KLANG_NO_SUCH_VARIABLE_", v), v.len);   // false0
+    print(getenv_ex("K_NO_SUCH_VARIABLE_", v), v.len);   // false0
 }
 
 struct PtAg { x: i64, y: f64 }

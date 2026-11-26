@@ -21,13 +21,13 @@ Build any sample into an executable beside it with the C compiler the K
 compiler finds on the machine, or run it straight away inside the compiler's
 process:
 
-    klang build 01_tour.k && ./01_tour
-    klang 01_tour.k
+    k build 01_tour.k && ./01_tour
+    k 01_tour.k
 
 You can also build the C that the compiler writes by hand: write it with
-`klang -o tour.c 01_tour.k` and link it with the runtime that
-`klang --emit-runtime` writes, or use `--standalone` for a C file that holds
-the runtime itself. `klang build --dry-run` prints those commands.
+`k -o tour.c 01_tour.k` and link it with the runtime that
+`k --emit-runtime` writes, or use `--standalone` for a C file that holds
+the runtime itself. `k build --dry-run` prints those commands.
 
 `run_samples.py` compiles and runs them all and compares their output with
 `expected/`, both as executables and in-process where the in-process backend
@@ -86,7 +86,7 @@ run as part of the test suite.
 
 | Sample | What it shows |
 |---|---|
-| [24_call_c](24_call_c.k) | `extern fn` to libm and to a small C header (`call_c.h`): scalars, a slice, a struct through a reference, a string builder C appends to. Build with `klang --include call_c.h ...`. |
+| [24_call_c](24_call_c.k) | `extern fn` to libm and to a small C header (`call_c.h`): scalars, a slice, a struct through a reference, a string builder C appends to. Build with `k --include call_c.h ...`. |
 
 ## Serialization
 
@@ -104,14 +104,14 @@ run as part of the test suite.
 
 | Sample | What it shows |
 |---|---|
-| [27_gfx_cube](27_gfx_cube.k) | A window and a spinning, lit cube with the `gfx` module: GLSL shaders written in the program as `"""` strings and compiled in by `embed_shader`, vertex and index buffers from `bytes_of`, a uniform block as a packed struct, a depth buffer, the arrow keys; saves its last frame as `gfx_cube.png`. Needs a compiler built with the gfx package (`KLANG_BUILTIN_LIBS`); the test runner draws it off screen. |
-| [28_physics_boxes](28_physics_boxes.k) | Boxes fall into a walled arena containing two pyramids and a rotating arm. The `physics` module simulates them with Box3D on up to eight worker threads. Each frame retrieves all transforms in one call and writes them into an instance buffer. Each box is drawn as a unit cube with sunlight and shadows. Shaders are `"""` strings in the program; the two vertex shaders share their inputs through one global part. Space triggers an explosion, the mouse controls the view, and Up and Down adjust the rate at which boxes fall. Once the arena contains `--boxes` boxes, the oldest are returned to the top. Needs a compiler built with the gfx and physics packages (`KLANG_BUILTIN_LIBS`); the test runner draws 120 frames off screen. |
+| [27_gfx_cube](27_gfx_cube.k) | A window and a spinning, lit cube with the `gfx` module: GLSL shaders written in the program as `"""` strings and compiled in by `embed_shader`, vertex and index buffers from `bytes_of`, a uniform block as a packed struct, a depth buffer, the arrow keys; saves its last frame as `gfx_cube.png`. Needs a compiler built with the gfx package (`K_BUILTIN_LIBS`); the test runner draws it off screen. |
+| [28_physics_boxes](28_physics_boxes.k) | Boxes fall into a walled arena containing two pyramids and a rotating arm. The `physics` module simulates them with Box3D on up to eight worker threads. Each frame retrieves all transforms in one call and writes them into an instance buffer. Each box is drawn as a unit cube with sunlight and shadows. Shaders are `"""` strings in the program; the two vertex shaders share their inputs through one global part. Space triggers an explosion, the mouse controls the view, and Up and Down adjust the rate at which boxes fall. Once the arena contains `--boxes` boxes, the oldest are returned to the top. Needs a compiler built with the gfx and physics packages (`K_BUILTIN_LIBS`); the test runner draws 120 frames off screen. |
 
 ## Windows and widgets
 
 | Sample | What it shows |
 |---|---|
-| [29_ui_todo](29_ui_todo.k) | A to-do list and a color mixer with the `ui` module: Nuklear's immediate-mode widgets drawn through `gfx`. Each frame lists the windows and widgets and reads back what the user did to them: a text field committed with Enter, buttons, check boxes, options, a menu bar, a tooltip, a progress bar, a color picker and properties. The check marks are recolored through Nuklear's color table, text is drawn in Roboto from the Nuklear submodule, and the whole ui is scaled up and down, with its font baked again at each scale. Saves its last frame as `ui_todo.png`. Needs a compiler built with the gfx package (`KLANG_BUILTIN_LIBS`); the test runner draws 30 frames off screen. |
+| [29_ui_todo](29_ui_todo.k) | A to-do list and a color mixer with the `ui` module: Nuklear's immediate-mode widgets drawn through `gfx`. Each frame lists the windows and widgets and reads back what the user did to them: a text field committed with Enter, buttons, check boxes, options, a menu bar, a tooltip, a progress bar, a color picker and properties. The check marks are recolored through Nuklear's color table, text is drawn in Roboto from the Nuklear submodule, and the whole ui is scaled up and down, with its font baked again at each scale. Saves its last frame as `ui_todo.png`. Needs a compiler built with the gfx package (`K_BUILTIN_LIBS`); the test runner draws 30 frames off screen. |
 
 ## A small game
 
@@ -119,7 +119,7 @@ run as part of the test suite.
 |---|---|
 | [30_mini_minecraft](30_mini_minecraft.k) | A playable voxel world using only `gfx`: procedural hills, trees, caves, coal, water, pixel textures, sky and a bitmap font. Exposed-face chunk meshes with corner shading, captured mouse look, fixed-step walking and swimming, a grid ray for mining and placement, inventory, four crafting recipes, lamps, mining fragments, a day/night cycle, and validated atomic saves. Starts directly in an 80 × 40 × 80 world. It uses no asset files and does not depend on physics or UI. The test runner checks gameplay and renders 30 frames off screen. |
 
-Run `klang samples/30_mini_minecraft.k`. WASD walks, Space jumps or swims,
+Run `k samples/30_mini_minecraft.k`. WASD walks, Space jumps or swims,
 Shift runs, Ctrl sneaks slowly and stops at ledges, and the mouse or arrow
 keys look around. Jumping or releasing Ctrl lets you step off a ledge; sneaking
 does not change the player's height. Hold the left mouse button to mine;
@@ -149,7 +149,7 @@ world deliberately omits mobs, hunger, damage, tool wear, and flowing water.
 |---|---|
 | [31_mini_doom](31_mini_doom.k) | A playable Freedoom E1M1 using `gfx` and `audio`: checked little-endian WAD parsing, palette and patch decoding, a texture atlas, BSP-clipped floor polygons, textured walls, billboard sprites, sliding collision, stairs, falling, doors, lifts, pickups, combat, and one update/draw loop. Includes pistol, shotgun, chaingun and fists, four enemy types, imp fireballs, exploding barrels, damaging floors, secrets, the blue key and the exit. Uses the supplied `data/freedoom1-e1m1.wad`. |
 
-Run `klang samples/31_mini_doom.k` from the repository root, or pass the
+Run `k samples/31_mini_doom.k` from the repository root, or pass the
 source's path from any working directory. It starts directly in the level.
 Its default WAD path is `data/freedoom1-e1m1.wad` under `resource_dir()`:
 beside the entry source for JIT, or beside a compiled executable for AOT.

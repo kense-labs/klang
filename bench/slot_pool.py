@@ -1,6 +1,6 @@
 """Compare slot_pool with reusable using identical workloads native C, standalone TinyCC and JIT.
 
-python bench/slot_pool.py --exe build-root/Release/klang.exe
+python bench/slot_pool.py --exe build-root/Release/k.exe
 The matrix covers append, sequential/scattered reuse, 8/128-byte elements,
 K O1/O2, and inline/preserved exercise call boundaries. Artifacts include
 generated K/C, compiler logs, all timing samples, sizes and stack reports.
@@ -78,17 +78,17 @@ def generate(exe, path, source, level, calls):
     # Keep identical call policies for both implementations. At O2 an explicit
     # inline K function disappears; at O0 request native inlining instead.
     c = cfile.read_text(encoding="utf-8")
-    modifier = "GS_NOINLINE" if calls == "boundary" else "GS_INLINE"
+    modifier = "K_NOINLINE" if calls == "boundary" else "K_INLINE"
     count = 0
     if calls != "natural":
-        c, count = re.subn(r"(?m)^static (gs_u64|uint64_t) (exercise_g\w*\()",
+        c, count = re.subn(r"(?m)^static (k_u64|uint64_t) (exercise_g\w*\()",
                            rf"static {modifier} \1 \2", c)
     if calls == "boundary" and count < 2:
         raise RuntimeError("exercise call boundary was removed unexpectedly")
     if calls == "boundary" and len(re.findall(r"\bexercise_g\w*\(", c)) < count + 2:
         raise RuntimeError("expected both owners to cross the exercise call boundary")
     cfile.write_text(c, encoding="utf-8")
-    return cfile, dict(klang_seconds=time.perf_counter() - start, c_bytes=cfile.stat().st_size, exercise_declarations=count,
+    return cfile, dict(k_seconds=time.perf_counter() - start, c_bytes=cfile.stat().st_size, exercise_declarations=count,
                        c_policy=calls, stacks=[s for s in report.splitlines() if s.startswith("main program:")])
 
 
@@ -178,7 +178,7 @@ def main():
                         medians = {k: statistics.median(v) for k, v in timings.items()}
                         scores = {k: statistics.median(v) for k, v in cycles.items()} if all(cycles.values()) else medians
                         row = dict(case=case, compiler=compiler.desc, mode=mode,
-                                   item_bytes=width * 8, klang_level=level, calls=calls,
+                                   item_bytes=width * 8, k_level=level, calls=calls,
                                    checksum=checksums[key].strip(), seconds=timings,
                                    median_seconds=medians, cycles=cycles,
                                    ratio_metric="cycles" if all(cycles.values()) else "seconds",

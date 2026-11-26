@@ -12,7 +12,7 @@ specification. The other documents cover the library, tools, and compiler.
 | [README](../README.md) | Project overview and a quick start. | You want to build the compiler and run your first program. |
 | [Tutorial](tutorial.md) | The language by example, concentrating on what is different about K: where values live, the array family, references that survive growth, enums in two sizes, `return … from`, threads. | You are new to K. It takes about an afternoon to read. |
 | [Language reference](reference.md) | Every feature, topic by topic, with a compiling example for each. It covers the whole language in a form meant for reading, and points into the specification for every rule. | You know the basics and want all of it, or want to look something up. |
-| [Specification](klang_spec.md) | The exact rules, in the language an implementor needs: size classes, construction, the lifetime and shrink rules, the compilation model, the representation. | You want to know why something did not compile, or are writing an implementation. |
+| [Specification](k_spec.md) | The exact rules, in the language an implementor needs: size classes, construction, the lifetime and shrink rules, the compilation model, the representation. | You want to know why something did not compile, or are writing an implementation. |
 
 ## Library and tools
 
@@ -22,7 +22,7 @@ specification. The other documents cover the library, tools, and compiler.
   rigid bodies and widgets. All are written in readable K under
   `stdlib/`.
 * [The command line](command_line.md): every command and option of
-  `klang`: running, building and checking programs, what the compiler
+  `k`: running, building and checking programs, what the compiler
   prints, writing the C yourself, the formatter and the language server.
 * [Building programs and using packages](packages.md): libraries from git
   repositories or directories, a program's own C, and how to make a
@@ -33,7 +33,7 @@ specification. The other documents cover the library, tools, and compiler.
 * [VS Code extension](../vscode/README.md): highlighting, checks on save,
   and one-key runs.
 * [Other editors](editors.md): the language server in Neovim, Helix and
-  Emacs, and `klang format`, the formatter, on save.
+  Emacs, and `k format`, the formatter, on save.
 
 ## Benchmarks
 
@@ -45,6 +45,10 @@ specification. The other documents cover the library, tools, and compiler.
 
 ## The compiler
 
+* [Architecture](architecture.md): microkernel boundaries, resource contracts,
+  and how each target selects and runs components.
+* [Development roadmap](roadmap.md): milestones and acceptance criteria for
+  the language, toolchain, and runtimes.
 * [Implementation notes](implementation.md): how the compiler works, pass
   by pass: the typechecker's roots and provenance, the shrink rules, the
   optimizer, bounds-check elimination, code generation and the runtime.
@@ -98,6 +102,15 @@ and the reference describe what was built; these say why.
 * [Dynamic externs](design/dynamic_externs.md): `extern "lib" { ... }`,
   an extern fn bound from a shared library by name at program start; a
   proposal.
+* [First-class async functions and decorators](design/async_and_decorators.md):
+  `async fn`, `await`, typed tasks and cancellation, and user-defined
+  decorators with metadata and static wrappers; a design proposal.
+* [First-class functions and a TypeScript runtime](design/functions_and_typescript_runtime.md):
+  storable and returnable closures, and milestones for Node.js compatibility.
+* [Cordis microkernel](design/cordis_microkernel.md): scoped services and
+  dynamic components for the compiler, native runtime, and TypeScript runtime.
+* [Embedded language blocks](design/embedded_languages.md): typed guest code
+  through user-selected language adapters.
 * [Coroutines](design/coroutines.md): stackless coroutines whose frame is
   an ordinary fixed-size value, driven by `resume` and scheduled by
   libraries; what Rust, C++, Kotlin, Go and Zig learned; a proposal.
@@ -108,7 +121,7 @@ and the reference describe what was built; these say why.
   each costs; a research note.
 * [Debugging](design/debugging.md): K source lines, names and values
   in a debugger, through `#line` and a compiler-written map read by a
-  `klang dap` adapter in front of `lldb-dap`, compared with visualizers in
+  `k dap` adapter in front of `lldb-dap`, compared with visualizers in
   the native debuggers and with a debugger built into the compiler; a
   proposal.
 * [Ownership without destructors](design/ownership.md): an `own`
@@ -125,7 +138,7 @@ and the reference describe what was built; these say why.
 ## Getting the compiler
 
 Follow the [build instructions](../README.md#build-from-source) to compile
-`klang` and the [quick start](../README.md#run-a-program) to run a program.
+`k` and the [quick start](../README.md#run-a-program) to run a program.
 The [GitHub repository](https://github.com/kense-labs/klang) hosts the project.
 
 ## Standalone pages

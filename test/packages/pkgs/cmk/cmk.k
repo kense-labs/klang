@@ -1,8 +1,8 @@
 // A package built with CMake: its sidecar names the static library target
 // of the CMakeLists.txt at its root (docs/design/packages.md §5.2). The
 // compiler configures and builds a wrapper project around it, takes the
-// target's whole link line for klang build, and builds the shared library
-// klang run loads from the same objects.
+// target's whole link line for k build, and builds the shared library
+// k run loads from the same objects.
 namespace cmk;
 
 extern fn cmk_triple(x: i32) -> i32;

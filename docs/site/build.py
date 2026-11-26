@@ -46,7 +46,7 @@ for src in sorted(glob.glob(os.path.join(ROOT, "bench", "*.md"))):
     name = os.path.basename(src)
     PAGES.append(("bench/" + name, "bench/" + name[:-3] + ".html"))
 PAGES.append(("vscode/README.md", "vscode/index.html"))
-PAGES.append(("test/klang_in_klang/README.md", "test/klang_in_klang/index.html"))
+PAGES.append(("test/k_in_k/README.md", "test/k_in_k/index.html"))
 
 # Source files shown as highlighted pages, and files copied as they are.
 SOURCES = sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
@@ -54,7 +54,7 @@ SOURCES = sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
 SOURCES.append("LICENSE")
 COPIES = sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
                 for p in glob.glob(os.path.join(ROOT, "docs", "logo", "*.png")))
-COPIES.append("vscode/klang-language.vsix")
+COPIES.extend(("LICENSE-APACHE", "NOTICE", "vscode/klang-language.vsix"))
 # The raw results the benchmark reports link to.
 COPIES += sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
                  for p in glob.glob(os.path.join(ROOT, "bench", "*.json")))

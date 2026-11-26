@@ -9,7 +9,7 @@
 // again: no allocator is involved anywhere.
 //
 // Build and run (from this directory):
-//   klang -o file_tree.c 26_file_tree.k && cl file_tree.c && file_tree
+//   k -o file_tree.c 26_file_tree.k && cl file_tree.c && file_tree
 
 import slice_pool;
 import slot_pool;

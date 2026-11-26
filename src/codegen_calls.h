@@ -20,8 +20,8 @@ inline void CodeGen::EmitSlidePrefix(const string &base, IntStorage ls, const st
                                      const string &lenlv) {
     string metasz, count;
     if (ls == IS_VARINT) {
-        metasz = cat("GS_ULEB_SIZE(", base, ")");
-        count = cat("GS_ULEB_READ(", base, ")");
+        metasz = cat("K_ULEB_SIZE(", base, ")");
+        count = cat("K_ULEB_READ(", base, ")");
     } else {
         metasz = cat(IntSize(ls));
         count = cat("(int64_t)*(", IntCT(ls), " *)", base);
@@ -130,9 +130,9 @@ inline vector<string> CodeGen::EmitExternCall(Call *c, FnSpec *sp) {
 
 // The C prototype of an extern fn, from its K declaration (§7.10); for
 // one bound from a shared library, the declaration of the pointer it is
-// called through, which gs_dl_bind fills, and the function calls go through
+// called through, which k_dl_bind fills, and the function calls go through
 // to reach it, which leaves the call out of clang's function-type check
-// (GS_DL_CALL).
+// (K_DL_CALL).
 inline string CodeGen::ExternProto(FnSpec *sp) {
     auto dynamic = !sp->sf->dylib.empty();
     auto ret = sp->rets.empty() ? string("void") : CT(sp->rets[0]);
@@ -154,7 +154,7 @@ inline string CodeGen::ExternProto(FnSpec *sp) {
     if (sp->argtypes.empty()) s += "void", params = "void";
     s += ");\n";
     if (dynamic)
-        Append(s, "static GS_DL_CALL ", ret, " ", DlCall(sp), "(", params, ") { ",
+        Append(s, "static K_DL_CALL ", ret, " ", DlCall(sp), "(", params, ") { ",
                sp->rets.empty() ? "" : "return ", DlSlot(sp), "(", args, "); }\n");
     return s;
 }
@@ -466,7 +466,7 @@ inline const VarDef *CodeGen::OpenIbFixed(InlineBlock *ib, const Dst &d) {
     // the local's storage, and may read the local. A `return ... from` past
     // this block (to the function, or to an inlined body around it) builds
     // its value in place at a destination that may be this very storage
-    // (the function's gs_r0, say), reading the local as it goes; NamedResult
+    // (the function's k_r0, say), reading the local as it goes; NamedResult
     // only looks at the returns to this block.
     auto unsafe = false;
     vector<SFunction *> inner { ib->sf };
@@ -511,14 +511,14 @@ inline bool CodeGen::DiesAtCall(Node *n, TypeExpr *pt) {
 // A free variable of the callee, from the caller's frame (or passed on).
 inline void CodeGen::EmitFvArg(const VarDef *fv, vector<string> &args) {
     auto name = VName(fv);
-    // gs_init_globals has no curspec, and its locals no ownerspec.
+    // k_init_globals has no curspec, and its locals no ownerspec.
     auto ours = fv->ownerspec == curspec;
     if (fv->reusable) {
         // A pool local of ours: assemble; a passed-through one: forward.
         if (ours) {
             auto &p = vpool[fv];
             auto t = T();
-            L("gs_pref ", t, " = { &", name, ", ", vstk[fv], ", &", p.first, ", ",
+            L("k_pref ", t, " = { &", name, ", ", vstk[fv], ", &", p.first, ", ",
               p.second, " };");
             PushArg(args, fv->type, true, t);
         } else {
@@ -719,8 +719,8 @@ inline void CodeGen::EmitReprefix(FnSpec *sp, const Dst &dd, const string &base,
     auto count = T();
     auto oms = T();
     if (srcls == IS_VARINT) {
-        L("int64_t ", count, " = GS_ULEB_READ(", base, ");");
-        L("int64_t ", oms, " = GS_ULEB_SIZE(", base, ");");
+        L("int64_t ", count, " = K_ULEB_READ(", base, ");");
+        L("int64_t ", oms, " = K_ULEB_SIZE(", base, ");");
     } else {
         L("int64_t ", count, " = (int64_t)*(", IntCT(srcls), " *)", base, ";");
         L("int64_t ", oms, " = ", IntSize(srcls), ";");
@@ -731,8 +731,8 @@ inline void CodeGen::EmitReprefix(FnSpec *sp, const Dst &dd, const string &base,
     if (ls == IS_VARINT) {
         auto tmp = T();
         L("uint8_t ", tmp, "[10];");
-        L("int64_t ", ms, " = gs_uleb_write(", tmp, ", (uint64_t)", count, ");");
-        writepref = cat("GS_MEMCPY(", base, ", ", tmp, ", (size_t)", ms, ");");
+        L("int64_t ", ms, " = k_uleb_write(", tmp, ", (uint64_t)", count, ");");
+        writepref = cat("K_MEMCPY(", base, ", ", tmp, ", (size_t)", ms, ");");
     } else {
         L("int64_t ", ms, " = ", IntSize(ls), ";");
         writepref = cat("*(", IntCT(ls), " *)", base, " = (", IntCT(ls), ")", count, ";");
@@ -745,46 +745,46 @@ inline void CodeGen::EmitReprefix(FnSpec *sp, const Dst &dd, const string &base,
 
 inline void CodeGen::EmitRfCheck(FnSpec *callee) {
     if (norfcheck) return;
-    L("if (gs_rf) {");
+    L("if (k_rf) {");
     ind++;
     auto caught = curspec && callee->needs.count(curspec);
     if (caught) {
         auto tid = fromids[curspec];
         EnsureFromChannels(curspec);
-        L("if (gs_rf == ", tid, ") {");
+        L("if (k_rf == ", tid, ") {");
         ind++;
         // The propagation ends here, so restore the "nothing in flight"
         // state every other exit path relies on.
-        L("gs_rf = 0;");
+        L("k_rf = 0;");
         string retv;
         for (size_t i = 0; i < curspec->rets.size(); i++) {
             auto rt = curspec->rets[i];
             if (NeedsResultLocation(rt)) continue;   // The channel names the receiver itself.
-            auto lret = cat("gs_lret_", tid, "_", i);
+            auto lret = cat("k_lret_", tid, "_", i);
             // The value is on our destination, behind anything the calls it
             // unwound had built there: down to where our caller expects it.
             if (IsBytesT(rt))
-                LandValue(cat("gs_dst", i), DstTop0(i), cat("gs_fval_", tid, "_", i), rt, lret);
+                LandValue(cat("k_dst", i), DstTop0(i), cat("k_fval_", tid, "_", i), rt, lret);
             if (IsResz(rt)) {
-                L("*gs_rl", i, " = ", lret, ";");   // The count, or the frame object.
+                L("*k_rl", i, " = ", lret, ";");   // The count, or the frame object.
                 continue;
             }
             if (IsBytesT(rt)) continue;
             if ((int)i == curinfo->cret) retv = lret;
-            else L("*gs_r", i, " = ", lret, ";");
+            else L("*k_r", i, " = ", lret, ";");
         }
         Epilogue(retv);
         ind--;
         L("} else {");
         ind++;
         if (curinfo && curinfo->hasrf) PropagateReturn("");
-        else L("gs_panic(\"unexpected long-distance return\");");
+        else L("k_panic(\"unexpected long-distance return\");");
         ind--;
         L("}");
     } else if (curinfo && curinfo->hasrf) {
         PropagateReturn("");
     } else {
-        L("gs_panic(\"unexpected long-distance return\");");
+        L("k_panic(\"unexpected long-distance return\");");
     }
     ind--;
     L("}");
@@ -918,7 +918,7 @@ inline vector<string> CodeGen::EmitDispatch(Call *c, Dst d0, vector<Dst> *alldst
                 copied = BytesTemp(stk);
                 auto sz = T();
                 L("int64_t ", sz, " = ", SizeX(enumtype, p), ";");
-                L("GS_MEMCPY(", Top(stk), ", ", p, ", (size_t)", sz, ");");
+                L("K_MEMCPY(", Top(stk), ", ", p, ", (size_t)", sz, ");");
                 Bump(stk, sz);
             } else {
                 for (size_t vi = 0; vi < snap.size(); vi++) {
@@ -1065,7 +1065,7 @@ inline vector<string> CodeGen::EmitDispatch(Call *c, Dst d0, vector<Dst> *alldst
         ind--;
         L("} break;");
     }
-    L("default: GS_UNREACHABLE(", LocArgs(c->line), ");");
+    L("default: K_UNREACHABLE(", LocArgs(c->line), ");");
     L("}");
     if (reprefix.t) EmitReprefix(sp0, reprefix, retex[0], "");
     return retex;

@@ -30,7 +30,7 @@ This tutorial introduces K through examples. It assumes some experience
 with C, C++, Rust, Go, or a similar language and focuses on K's
 differences. Start here, then go on to
 [the language reference](reference.md), which covers the whole language topic
-by topic. Consult [the specification](klang_spec.md) for exact rules, and see
+by topic. Consult [the specification](k_spec.md) for exact rules, and see
 [`samples/`](../samples/README.md) for complete programs.
 
 Much of the syntax is familiar: braces, `let`, `fn`, `struct`, and `match`.
@@ -90,21 +90,21 @@ K compiles the whole program to C and builds that with whatever C
 compiler is around, into an executable beside the source:
 
 ```bash
-klang build hello.k && ./hello
+k build hello.k && ./hello
 ```
 
-`klang -o hello.c hello.k` writes the C for you to build yourself, and
-`klang build --dry-run hello.k` prints the commands.
-[command_line.md](command_line.md) describes the rest of `klang build` and
+`k -o hello.c hello.k` writes the C for you to build yourself, and
+`k build --dry-run hello.k` prints the commands.
+[command_line.md](command_line.md) describes the rest of `k build` and
 the other commands, and [packages.md](packages.md) how a program uses
 libraries from other repositories.
 
 The bundled TinyCC backend needs no separate C compiler. With no verb, or
-with `klang run`, the program is compiled into the compiler's own process and
+with `k run`, the program is compiled into the compiler's own process and
 run there, which is what you want while you are reading this:
 
 ```bash
-klang hello.k
+k hello.k
 ```
 
 Here is a minimal program:
@@ -443,7 +443,7 @@ Some things work differently from a `std::vector` or a `Vec`:
   elements leaves those elements unaligned, and K's loads and stores
   allow for that, which costs little on x86-64 and ARM64. A struct that has
   to match a foreign layout gets explicit `pad` fields
-  ([spec §3.2](klang_spec.md#32-structs)).
+  ([spec §3.2](k_spec.md#32-structs)).
 * **Finishing a resizable.** The compiler does not work out that an array
   is done growing: a resizable keeps its stack until its owner's scope ends.
   Nothing else is waiting to go on top of it, since other values use other
@@ -520,7 +520,7 @@ words.push(str("word", i));         // written straight into the new element
 
 There is no temporary string that is then copied into the array. The
 copy-free construction guarantee
-([spec §4.3](klang_spec.md#43-the-in-place-construction-guarantee)) says
+([spec §4.3](k_spec.md#43-the-in-place-construction-guarantee)) says
 that a constructed value is always built in its final location, which is
 passed down through calls, and that the compiler must not need to fall back
 to building it somewhere else first.
@@ -1581,7 +1581,7 @@ fn blur_row(above: u8[:], here: u8[:], below: u8[:], out: u8[:]) {
 }
 ```
 
-`klang check --stats` reports what it removed:
+`k check --stats` reports what it removed:
 
 ```
 bce: elided 11/11 index and 0/4 slice checks
@@ -1624,31 +1624,31 @@ imposes it.
   explicitly. Most of the time the answer is "the function that builds it",
   and then nothing more is needed. When lifetimes do not nest, use a library pool
   ([section 11](#11-lifetimes-that-do-not-nest);
-  [spec §1.2](klang_spec.md#12-memory-model),
-  [§5.4](klang_spec.md#54-reusable-arrays-safe-allocation-escape-hatch)).
+  [spec §1.2](k_spec.md#12-memory-model),
+  [§5.4](k_spec.md#54-reusable-arrays-safe-allocation-escape-hatch)).
 * **Recursive functions cannot keep growable data across a recursive call.**
   Scratch in a block that ends before the call is fine; anything that lives
   longer is passed in. This changes how a recursive-descent parser is
   structured: the state becomes locals of the non-recursive entry function,
   or a struct of references to those locals. That is arguably nicer, but it
   is a change ([Several tables, one context](#several-tables-one-context);
-  [spec §7.8](klang_spec.md#78-recursion)).
+  [spec §7.8](k_spec.md#78-recursion)).
 * **Arrays of variable-size elements cannot be indexed.** For each
   container you choose between "compact and walkable" and "indexable", or
   you spend extra memory on an index of references beside a compact one
   ([section 10](#an-index-for-variable-size-elements);
-  [spec §3.3](klang_spec.md#33-the-array-family)).
+  [spec §3.3](k_spec.md#33-the-array-family)).
 * **A fixed-mode enum cannot be pointed into; a variable-mode one cannot be
   overwritten.** You choose the mode at each use site
   ([section 9](#9-enums-in-two-sizes);
-  [spec §3.5](klang_spec.md#35-algebraic-data-types),
-  [§8.1](klang_spec.md#81-match)).
+  [spec §3.5](k_spec.md#35-algebraic-data-types),
+  [§8.1](k_spec.md#81-match)).
 * **No closures that escape, no function pointers, no dynamic dispatch beyond
   ADT tags.** The closed-world compiler is what makes roots and destinations
   static; it is also what stops you writing a plugin system
   ([section 13](#13-generics-and-blocks-that-disappear);
-  [spec §7.6](klang_spec.md#76-static-function-values),
-  [§8.2](klang_spec.md#82-case-functions-match-as-an-overload-set)).
+  [spec §7.6](k_spec.md#76-static-function-values),
+  [§8.2](k_spec.md#82-case-functions-match-as-an-overload-set)).
 * **Non-standard FFI packages are outside worker isolation.** K managed
   data structures never share memory between threads. The standard library
   does not share memory either; its access to stateful OS functionality is
@@ -1658,16 +1658,16 @@ imposes it.
   ([section 14](#14-threads-that-share-nothing)).
 * **Whole-program compilation.** There is no separate compilation, and there
   are no shared libraries of K code
-  ([spec §10.1](klang_spec.md#101-whole-program-call-graph-order)).
+  ([spec §10.1](k_spec.md#101-whole-program-call-graph-order)).
 * **A pool manages its elements loosely.** Nothing is freed and
   nothing is unsafe, but if you still use a slot after handing it back, you
   read whatever its next owner put there. This is the array equivalent of a
   stale index, and it is up to you to avoid it
   ([section 11](#11-lifetimes-that-do-not-nest);
-  [spec §9.4](klang_spec.md#94-type-safe-reuse-and-stale-references)).
+  [spec §9.4](k_spec.md#94-type-safe-reuse-and-stale-references)).
 * **v1 omissions** you will notice: no move for resizables, no nested owning
   root structs or arrays of them, no labeled break, no namespace privacy
-  ([spec §12](klang_spec.md#12-builtins-the-standard-library-and-what-v1-leaves-out)),
+  ([spec §12](k_spec.md#12-builtins-the-standard-library-and-what-v1-leaves-out)),
   no subprocesses or networking in the library yet ([`os`](stdlib.md#os)).
 
 An ordinary struct still has at most one resizable tail. A
@@ -1693,7 +1693,7 @@ export fn hello_world() -> const u8[:] {
 export "c_add" fn add(a: i32, b: i32) -> i32 { a + b }
 
 fn main() {
-    calls = 100;    // runs once, inside klang_init
+    calls = 100;    // runs once, inside k_init
 }
 ```
 
@@ -1703,7 +1703,7 @@ is used. When you ask for a header, the compiler builds the C for a C host
 program, with no `main` of its own:
 
 ```sh
-klang --standalone --header hello.h -o hello.c hello.k
+k --standalone --header hello.h -o hello.c hello.k
 cc hello.c app.c -o app
 ```
 
@@ -1713,7 +1713,7 @@ cc hello.c app.c -o app
 
 int main(int argc, char **argv) {
     int64_t length;
-    klang_init(argc, argv);
+    k_init(argc, argv);
     const uint8_t *message = hello_world(&length);
     fwrite(message, 1, (size_t)length, stdout);   // not NUL-terminated
     putchar('\n');
@@ -1722,18 +1722,18 @@ int main(int argc, char **argv) {
 }
 ```
 
-The host calls `klang_init` once before anything else. It sets up the
+The host calls `k_init` once before anything else. It sets up the
 runtime and the globals and then runs your K `fn main()`, so `main` is the
 place for a library's own start-up code. A library with nothing to start up
-may leave `main` out. When the host is done with the program, `klang_exit()`
-releases what `klang_init` set up, and `klang_init` can start it again: that
+may leave `main` out. When the host is done with the program, `k_exit()`
+releases what `k_init` set up, and `k_init` can start it again: that
 is how a host reloads a library it has rebuilt. A `const u8[:]` result comes
 back as a pointer plus an extra `int64_t *` parameter that receives its
 length; scalars and flat fixed-size values are returned by value. The
 generated functions are not thread-safe: call them from the thread that
-called `klang_init`. The signatures that may cross are the ones from
+called `k_init`. The signatures that may cross are the ones from
 [section 16](#16-calling-c), with a few more limits; see
-[spec §7.11](klang_spec.md#711-exporting-k-functions-to-c).
+[spec §7.11](k_spec.md#711-exporting-k-functions-to-c).
 
 ---
 
@@ -1751,7 +1751,7 @@ called `klang_init`. The signatures that may cross are the ones from
   `std`, `dictionary`, `vec`, `math`, `os`, `binary`, `base64`, `csv`,
   `json`, `regex`, `audio`, `gfx`, `physics`, and `ui`, with K interfaces
   under `stdlib/`.
-* **[`docs/klang_spec.md`](klang_spec.md)** — the detailed language rules,
+* **[`docs/k_spec.md`](k_spec.md)** — the detailed language rules,
   including why a program may fail to compile. Every "spec §" link in this
   tutorial points there.
 * **[`bench/`](../bench/summary.md)** — the numbers and the design notes

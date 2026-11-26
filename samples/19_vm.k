@@ -6,7 +6,7 @@
 // hand: a countdown loop and an iterative factorial.
 //
 // Build and run (from this directory):
-//   klang -o vm.c 19_vm.k && cl vm.c && vm
+//   k -o vm.c 19_vm.k && cl vm.c && vm
 
 import std;
 

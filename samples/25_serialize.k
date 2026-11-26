@@ -15,7 +15,7 @@
 // variable-size form of the same data, and then a tampered file.
 //
 // Build and run (from this directory):
-//   klang -o serialize.c 25_serialize.k && cl serialize.c && serialize
+//   k -o serialize.c 25_serialize.k && cl serialize.c && serialize
 
 import std;
 import dictionary;

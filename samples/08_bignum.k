@@ -7,7 +7,7 @@
 // decimal with repeated division.
 //
 // Build and run (from this directory):
-//   klang -o bignum.c 08_bignum.k && cl bignum.c && bignum
+//   k -o bignum.c 08_bignum.k && cl bignum.c && bignum
 
 import std;
 

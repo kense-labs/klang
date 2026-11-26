@@ -51,7 +51,7 @@ fn relax(adj: i32[>..]&, dist: i32[>..]&, u: i64) {
 
 The same shape appears in graph edges (`dist[adj[k]]`), mesh index buffers
 (`verts[tri.a]`), sort permutations (`vals[order[i]]`), union-find
-(`parent[x]`) and handle tables. `klang --check --bce-lines` shows that
+(`parent[x]`) and handle tables. `k --check --bce-lines` shows that
 `bench/klang/graph_csr.k` keeps a check per edge on `out[k]` and on
 `dist[w]`, per vertex on `dist[u]` and on `start[u + 1]` (an `i32` sum,
 which may wrap), and two in the build loop, on `cursor[s]` and
@@ -660,7 +660,7 @@ fixtures, three parse-error fixtures and six programs with blessed output.
 
 ## 10. Measurements
 
-The programs were built by `klang build` with clang-cl 22 for x64 at its
+The programs were built by `k build` with clang-cl 22 for x64 at its
 default target and run on the development machine. The figures are the best
 and median of 9–11 interleaved runs. These are rough numbers, not a
 benchmark-suite row.

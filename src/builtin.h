@@ -7,16 +7,16 @@
 
 namespace klang {
 
-// An entry of a package's symbol table, as native.h's klang_symbols.c and
-// cmake/package.cmake's klang_symbols_<name>.c lay it out.
-struct klang_symbol {
+// An entry of a package's symbol table, as native.h's k_symbols.c and
+// cmake/package.cmake's k_symbols_<name>.c lay it out.
+struct k_symbol {
     const char *name;
     const void *addr;
 };
 
 struct BuiltinPackage {
     const char *name;
-    const klang_symbol *(*symbols)();   // nullptr for a package without a native part.
+    const k_symbol *(*symbols)();   // nullptr for a package without a native part.
     const char *srcdir;                 // Its root, with a trailing slash.
     const char *rspdir;                 // Where its link-{cc,msvc}.rsp are; "" without a native part.
 };
@@ -88,7 +88,7 @@ inline string BuiltinSrcDir(const BuiltinPackage &b, const string &exedir) {
 
 // A response file beside the compiler names the libraries a release ships
 // relative to its own directory, which a linker would take relative to the
-// directory it runs in instead. The link takes a copy under KLANG_HOME with
+// directory it runs in instead. The link takes a copy under K_HOME with
 // those made absolute, one per place the compiler is installed.
 inline string AbsoluteLinkFile(const string &rsp, const string &pkgname, const string &style) {
     std::error_code ec;
@@ -149,8 +149,8 @@ inline string BuiltinLinkFile(const string &import, const string &style, const s
     auto b = BuiltinLookup(be->package);
     if (!b)
         throw CompileError { cat("this compiler was built without the package ", be->package,
-                                 " (configure with -DKLANG_BUILTIN_LIBS=all); klang build and "
-                                 "klang run fetch and build it instead") };
+                                 " (configure with -DK_BUILTIN_LIBS=all); k build and "
+                                 "k run fetch and build it instead") };
     return BuiltinPackageLinkFile(*b, style, exedir);
 }
 

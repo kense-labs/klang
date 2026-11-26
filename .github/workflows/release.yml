@@ -5,12 +5,12 @@
 # them as the run's artifacts, without a release.
 #
 # Each archive is one directory, laid out by scripts/package_release.py: the
-# compiler with every blessed package compiled in (KLANG_BUILTIN_LIBS=all),
+# compiler with every blessed package compiled in (K_BUILTIN_LIBS=all),
 # the standard library, TinyCC's runtime, the packages' sources and the
-# libraries a `klang build` links, the docs, the samples and the VS Code
+# libraries a `k build` links, the docs, the samples and the VS Code
 # extension. Before it is archived, the build tree it came from is moved
 # away and the samples run with the compiler in it, in-process and through
-# `klang build`, so it is tested as it will be unpacked.
+# `k build`, so it is tested as it will be unpacked.
 #
 # Beside the archives, the release has SHA256SUMS: the SHA-256 of each, in
 # the format `sha256sum -c` reads. It is named without the version, so
@@ -79,12 +79,12 @@ jobs:
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then version="$GITHUB_REF_NAME"; else version="snapshot-${GITHUB_SHA::7}"; fi
           echo "RELEASE_NAME=klang-$version-${{ matrix.platform }}" >> "$GITHUB_ENV"
-          echo "KLANG_VERSION=$version" >> "$GITHUB_ENV"
+          echo "K_VERSION=$version" >> "$GITHUB_ENV"
 
       # The version the compiler reports: the tag, as the shallow checkout
       # may have no tags for git describe to find.
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DKLANG_BUILTIN_LIBS=all "-DKLANG_VERSION=${{ env.KLANG_VERSION }}"
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DK_BUILTIN_LIBS=all "-DK_VERSION=${{ env.K_VERSION }}"
 
       - name: Build
         run: cmake --build build --config Release --parallel
@@ -100,13 +100,13 @@ jobs:
         run: mv build build-moved
 
       # A compiler that cannot find a package it has compiled in fetches and
-      # builds it into KLANG_HOME instead (build/klang-home for the samples
+      # builds it into K_HOME instead (build/klang-home for the samples
       # runner), which passes the samples but is not a release that works
       # without git and cmake.
       - name: Test the release
         shell: bash
         run: |
-          python samples/run_samples.py --exe "dist/$RELEASE_NAME/klang${{ runner.os == 'Windows' && '.exe' || '' }}"
+          python samples/run_samples.py --exe "dist/$RELEASE_NAME/k${{ runner.os == 'Windows' && '.exe' || '' }}"
           if [ -e build/klang-home/pkg ]; then
             echo "the release fetched packages it has compiled in:"; ls -R build/klang-home/pkg | head -20; exit 1
           fi

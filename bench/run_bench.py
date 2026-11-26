@@ -61,7 +61,7 @@ RUSTDIR = HERE / "rust"
 # 2 GB default for reproducibility (up to 536 MB is used on one stack); it leaves
 # 4x headroom and is the largest reservation under which a u32 relative
 # reference stores without a range check (spec 3.9).
-STACK_RESERVE = "GS_STACK_RESERVE=2147483648ull"
+STACK_RESERVE = "K_STACK_RESERVE=2147483648ull"
 
 SIZE_NAMES = ["small", "medium", "large"]
 
@@ -394,7 +394,7 @@ def write_sized(src, dst, n, pattern):
     tc.write_text(dst, "\n".join(out))
 
 
-KLANG_N = r"^(\s*let\s+\w+\s*=\s*)(\d+)(\s*;.*//\s*BENCH_N.*)$"
+K_N = r"^(\s*let\s+\w+\s*=\s*)(\d+)(\s*;.*//\s*BENCH_N.*)$"
 RUST_N = r"^(\s*const\s+\w+\s*:\s*\w+\s*=\s*)(\d+)(\s*;.*//\s*BENCH_N.*)$"
 
 
@@ -410,12 +410,12 @@ class Harness:
         self.sized = set()
         self.generated = set()
 
-    def klang_source(self, file, n, base):
+    def k_source(self, file, n, base):
         """The benchmark's K source with its size baked in, written once
         per (benchmark, size). Both backends start from this same file."""
         gsrc = GENDIR / f"{base}.k"
         if base not in self.sized:
-            write_sized(KLANGDIR / file, gsrc, n, KLANG_N)
+            write_sized(KLANGDIR / file, gsrc, n, K_N)
             self.sized.add(base)
         return gsrc
 
@@ -426,7 +426,7 @@ class Harness:
         # but only within one run: a stale .c left over from a previous run
         # would silently benchmark the previous version of the source.
         if base not in self.generated:
-            gsrc = self.klang_source(file, n, base)
+            gsrc = self.k_source(file, n, base)
             # One translation unit, as the measurements always were: every
             # runtime function the program calls is the C compiler's to
             # inline.
@@ -578,7 +578,7 @@ def main():
         sys.exit(f"no benchmarks matched --only {args.only}")
 
     print("toolchains: " + "  |  ".join(descs[k]["desc"] for k in active)
-          + ("  |  klang --jit (TinyCC)" if jit else ""))
+          + ("  |  k --jit (TinyCC)" if jit else ""))
     print(f"sizes: {', '.join(sizes)}   reps: {args.reps}\n")
 
     baseline = None if (args.skip_build or args.report_only) else measure_baseline(harness, jit)
@@ -653,7 +653,7 @@ def main():
                 # to agree with every built row.
                 if jit and im["kind"] == "klang":
                     base = f"{b['name']}_{sname}_{slug}"
-                    gsrc = harness.klang_source(im["file"], n, base)
+                    gsrc = harness.k_source(im["file"], n, base)
                     results[b["name"]][im["label"]].setdefault(JIT_TC, {})
                     m = measure_exe(args.exe, args.reps,
                                     ["-O2", "--jit", f"-D{STACK_RESERVE}", gsrc])
@@ -762,9 +762,9 @@ def main():
     for tcname in active:
         W(f"| {tcname} | {descs[tcname]['desc']}, `{descs[tcname]['opt']}` "
           "(C++20 for the C++ rows) |")
-    W("| K | `klang -O2` to C, then each toolchain above on that C |")
+    W("| K | `k -O2` to C, then each toolchain above on that C |")
     if jit_measured:
-        W("| K JIT | `klang -O2 --jit`: TinyCC in the compiler's own process, no C file |")
+        W("| K JIT | `k -O2 --jit`: TinyCC in the compiler's own process, no C file |")
     W("| Rust | " + (f"{rust_version}, `-O -C codegen-units=1`" if have_rust
                      else "not installed (rows pending)") + " |")
     W()

@@ -84,7 +84,7 @@ def check_commit_limit(exe, base):
         r = subprocess.run([str(exe), "build", "-o", str(app), str(source)], cwd=root,
                            capture_output=True, text=True, errors="replace", timeout=300)
         if r.returncode != 0:
-            raise RuntimeError(f"commit limit: klang build:\n{r.stdout}{r.stderr}")
+            raise RuntimeError(f"commit limit: k build:\n{r.stdout}{r.stderr}")
         code, err = run_limited(app)
         if code != 1 or "out of memory committing a data stack" not in err:
             raise RuntimeError(f"commit limit: a program committing past {LIMIT >> 20} MB "

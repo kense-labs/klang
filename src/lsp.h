@@ -1,4 +1,4 @@
-// K compiler — `klang lsp`, the language server (docs/design/
+// K compiler — `k lsp`, the language server (docs/design/
 // language_server.md): the worker that takes the editor's messages from
 // the transport, keeps the workspace, analyzes a root once its changes
 // have settled, and answers the requests from the latest analyses.
@@ -228,7 +228,7 @@ struct Server {
             if (r == 2) RespondError(m, -32603, error);
             else Respond(m, [&](JsonOut &j) { if (r) j.Raw(edits.s); return r == 1; });
         } else if (!m.id.empty()) {
-            RespondError(m, -32601, cat("klang lsp does not handle ", method));
+            RespondError(m, -32601, cat("k lsp does not handle ", method));
         }
         return true;
     }
@@ -252,12 +252,12 @@ struct Server {
     }
 };
 
-// `klang lsp [--stdlib dir]`, or `klang lsp --probe`.
+// `k lsp [--stdlib dir]`, or `k lsp --probe`.
 inline int RunLsp(const string &exe, const vector<string> &args) {
     string stdlib;
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "--probe") {
-            printf("klang lsp %s\n", LSP_VERSION);
+            printf("k lsp %s\n", LSP_VERSION);
             return 0;
         }
         if (args[i] == "--stdlib" && i + 1 < args.size()) {
@@ -267,7 +267,7 @@ inline int RunLsp(const string &exe, const vector<string> &args) {
         // The one transport there is, which clients (vscode-languageclient
         // among them) name when they start a server on stdio.
         if (args[i] == "--stdio") continue;
-        fprintf(stderr, "klang lsp takes --probe, --stdio or --stdlib dir, not %s\n", args[i].c_str());
+        fprintf(stderr, "k lsp takes --probe, --stdio or --stdlib dir, not %s\n", args[i].c_str());
         return 1;
     }
     SetBinaryStdio();

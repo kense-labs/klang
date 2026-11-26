@@ -10,7 +10,7 @@
 // and lands the message at the one place that reports it.
 //
 // Build and run (from this directory):
-//   klang -o calc.c 17_calc.k && cl calc.c && calc < data/calc.stdin
+//   k -o calc.c 17_calc.k && cl calc.c && calc < data/calc.stdin
 // or run it without redirection and type expressions at the prompt.
 
 import std;

@@ -1,0 +1,7 @@
+// Adapted for K.
+// The gfx package's native part: SDL3 and the C layers behind gfx, audio
+// and ui, one CMake project (CMakeLists.txt beside this file) whose target
+// k_gfx_package carries all three; their functions run on the main
+// thread only.
+cmake_target = "k_gfx_package";
+main_thread_only = true;

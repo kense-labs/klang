@@ -4,7 +4,7 @@
 const SMALL: u8 = 7;
 let BIG = 1 << 40;
 let HALF = 0.5;
-let NAME = "goose";
+let NAME = "stone";
 let ON = true;
 type Text = const u8[:];
 struct Pair<T> { a: T, b: T }
@@ -41,7 +41,7 @@ fn main() {
         else { print("a"); }
     }
     const if ON && !false { print("on"); }
-    const if ON == true && (NAME == "goose" || 1 > 2) { print("combined"); }
+    const if ON == true && (NAME == "stone" || 1 > 2) { print("combined"); }
     const if !(ON || SMALL == 0) { print("never"); } else { print("else"); }
     const for <N, A> in fields<Pair<i64>> { const if N == "b" { print("found ", N); } }
     const for <N1, V1> in variants<Shape> {

@@ -1,4 +1,4 @@
-// runtime-define: GS_STACK_BUDGET=4294967296
+// runtime-define: K_STACK_BUDGET=4294967296
 // hardware_threads() reports no more workers than the data stack address
 // space budget holds beside the main program (§11.2), and at least one. A
 // 4 GB budget holds two regions at the default reservation, fewer than any

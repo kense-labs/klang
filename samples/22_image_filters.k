@@ -7,7 +7,7 @@
 // C backend sees the same loop it would see from C.
 //
 // Build and run (from this directory):
-//   klang -o image_filters.c 22_image_filters.k && cl image_filters.c && image_filters
+//   k -o image_filters.c 22_image_filters.k && cl image_filters.c && image_filters
 
 import std;
 import math;

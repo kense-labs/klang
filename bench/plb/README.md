@@ -40,7 +40,7 @@ python bench/plb/plb.py report --markdown          # the table below
 
 Everything is built the way PLB builds C, with clang `-O3 -march=broadwell
 -fomit-frame-pointer`. This includes the generated K C, so its
-`simd fn`s are capped at AVX2 like the references (`--cflags=-DGS_SIMD=2`
+`simd fn`s are capped at AVX2 like the references (`--cflags=-DK_SIMD=2`
 lets them use AVX-512). Rust uses PLB's Cargo profile and dependencies (LTO,
 one codegen unit, `-Ctarget-cpu=broadwell`). On Windows the C and C++
 references are built with a few POSIX shims (`winshim/`); C's nbody/5.c
@@ -182,7 +182,7 @@ In the compiler, runtime and library, while writing these programs:
   and the pattern is lost. The bignum programs declare the function
   `recursive` to keep it out of line.
 * **A loop-invariant divisor** gets its reciprocal precomputed before the
-  loop (`gs_divu_gen`, a 128/64-bit division) even where the loop runs about
+  loop (`k_divu_gen`, a 128/64-bit division) even where the loop runs about
   once per entry, and a u32 divisor gets a 64-bit reciprocal. In
   coro-prime-sieve this took 138 ms instead of 31.
 * **Bounds checks kept** in an inner loop over a slice made inside the outer

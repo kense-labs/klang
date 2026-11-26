@@ -29,39 +29,39 @@ K's model, in the parts that a candidate can share or lack:
    Each stack is a large address-space reservation that is committed on
    touch, with a bump pointer and a guard gap. Values are pushed in lifetime
    order and popped en masse at scope exit
-   ([spec §1.2](../klang_spec.md#12-memory-model),
-   [§10.4](../klang_spec.md#104-runtime-environment)).
+   ([spec §1.2](../k_spec.md#12-memory-model),
+   [§10.4](../k_spec.md#104-runtime-environment)).
 2. **One growable value per stack, on top.** At most one resizable value is
    live per stack and it is always the topmost, so growth is a pointer bump,
    nothing moves, and interior references stay valid across growth
-   ([§1.3](../klang_spec.md#13-the-stack-invariant)).
+   ([§1.3](../k_spec.md#13-the-stack-invariant)).
 3. **N is a compile-time constant.** The whole-program compiler assigns each
    growable local a stack index. Values that are live at the same time get
    distinct stacks, and values that are live one after the other can share
    a stack. This works like register allocation, with stacks in place of
    registers
-   ([§10.3](../klang_spec.md#103-stack-assignment-deterministic-recipe)).
+   ([§10.3](../k_spec.md#103-stack-assignment-deterministic-recipe)).
 4. **Static, annotation-free safety.** Every reference has a compile-time
    root: the variable that bounds its target's lifetime. A reference may not
    outlive its root, a store is checked by scope nesting, and functions are
    specialized per root instead of taking lifetime parameters
-   ([§9.1](../klang_spec.md#91-the-outlives-rule),
-   [§9.2](../klang_spec.md#92-roots-and-the-depth-check),
-   [§10.2](../klang_spec.md#102-monomorphization)). An array shrinks only
+   ([§9.1](../k_spec.md#91-the-outlives-rule),
+   [§9.2](../k_spec.md#92-roots-and-the-depth-check),
+   [§10.2](../k_spec.md#102-monomorphization)). An array shrinks only
    where the compiler can tell that nothing refers into it
-   ([§5](../klang_spec.md#5-the-resizableshrink-rules)).
+   ([§5](../k_spec.md#5-the-resizableshrink-rules)).
 5. **Results built at their destination.** A variable-size result is
    constructed on the stack of the value that receives it, through any depth
    of calls, and the destination stack is known to the callee
-   ([§4.3](../klang_spec.md#43-the-in-place-construction-guarantee),
-   [§7.3](../klang_spec.md#73-return-values-and-result-placement)).
+   ([§4.3](../k_spec.md#43-the-in-place-construction-guarantee),
+   [§7.3](../k_spec.md#73-return-values-and-result-placement)).
 6. **Nested data inline.** An array of strings is one contiguous block, and a
    struct may end in one growable tail
-   ([§3.3](../klang_spec.md#33-the-array-family),
-   [§3.4](../klang_spec.md#34-placement-rules-what-may-contain-what)).
+   ([§3.3](../k_spec.md#33-the-array-family),
+   [§3.4](../k_spec.md#34-placement-rules-what-may-contain-what)).
 7. **Recursion keeps N constant.** No growable local may be in scope across
    a call into a recursive cycle, so recursion costs native stack only
-   ([§7.8](../klang_spec.md#78-recursion)).
+   ([§7.8](../k_spec.md#78-recursion)).
 
 The same three questions are asked of each candidate. Is its region a
 contiguous stack whose top value grows in place with stable interior
@@ -385,7 +385,7 @@ en masse, but none of them uses its stacks the way K uses its data stacks.
   valid ([IBM PL/I language
   reference](https://www.ibm.com/docs/SSY2V3_5.3.0/lr/ofda.html)). This is
   a precedent only for K's pool-relative references
-  ([§3.9](../klang_spec.md#39-relative-references)); areas are not stacks.
+  ([§3.9](../k_spec.md#39-relative-references)); areas are not stacks.
 
 ## 4. Relatives of the lifetime rule
 

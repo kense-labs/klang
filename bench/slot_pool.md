@@ -38,14 +38,14 @@ cycles.
 ## Reproduce
 
 ```text
-python bench/slot_pool.py --exe build-root/Release/klang.exe --levels 1 2 --calls natural --widths 1 16 --compilers clang tcc jit --reps 7 --warmups 2 --cpus 16-31 --out build-root/review-final-slot
+python bench/slot_pool.py --exe build-root/Release/k.exe --levels 1 2 --calls natural --widths 1 16 --compilers clang tcc jit --reps 7 --warmups 2 --cpus 16-31 --out build-root/review-final-slot
 ```
 
 The harness saves K/C snapshots, logs, checksums, compiler and library
 fingerprints, sizes and all samples under `--out`. The checked-in
 [current results](slot_pool_results.json) contain this matrix. `--levels 0`
 is also supported. `--calls natural` leaves the emitted C unchanged;
-`boundary` adds `GS_NOINLINE` to the native `exercise` function, while `inline`
+`boundary` adds `K_NOINLINE` to the native `exercise` function, while `inline`
 requests inlining. JIT always uses the compiler's unmodified output. TinyCC is
 discovered beside the K build or on PATH. MSVC is available via
 `--compilers msvc`; timings here use Clang, standalone TinyCC and the JIT.

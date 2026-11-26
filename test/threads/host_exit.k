@@ -1,6 +1,6 @@
 // A library for the C host test/threads/host_exit.c (run_tests.py's
-// host_exit task): the host starts it with klang_init, calls its exports,
-// ends it with klang_exit and starts it again, each start running main over
+// host_exit task): the host starts it with k_init, calls its exports,
+// ends it with k_exit and starts it again, each start running main over
 // fresh globals and an empty queue; and once ends it while a worker still
 // runs, which is a runtime error. As a fixture, main runs once.
 
@@ -20,7 +20,7 @@ thread_fn parked() {
 export fn bump() -> i64 {
     calls += 1;
     seen.push(calls);
-    qput(Note { n: calls });    // left in the queue, for klang_exit to free
+    qput(Note { n: calls });    // left in the queue, for k_exit to free
     return calls;
 }
 

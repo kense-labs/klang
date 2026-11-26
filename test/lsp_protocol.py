@@ -1,4 +1,4 @@
-"""The language server, `klang lsp` (docs/design/language_server.md), driven
+"""The language server, `k lsp` (docs/design/language_server.md), driven
 over its own protocol: a client of this runner's starts it on a pipe,
 initializes with test/lsp/basics.k as its entry file, opens it, waits
 for its diagnostics, and asks what its `// lsp:` lines say to ask, comparing
@@ -11,7 +11,7 @@ for their diagnostics and asking their queries; opens and closes
 roots_lib.k and the roots_app fixtures importing it as roots come and
 go; and closes the entry file while helper.k, which only it reached,
 stays open. It formats documents that are open and not saved: the edits
-must turn the text into what `klang format` writes, change only the lines
+must turn the text into what `k format` writes, change only the lines
 that change, and be none for a formatted document; a document that does
 not parse, or one not open, gets null. A second client, with two_a.k and two_b.k as its entry
 files, renames a function both import and finds its references and callers
@@ -146,10 +146,10 @@ class Client:
 
 
 def check_builtin_docs_sync(repo):
-    """Checks src/builtins.h builtindocs against docs/reference.md and docs/klang_spec.md §12."""
+    """Checks src/builtins.h builtindocs against docs/reference.md and docs/k_spec.md §12."""
     builtins_text = (repo / "src" / "builtins.h").read_text(encoding="utf-8")
     ref_text = (repo / "docs" / "reference.md").read_text(encoding="utf-8")
-    spec_text = (repo / "docs" / "klang_spec.md").read_text(encoding="utf-8")
+    spec_text = (repo / "docs" / "k_spec.md").read_text(encoding="utf-8")
 
     m_macro = re.search(r"#define BUILTINS\s*\\\n(.*?)\n\nenum BuiltinKind", builtins_text, re.S)
     if not m_macro:
@@ -310,7 +310,7 @@ def check_builtin_docs_sync(repo):
     if set(canonical) != set(cpp_docs):
         raise RuntimeError(f"reference.md tables vs builtins.h mismatch: {set(canonical) ^ set(cpp_docs)}")
     if set(spec_all) != set(cpp_docs):
-        raise RuntimeError(f"klang_spec.md §12 vs builtins.h mismatch: {set(spec_all) ^ set(cpp_docs)}")
+        raise RuntimeError(f"k_spec.md §12 vs builtins.h mismatch: {set(spec_all) ^ set(cpp_docs)}")
 
     # Parameters whose runtime acceptance is polymorphic / CheckByteOut and must stay untyped.
     must_be_untyped = {
@@ -349,13 +349,13 @@ def check_builtin_docs_sync(repo):
         norm_c_untyped = normalize_doc_forms(name, c_forms, strip_types=True)
         norm_s_untyped = normalize_doc_forms(name, s_forms, strip_types=True)
         if norm_s_untyped != norm_c_untyped:
-            raise RuntimeError(f"builtin spec drift for {name}:\n  builtins.h:   {norm_c_untyped}\n  klang_spec:   {norm_s_untyped}")
+            raise RuntimeError(f"builtin spec drift for {name}:\n  builtins.h:   {norm_c_untyped}\n  k_spec:   {norm_s_untyped}")
         if name != "embed_shader":
             norm_r_untyped = normalize_doc_forms(name, r_forms, strip_types=True, spec_fallback=spec_ret_only)
             if norm_r_untyped != norm_c_untyped:
                 raise RuntimeError(f"builtin reference drift for {name}:\n  builtins.h:   {norm_c_untyped}\n  reference.md: {norm_r_untyped}")
         # Whenever reference.md or spec states a parameter type (e.g. abort(msg: u8[:]), exit(code: i64), from_bytes(b: u8[:])), verify exact match.
-        for doc_src, d_forms in (("reference.md", r_forms), ("klang_spec.md", s_forms)):
+        for doc_src, d_forms in (("reference.md", r_forms), ("k_spec.md", s_forms)):
             for d_ty, d_params, _ in d_forms:
                 for c_ty, c_params, _ in c_forms:
                     if len(d_params) == len(c_params):
@@ -369,8 +369,8 @@ def check_lsp_protocol(exe, base):
     base = Path(base).resolve()
     base.mkdir(parents=True, exist_ok=True)
     code, out, err = tc.run_capture([exe, "lsp", "--probe"])
-    if code != 0 or not out.startswith("klang lsp 3."):
-        raise RuntimeError(f"klang lsp --probe (exit {code}):\n{out}{err}")
+    if code != 0 or not out.startswith("k lsp 3."):
+        raise RuntimeError(f"k lsp --probe (exit {code}):\n{out}{err}")
     fixtures = HERE / "lsp"
     main = fixtures / "basics.k"
     helper = fixtures / "helper.k"
@@ -733,7 +733,7 @@ def check_lsp_protocol(exe, base):
     queries(pools, ptext, open_fixture(pools, ptext))
     # Generic functions nothing calls, which the server checks as exemplars:
     # the queries answer from them, and one whose body no binding could make
-    # right reports nothing, as `klang check` does not (its errors_tc
+    # right reports nothing, as `k check` does not (its errors_tc
     # recovery fixture, whose one error is main's).
     for exemplar in (fixtures / "exemplar.k",
                      HERE / "errors_tc" / "recovery" / "exemplar_unchecked.k"):
@@ -849,7 +849,7 @@ def check_lsp_protocol(exe, base):
     client.send("exit", request=False)
     code = client.p.wait(timeout=30)
     if code != 0:
-        raise RuntimeError(f"klang lsp exited with {code}:\n{tc.decode(client.p.stderr.read())}")
+        raise RuntimeError(f"k lsp exited with {code}:\n{tc.decode(client.p.stderr.read())}")
 
     # Two programs importing one module, both entry files of a client of
     # their own (docs/design/language_server.md §10): the module's twice is
@@ -939,7 +939,7 @@ def check_lsp_protocol(exe, base):
     two.send("exit", request=False)
     code = two.p.wait(timeout=30)
     if code != 0:
-        raise RuntimeError(f"klang lsp exited with {code}:\n{tc.decode(two.p.stderr.read())}")
+        raise RuntimeError(f"k lsp exited with {code}:\n{tc.decode(two.p.stderr.read())}")
     check_buffer_imports(exe, base / "buffer_imports")
     check_position_encodings(exe, fixtures, fail)
 
@@ -1081,4 +1081,4 @@ def check_position_encodings(exe, fixtures, fail):
         client.send("exit", request=False)
         code = client.p.wait(timeout=30)
         if code != 0:
-            raise RuntimeError(f"klang lsp exited with {code}:\n{tc.decode(client.p.stderr.read())}")
+            raise RuntimeError(f"k lsp exited with {code}:\n{tc.decode(client.p.stderr.read())}")

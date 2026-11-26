@@ -35,7 +35,7 @@ static Result_g native_result(void) {
     return result;
 }
 /* Elements of a resizable of structs, appended at its stack top. */
-static void native_push(gs_rref out, int16_t a, int16_t b) {
+static void native_push(k_rref out, int16_t a, int16_t b) {
     Input_g v;
     v.values_g.e[0] = a;
     v.values_g.e[1] = b;
@@ -113,7 +113,7 @@ static int64_t adapter_length(sl_f64 values) { return values.len; }
             path = "platform.h" if p == platform else "missing.h"
             sidecar += f'c_headers_{p} = ["{path}"];\n'
         tc.write_text(root / "app.build", sidecar)
-        env = dict(os.environ, KLANG_HOME=str(root / "home"))
+        env = dict(os.environ, K_HOME=str(root / "home"))
 
         def expect(command, want=None, *, no_toolchain=False):
             runenv = dict(env, PATH="", CC="", CXX="") if no_toolchain else env

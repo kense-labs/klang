@@ -12,7 +12,7 @@
 // back to the top.
 //
 // Build and run (from this directory):
-//   klang -o json.c 18_json.k && cl json.c && json [file.json]
+//   k -o json.c 18_json.k && cl json.c && json [file.json]
 
 import std;
 import os;

@@ -7,12 +7,12 @@ data/<name>.args as its arguments, and a sample's C header (<name>.h, see
 call_c) is passed with --include. Timings and machine-dependent facts go to
 stderr, which is not compared.
 
-The baseline profile builds each sample as a user does, with `klang build`,
+The baseline profile builds each sample as a user does, with `k build`,
 which finds the C compiler and the packages' link inputs itself; the sanitize
 profile drives the C compiler here, with the sanitizers' flags. A sample
-importing gfx draws off screen here (GOOSE_GFX_HEADLESS), and a sample
+importing gfx draws off screen here (K_GFX_HEADLESS), and a sample
 importing audio, gfx, physics or ui is skipped where the compiler was built
-without that package (`klang toolchain` says), or, for gfx, where the machine
+without that package (`k toolchain` says), or, for gfx, where the machine
 has no GPU device.
 
 Every sample also runs a second way, in JIT mode -- built and run inside the
@@ -75,9 +75,9 @@ def main():
         ap.error("the sanitize profile requires Linux and Clang")
 
     tc.setup_console()
-    os.environ["KLANG_HOME"] = str(tc.REPO_ROOT / "build" / "klang-home")
+    os.environ["K_HOME"] = str(tc.REPO_ROOT / "build" / "klang-home")
     # A windowed sample opens no window while it is being tested.
-    os.environ["GOOSE_GFX_HEADLESS"] = "1"
+    os.environ["K_GFX_HEADLESS"] = "1"
     exe = tc.find_klang(args.exe)
     cc = None if args.nocgen else tc.test_cc("clang" if args.profile == "sanitize" else args.cc)
     extra = tc.SANITIZER_FLAGS if args.profile == "sanitize" else ()

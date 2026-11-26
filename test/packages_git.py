@@ -1,7 +1,7 @@
 """Packages from git sources (docs/design/packages.md §4.6), offline: a bare
 repository this runner makes, declared by its file:// URL at a tag and at a
-commit, fetched into KLANG_HOME (which run_tests.py points under build/),
-fetched again by `klang fetch --update` after the tag moved, rejected under
+commit, fetched into K_HOME (which run_tests.py points under build/),
+fetched again by `k fetch --update` after the tag moved, rejected under
 `--offline` until fetched, and a library requiring the package at another ref
 than the root declares. Concurrent fetches share a cold cache, including a
 submodule and an abandoned checkout. A .. in a repository's path stays in the
@@ -20,9 +20,9 @@ def check_git_packages(exe, base, *, jit):
     git = shutil.which("git")
     if not git:
         return "no git on PATH"
-    home = os.environ.get("KLANG_HOME")
+    home = os.environ.get("K_HOME")
     if not home:
-        return "KLANG_HOME not set"
+        return "K_HOME not set"
 
     def rmtree(path):
         # A git checkout holds read-only files, which Windows will not
@@ -151,12 +151,12 @@ def check_git_packages(exe, base, *, jit):
             raise RuntimeError(f"{path.name}: unexpected warning:\n{err}")
 
     # Under --offline nothing is fetched: a package not in the cache is an
-    # error at its import, naming klang fetch; a fetched one is used.
+    # error at its import, naming k fetch; a fetched one is used.
     offline = subprocess.run([exe, "check", "--offline", use_tag], cwd=base, env=env,
                              capture_output=True, timeout=60)
     err = tc.decode(offline.stderr)
     if (offline.returncode != 1 or "use_tag.k:1: error: the package gitpkg from" not in err
-            or "is not fetched" not in err or "`klang fetch` fetches it" not in err or
+            or "is not fetched" not in err or "`k fetch` fetches it" not in err or
             tc.sanitizer_failure(err)):
         raise RuntimeError(f"expected --offline to reject the unfetched package "
                            f"(exit {offline.returncode}):\n{err}")
@@ -212,7 +212,7 @@ def check_git_packages(exe, base, *, jit):
     expect(use_tag, "5")
     out, err = klang("fetch", "--update", use_tag)
     if "updating the package gitpkg" not in err:
-        raise RuntimeError(f"klang fetch --update did not report the update:\n{out}{err}")
+        raise RuntimeError(f"k fetch --update did not report the update:\n{out}{err}")
     expect(use_tag, "6")
 
     # A fetched package's deprecated calls are its authors' to change; a

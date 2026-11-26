@@ -45,8 +45,8 @@ The benchmarks themselves are `bench/klang/*.k`, `bench/cpp/*.cpp` and
 | OS | Windows 11 10.0.26200 (AMD64) |
 | v145 | MSVC 19.51.36260 (toolset 14.51.36231), `/O2` (C++20 for the C++ rows) |
 | clang | clang-cl 22.1.3 (bundled with VS), `/O2` (C++20 for the C++ rows) |
-| K | `klang -O2` to C, then each toolchain above on that C |
-| K JIT | `klang -O2 --jit`: TinyCC in the compiler's own process, no C file |
+| K | `k -O2` to C, then each toolchain above on that C |
+| K JIT | `k -O2 --jit`: TinyCC in the compiler's own process, no C file |
 | Rust | rustc 1.98.0 (88d9e12ae 2026-08-18), `-O -C codegen-units=1` |
 
 Startup floor (an empty program, best of 5): K 13.1 ms / 7.8 MB, C++ 13.8 ms / 7.8 MB.
@@ -543,9 +543,9 @@ was rebuilt in Release from `f6d31d0e`, with the benchmark source changes in
 this refresh and no optional native packages:
 
 ```powershell
-cmake -S . -B build-bench-refresh -DKLANG_BUILTIN_LIBS=
+cmake -S . -B build-bench-refresh -DK_BUILTIN_LIBS=
 cmake --build build-bench-refresh --config Release --parallel 1 -- /nodeReuse:false
-python bench/run_bench.py --exe build-bench-refresh/Release/klang.exe
+python bench/run_bench.py --exe build-bench-refresh/Release/k.exe
 ```
 
 The default measurement policy is unchanged: two warm-ups, then the best

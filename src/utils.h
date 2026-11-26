@@ -18,7 +18,7 @@ inline void CatOne(string &s, double v) {
     // The spellings K programs print (§3.7), whatever the C library's.
     if (v != v) { s += "nan"; return; }
     if (std::isinf(v)) { s += v > 0 ? "inf" : "-inf"; return; }
-    // The runtime's text (gs_fmt_f64): the fewest significant digits that
+    // The runtime's text (k_fmt_f64): the fewest significant digits that
     // read back as v and the nearest of those, which to_chars finds as well,
     // laid out as %g lays them out at a precision of max(15, digits): in
     // exponent form below 1e-4 or from that power of ten up, else

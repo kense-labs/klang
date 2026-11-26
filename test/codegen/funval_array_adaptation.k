@@ -37,7 +37,7 @@ fn get_a() -> u8[4]& { ga }
 fn ints() -> i32[3] { return [10, 20, 30]; }
 fn words() -> u8[][>..] {
     var a: u8[][>..] = [];
-    a.push("goose");
+    a.push("stone");
     a.push("gander");
     return a;
 }

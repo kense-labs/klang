@@ -242,7 +242,7 @@ fn main() {
     print("null rect ", anywhere.x, " ", anywhere.y, " ", anywhere.w, " ", anywhere.h);
 
     // --- utilities ---
-    print("murmur ", ui::murmur_hash("goose", 0), " ", ui::murmur_hash("goose", 1), " ",
+    print("murmur ", ui::murmur_hash("stone", 0), " ", ui::murmur_hash("stone", 1), " ",
           ui::murmur_hash("", 0));
     let dirs: const u8[:][4] = ["up", "right", "down", "left"];
     for d in 4 {

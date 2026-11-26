@@ -8,7 +8,7 @@
 
 // Tree-sitter grammar for K (https://github.com/kense-labs/klang), after
 // the compiler's recursive-descent parser (src/parser.h in that repository)
-// and the spec's grammar sketch (docs/klang_spec.md, Appendix D).
+// and the spec's grammar sketch (docs/k_spec.md, Appendix D).
 //
 // The grammar is laxer than the compiler where laxness keeps it small
 // (declaration modifiers in any order, any expression as an assignment

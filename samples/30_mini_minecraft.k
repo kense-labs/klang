@@ -4,10 +4,10 @@
 // build a cabin and light it. This is a programming sample, not an engine:
 // a finite grid, a few plain structs, and one update/draw loop.
 //
-//   klang samples/30_mini_minecraft.k
-//   klang samples/30_mini_minecraft.k -- --seed 123
-//   klang samples/30_mini_minecraft.k -- --frames 120
-//   klang samples/30_mini_minecraft.k -- --test
+//   k samples/30_mini_minecraft.k
+//   k samples/30_mini_minecraft.k -- --seed 123
+//   k samples/30_mini_minecraft.k -- --frames 120
+//   k samples/30_mini_minecraft.k -- --test
 //
 // WASD walk; Space jump/swim up; Shift run; mouse or arrows look.
 // Ctrl sneaks slowly and stops at ledges; jumping releases that protection.

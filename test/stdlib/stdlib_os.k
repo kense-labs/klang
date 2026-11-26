@@ -3,7 +3,7 @@
 import os;
 
 fn main() {
-    let path = "gs_os_test_tmp.txt";
+    let path = "k_os_test_tmp.txt";
     print(write_file(path, "hello\nworld"));                    // true
     var buf: u8[>..] = [];
     print(read_file(path, buf), " ", buf.len, " ", buf);        // true 11 hello / world
@@ -20,7 +20,7 @@ fn main() {
     print(t1 >= t0);                                            // true
     print(time() > 1600000000.0);                               // true
     var e: u8[>..] = [];
-    print(env("KLANG_NO_SUCH_VAR_", e), " ", e.len);            // false 0
+    print(env("K_NO_SUCH_VAR_", e), " ", e.len);            // false 0
     sleep(0.0015);                                              // 1 ms: the fraction is dropped
     let seed = random_seed();
     print(seed == seed);                                        // true

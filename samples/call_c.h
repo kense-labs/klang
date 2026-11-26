@@ -7,7 +7,7 @@
    `extern fn` binds the C symbol the declaration gives. */
 #include <string.h>
 
-typedef struct { int32_t *data; int64_t len; } gs_call_c_sl_i32;
+typedef struct { int32_t *data; int64_t len; } k_call_c_sl_i32;
 
 /* CRC-32 (IEEE) over a byte slice. */
 static uint32_t crc32_bytes(sl_u8 s) {
@@ -34,7 +34,7 @@ static void stats_of(sl_i32 xs, Stats_g *out) {
 }
 
 /* Appends text to a K string builder: the way C hands bytes back. */
-static void c_version(gs_rref out) {
+static void c_version(k_rref out) {
     const char *s = "C library 1.0";
-    gs_bld_append(out, s, strlen(s));
+    k_bld_append(out, s, strlen(s));
 }

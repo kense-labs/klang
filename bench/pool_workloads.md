@@ -68,7 +68,7 @@ ports are retained; these measurements do not claim universal parity.
 
 Measured 2026-10-28, same machine and protocol (three copies, one warmup and
 three runs each, CPU 28, Clang 22.1.3 at LangArena's flags), after `slice_pool`
-moved its tree into the runtime (`gs_slice_pool_*`, the C `reusable[]` uses, in
+moved its tree into the runtime (`k_slice_pool_*`, the C `reusable[]` uses, in
 a copy that checks the `nodes` and `tree` fields it reads). Both sides are
 built by that compiler; the library side is the mechanical migration.
 
@@ -82,7 +82,7 @@ The gap is +10.1%, down from +27.4%, and the source stays on the builtin. The
 samples are in the raw results below, under `runtime_span_tree`:
 
 ```text
-python bench/pool_workloads.py --exe build/Release/klang.exe --arena C:/W/LangArena --kostya C:/W/kostya-benchmarks --out build/pool-apps-spans --construct-timer --only Etc::CacheSimulation --copies 3 --reps 3 --warmups 1 --cpus 28
+python bench/pool_workloads.py --exe build/Release/k.exe --arena C:/W/LangArena --kostya C:/W/kostya-benchmarks --out build/pool-apps-spans --construct-timer --only Etc::CacheSimulation --copies 3 --reps 3 --warmups 1 --cpus 28
 ```
 
 ### Where the gap is
@@ -166,9 +166,9 @@ measurement helpers; the K sources come from this repository. See the JSON
 for configuration/source hashes and exact compiler flags.
 
 ```text
-python bench/slot_pool_users.py --exe build-root/Release/klang.exe --baseline 94cc64da --out build-root/review-final-slot-users --copies 3 --reps 3 --warmups 1 --cpus 28
-python bench/pool_workloads.py --exe build-root/Release/klang.exe --arena C:/W/LangArena --kostya C:/W/kostya-benchmarks --out build-root/review-final-apps-measured --construct-timer --only Etc::CacheSimulation Graph::BFS kostya2/primes --copies 3 --reps 3 --warmups 1 --cpus 28
-python bench/pool_workloads.py --exe build-root/Release/klang.exe --arena C:/W/LangArena --kostya C:/W/kostya-benchmarks --out build-root/review-final-apps-measured --reuse-builds --results whole.json --only LangArena::All --copies 3 --reps 3 --warmups 1 --cpus 0-15
+python bench/slot_pool_users.py --exe build-root/Release/k.exe --baseline 94cc64da --out build-root/review-final-slot-users --copies 3 --reps 3 --warmups 1 --cpus 28
+python bench/pool_workloads.py --exe build-root/Release/k.exe --arena C:/W/LangArena --kostya C:/W/kostya-benchmarks --out build-root/review-final-apps-measured --construct-timer --only Etc::CacheSimulation Graph::BFS kostya2/primes --copies 3 --reps 3 --warmups 1 --cpus 28
+python bench/pool_workloads.py --exe build-root/Release/k.exe --arena C:/W/LangArena --kostya C:/W/kostya-benchmarks --out build-root/review-final-apps-measured --reuse-builds --results whole.json --only LangArena::All --copies 3 --reps 3 --warmups 1 --cpus 0-15
 ```
 
 Use `--whole-suite` to append the complete LangArena run to a selected set, or

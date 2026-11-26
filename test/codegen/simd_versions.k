@@ -2,7 +2,7 @@
 // instruction-set level, and the program runs the highest its CPU has;
 // elsewhere they are ordinary functions. Every version must print what the
 // baseline prints, which the runner checks by building this file with
-// clang at each level (GS_SIMD=0, 1, 2) beside the native and TinyCC runs.
+// clang at each level (K_SIMD=0, 1, 2) beside the native and TinyCC runs.
 // The loops are shapes clang vectorizes, every signature shape a version
 // forwards is here (slices, fat references, a nonfixed result and its
 // element-run twin, several results, captures, generics, recursion, an

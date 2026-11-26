@@ -27,7 +27,7 @@ fn show(dir: const u8[:]) {
 }
 
 fn main() {
-    let dir = "gs_os_dirs_tmp";
+    let dir = "k_os_dirs_tmp";
     clear(dir);
     print(is_dir(dir), " ", make_dir(dir), " ", make_dir(dir), " ", is_dir(dir));   // false true true true
     print(file_exists(dir));                                            // false: not a file

@@ -58,7 +58,7 @@ fn main() {
 }
 ```
 
-`"abc"` is a `u8[:]` into `static uint8_t gs_str0[3]`. `Box { s: "abc" }`
+`"abc"` is a `u8[:]` into `static uint8_t k_str0[3]`. `Box { s: "abc" }`
 stores it, and `box.s` reads it back. The read-back is writable by design:
 the *path* is writable (`box` is a `var`, `s` is not a `let` field), and the
 slice's own provenance has been lost. The write goes to the C static, which
@@ -148,7 +148,7 @@ restored when they exit. Saving at those points is what makes it sound: a
 per-literal save would be restored on a `continue` taken before the literal
 was reached, reading an unset base. That is a **pre-existing codegen bug**
 for ordinary locals, see §6. Recursion works because each activation's
-literal stack is one more `gs_sp + k` slot, which the spec allows:
+literal stack is one more `k_sp + k` slot, which the spec allows:
 "temporaries may consume slots proportional to depth" (§7.8).
 
 Variants considered:
@@ -262,8 +262,8 @@ that does spawn workers gathers the literals and thread-visible constants
 into a struct, and main's instance is the struct itself. The snapshot is one
 `malloc` + `memcpy` at startup, and each worker copies it at spawn
 (kilobytes, small next to reserving its stack block). Every access goes
-through the thread-local base `gs_st`, the same addressing every data-stack
-access already uses through `gs_stks`. Forcing the struct form on a
+through the thread-local base `k_st`, the same addressing every data-stack
+access already uses through `k_stks`. Forcing the struct form on a
 single-threaded program (`--per-program-statics`) is the worst case for that
 indirection. Even then, the literal micro-benchmark and the manifest
 benchmarks are within noise of the baseline (§5), and the threaded
@@ -273,7 +273,7 @@ the same time.
 **Implementation**: about 150 lines, all in codegen and the runtime; the
 typechecker only determines which globals are thread-visible constants.
 Constants with runtime initializers are
-initialized into main's copy by `gs_init_globals` before the snapshot, so a
+initialized into main's copy by `k_init_globals` before the snapshot, so a
 worker sees what main computed.
 
 ### Option 4 — `const` in the type, mutable by default
@@ -523,10 +523,10 @@ the worker's program uses, as `[size][image]` records (a resizable global's
 record is the queue image; a `reusable` pool's record carries its
 freelist). The worker reads and writes its own copies, and a worker's worker
 copies the worker's. A global whose type is not flat is an error in a thread
-program, as a non-flat argument is. Every access goes through `GS_GL->`. In
-a program without workers this is `(&gs_globals_main)`, a link-time
+program, as a non-flat argument is. Every access goes through `K_GL->`. In
+a program without workers this is `(&k_globals_main)`, a link-time
 constant, so the generated code is the same as before. In a program with
-workers it is the thread-local `gs_gl`, the addressing every data-stack
+workers it is the thread-local `k_gl`, the addressing every data-stack
 access already uses.
 
 With that, `let W = 78;` read by a worker is the worker's own `W`, whatever

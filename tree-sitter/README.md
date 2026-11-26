@@ -5,7 +5,7 @@ A [tree-sitter](https://tree-sitter.github.io/) grammar and highlight query for
 tree-sitter (Neovim, Helix, Zed, …).
 
 The grammar follows the compiler's recursive-descent parser (`src/parser.h`)
-and the spec's grammar sketch (`docs/klang_spec.md`, Appendix D). It is laxer
+and the spec's grammar sketch (`docs/k_spec.md`, Appendix D). It is laxer
 than the compiler in a few places to keep it small (declaration modifiers in any
 order, for example), but it should never reject a program the compiler accepts.
 

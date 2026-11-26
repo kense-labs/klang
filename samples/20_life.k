@@ -7,7 +7,7 @@
 // larger random grid for a while and counts what is left.
 //
 // Build and run (from this directory):
-//   klang -o life.c 20_life.k && cl life.c && life
+//   k -o life.c 20_life.k && cl life.c && life
 
 import std;
 

@@ -8,13 +8,13 @@ namespace klang {
 
 // ------------------------------------------------------------------
 // Per-specialization call interface. Signature shape (C.3 order):
-//   [declared params (resizable by-value ones add a gs_stack*)]
+//   [declared params (resizable by-value ones add a k_stack*)]
 //   [free-variable references, §7.5]
 //   [out-pointers for large fixed returns and additional small returns]
 //   [destination stacks for nonfixed returns]
-//   [int64_t gs_sp].
+//   [int64_t k_sp].
 // The C return value is the first small fixed return, else void; a `return ...
-// from` discriminant travels in the thread-local gs_rf, not the signature.
+// from` discriminant travels in the thread-local k_rf, not the signature.
 
 inline bool CodeGen::IsPoolParam(FnSpec *sp, size_t i) {
     return sp->roots[i].reusable && CarriesPool(sp->argtypes[i]);
@@ -283,15 +283,15 @@ inline void CodeGen::FindSplitRootParams() {
 }
 
 // The descriptor that v, a root reference, points at, where v is the address
-// of a variable's own (`&x`, `(&x)`, `&GS_GL->x`); otherwise "".
+// of a variable's own (`&x`, `(&x)`, `&K_GL->x`); otherwise "".
 inline string CodeGen::NamedRootDesc(const string &v) {
     string inner;
     if (v.size() > 3 && v.compare(0, 2, "(&") == 0 && v.back() == ')')
         inner = v.substr(2, v.size() - 3);
     else if (v.size() > 1 && v[0] == '&')
         inner = v.substr(1);
-    auto global = inner.compare(0, 7, "GS_GL->") == 0;
-    return IsCName(global ? inner.substr(7) : inner) ? inner : string();
+    constexpr string_view global = "K_GL->";
+    return IsCName(inner.starts_with(global) ? inner.substr(global.size()) : inner) ? inner : string();
 }
 
 // The members of the root descriptor that v, a reference to it, points at,
@@ -342,7 +342,7 @@ inline void CodeGen::CollectSpecs() {
     // Scan each finished body once. The call edges are local to this
     // analysis; only the summaries needed by emission survive it. Preserve
     // first-appearance order for captures, which fixes the C parameter order.
-    // A body needs gs_sp wherever codegen puts anything on an indexed stack
+    // A body needs k_sp wherever codegen puts anything on an indexed stack
     // (AllocStk): without it those indices count from 0, the outermost
     // callers' stacks, whose arrays may be growing meanwhile or have their
     // tops cached in locals. A node's type is the slot type the checker
@@ -368,7 +368,7 @@ inline void CodeGen::CollectSpecs() {
             if (auto id = Is<Ident>(n)) {
                 auto v = id->vdef;
                 // A global initializer's locals have no ownerspec: every spec
-                // naming one captures it, up to gs_init_globals, which declares it.
+                // naming one captures it, up to k_init_globals, which declares it.
                 if (v && v->ownerspec != sp && !v->isglobal && seen.insert(v).second)
                     si.freevars.push_back(v);
                 if (v && v->isglobal && v->type &&
@@ -491,9 +491,9 @@ inline void CodeGen::CollectSpecs() {
 // take `void *` whatever they are.
 inline vector<pair<string, string>> CodeGen::ParamFields(TypeExpr *t, bool pool) {
     if (pool)
-        return { { "gs_rhdr *", "hdr" }, { "gs_stack *", "stk" }, { "gs_rhdr *", "fl" },
-                 { "gs_stack *", "flstk" } };
-    if (IsFatRef(t)) return { { "gs_rhdr *", "hdr" }, { "gs_stack *", "stk" } };
+        return { { "k_rhdr *", "hdr" }, { "k_stack *", "stk" }, { "k_rhdr *", "fl" },
+                 { "k_stack *", "flstk" } };
+    if (IsFatRef(t)) return { { "k_rhdr *", "hdr" }, { "k_stack *", "stk" } };
     if (t->kind == TY_SLICE) return { { "void *", "data" }, { "int64_t ", "len" } };
     return {};
 }
@@ -509,7 +509,7 @@ inline void CodeGen::PushArg(vector<string> &args, TypeExpr *t, bool pool, const
     auto x = v;
     if (!IsCName(x)) {
         x = T();
-        L(pool ? string("gs_pref") : CT(t), " ", x, " = ", v, ";");
+        L(pool ? string("k_pref") : CT(t), " ", x, " = ", v, ";");
     }
     for (auto &f : fs) args.push_back(cat(x, ".", f.second));
 }
@@ -549,7 +549,7 @@ inline string CodeGen::SigParams(FnSpec *sp, bool decls, bool er) {
         auto pn = decls ? LocalName(vd) : cat("p", i);
         if (IsPoolParam(sp, i)) {
             EmitCoreTypes();
-            addval(pt, true, "gs_pref", pn);
+            addval(pt, true, "k_pref", pn);
         } else if (splitroots.count(vd)) {
             // The descriptor's members, each as ParamFields passes its type
             // (PushRootMembers), assigned to a local descriptor at entry.
@@ -575,7 +575,7 @@ inline string CodeGen::SigParams(FnSpec *sp, bool decls, bool er) {
             // plus its stack (C.3).
             EmitCoreTypes();
             add(cat(RzCT(pt), " ", pn));
-            add(cat("gs_stack *", pn, "_stk"));
+            add(cat("k_stack *", pn, "_stk"));
             if (decls) vstk[vd] = cat(pn, "_stk");
         } else if (IsBytesT(pt)) {
             add(cat("uint8_t *", pn));
@@ -598,11 +598,11 @@ inline string CodeGen::SigParams(FnSpec *sp, bool decls, bool er) {
         auto ft = fv->type;
         if (fv->reusable) {
             EmitCoreTypes();
-            addval(ft, true, "gs_pref", fn);
+            addval(ft, true, "k_pref", fn);
         } else if (IsResz(ft)) {
             EmitCoreTypes();
             add(cat(RzCT(ft), " *", fn));
-            add(cat("gs_stack *", fn, "_stk"));
+            add(cat("k_stack *", fn, "_stk"));
             if (decls) {
                 vstk[fv] = cat(fn, "_stk");
                 fvptr.insert(fv);
@@ -620,23 +620,23 @@ inline string CodeGen::SigParams(FnSpec *sp, bool decls, bool er) {
             // through the length out-parameter (C.3's element-run form —
             // always for resizables, on demand for variable arrays), or
             // the whole frame object through its out-parameter.
-            add(cat("gs_stack *gs_dst", i));
+            add(cat("k_stack *k_dst", i));
             if (IsResz(sp->rets[i]) && IsFrameObj(sp->rets[i]))
-                add(cat(CT(sp->rets[i]), " *gs_rl", i));
+                add(cat(CT(sp->rets[i]), " *k_rl", i));
             else
-                add(cat("gs_i64 *gs_rl", i));
+                add(cat("k_i64 *k_rl", i));
         } else if (IsBytesT(sp->rets[i])) {
-            add(cat("gs_stack *gs_dst", i));
+            add(cat("k_stack *k_dst", i));
         } else if ((int)i != si.cret) {
             // A PtrAbi result's destination is fresh (Dst::fresh), so this
             // pointer is restrict (see PtrAbi); one built at its location
             // (NeedsResultLocation) may be any variable, and is not.
             auto fresh = PtrAbi(sp->rets[i]) && !NeedsResultLocation(sp->rets[i]);
-            add(cat(CT(sp->rets[i]), fresh ? " *__restrict gs_r" : " *gs_r", i));
+            add(cat(CT(sp->rets[i]), fresh ? " *__restrict k_r" : " *k_r", i));
         }
     }
-    if (si.needssp) add("int64_t gs_sp");
-    if (si.located) add("const gs_loc *gs_at");
+    if (si.needssp) add("int64_t k_sp");
+    if (si.located) add("const k_loc *k_at");
     if (s.empty()) s = "void";
     return s;
 }
@@ -648,16 +648,17 @@ inline string CodeGen::SigRet(FnSpec *sp) {
 
 // The stacks of the classes PlanTopClasses admitted: each has a single
 // spelling then (see the note above toporder in codegen.h). A caller's stack
-// arriving as a plain `gs_stack *` parameter otherwise never does, and keeps
+// arriving as a plain `k_stack *` parameter otherwise never does, and keeps
 // the memory form.
 inline bool CodeGen::CacheableStk(const string &stk) {
     if (!cachetops) return false;
-    if (stk.compare(0, 3, "GS(") == 0) return topown;
+    if (stk.starts_with("K_STACK(")) return topown;
     if (gstkexprs.count(stk)) return topglob;
     if (reftops && refstkexprs.count(stk)) return true;
     if (topcap && capstkexprs.count(stk)) return true;
-    if (topdst && stk.compare(0, 6, "gs_dst") == 0 && stk.size() > 6) {
-        for (size_t i = 6; i < stk.size(); i++)
+    constexpr string_view dst = "k_dst";
+    if (topdst && stk.starts_with(dst) && stk.size() > dst.size()) {
+        for (auto i = dst.size(); i < stk.size(); i++)
             if (!isdigit((unsigned char)stk[i])) return false;
         return true;
     }
@@ -820,7 +821,7 @@ inline void CodeGen::NoteLen(const string &stk, const string &lenlv, const strin
 }
 
 // Whether `lenlv` is the count of a plain resizable header spelled one way
-// -- a reference parameter's `p.hdr->len`, a global's `GS_GL->g.len`, a
+// -- a reference parameter's `p.hdr->len`, a global's `K_GL->g.len`, a
 // captured one's `(*v).len` -- and the header's spelling, which any other
 // mention of it shares. A frame object's tail has others (the whole object
 // copied), and a local's header is the C compiler's to keep in registers.
@@ -840,7 +841,8 @@ inline bool CodeGen::LenRoot(const string &lenlv, string &root) {
         root = lenlv.substr(0, n - 5);
         return true;
     }
-    if (lenlv.compare(0, 7, "GS_GL->") == 0 && ends(".len") && ident(7, n - 4)) {
+    constexpr string_view global = "K_GL->";
+    if (lenlv.starts_with(global) && ends(".len") && ident(global.size(), n - 4)) {
         root = lenlv.substr(0, n - 4);
         return true;
     }
@@ -1138,7 +1140,7 @@ inline string CodeGen::PoolBase(const VarDef *pool) {
     auto stem = pool->componentowner
         ? cat(Sanitize(pool->componentowner->name), "_", pool->componentfield)
         : Sanitize(pool->name);
-    auto name = Unique2(cat("gs_pb_", stem));
+    auto name = Unique2(cat("k_pb_", stem));
     poolbases.push_back({ pool, name });
     return name;
 }
@@ -1155,7 +1157,7 @@ inline string CodeGen::LocalName(VarDef *vd) {
     auto it = vnames.find(vd);
     if (it != vnames.end()) return it->second;
     if (vd->componentowner)
-        return vnames[vd] = Unique2(cat("gs_component_", Sanitize(vd->componentowner->name),
+        return vnames[vd] = Unique2(cat("k_component_", Sanitize(vd->componentowner->name),
                                        "_", vd->componentfield));
     return vnames[vd] = Unique2(Sanitize(vd->name));
 }

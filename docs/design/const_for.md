@@ -11,10 +11,8 @@ small set of structural sequences and specializes a source fragment once per
 entry. Libraries choose the resulting functions' names, signatures, callbacks,
 and runtime behavior.
 
-The motivating discussion is [issue #35](https://github.com/aardappel/goose/issues/35),
-which proposes field visitation to prevent handwritten field lists from
-silently falling behind their struct declarations. The direct builtin in
-[PR #36](https://github.com/aardappel/goose/pull/36) is an alternative design.
+Field visitation keeps handwritten field lists in sync with their struct
+declarations.
 
 ## 1. Scope and cost model
 
@@ -464,7 +462,7 @@ fields or `varint` fields in violation of their construction-only rules.
 ## 7. Compiler integration
 
 The compiler already checks generic functions at concrete specializations
-([specification sections 7.7 and 10](../klang_spec.md)). Expansion belongs at
+([specification sections 7.7 and 10](../k_spec.md)). Expansion belongs at
 that boundary rather than in a source-text preprocessing pass.
 
 1. Parse `const for` into an expansion node with binders, a source description,
@@ -621,8 +619,7 @@ small, closed source language, fragments of the enclosing syntactic
 category, ordinary runtime code inside, and no fallback to runtime behavior
 when something is not constant.
 
-The motivating request is [issue #200](https://github.com/aardappel/goose/issues/200).
-Honk, a web framework, validates JSON request bodies against plain K
+A web framework can validate JSON request bodies against plain K
 structs. A `fields<T>` expansion can read every field's value in `T { .. }`,
 but cannot tell `discount: f64 = 0.0` from `price: f64`, so it cannot tell a
 required field from an optional one. The answer is a compile-time predicate

@@ -18,23 +18,23 @@ described in [design/packages.md](design/packages.md).
 
 ## 1. Running and building
 
-`klang foo.k` (or `klang run foo.k`) compiles the program into the
+`k foo.k` (or `k run foo.k`) compiles the program into the
 compiler's own process and runs it there, with no C compiler and no build
-step. `klang build foo.k` makes an executable, `foo` or `foo.exe`,
+step. `k build foo.k` makes an executable, `foo` or `foo.exe`,
 beside the source, with a C compiler found on the machine:
 
 ```bash
-klang build foo.k && ./foo
-klang build --dry-run foo.k         # print the commands instead of running them
+k build foo.k && ./foo
+k build --dry-run foo.k         # print the commands instead of running them
 ```
 
-`klang toolchain` shows which C compiler a build uses, and `--cc clang`,
-`KLANG_CC` or `cc = "clang";` in `~/.klang/config` selects another. The
+`k toolchain` shows which C compiler a build uses, and `--cc clang`,
+`K_CC` or `cc = "clang";` in `~/.klang/config` selects another. The
 runtime and the C of each package are compiled once per C compiler, and an
 executable is linked with the native parts of the packages it uses. A run
 builds the same native parts into a library that it loads, unless the
 package is compiled into the compiler. Everything the compiler produces
-along the way goes under `~/.klang` (`KLANG_HOME` moves it,
+along the way goes under `~/.klang` (`K_HOME` moves it,
 [§5](#5-the-cache)).
 
 [The command line](command_line.md) describes the rest: every option of
@@ -53,11 +53,11 @@ import gfx;
 import physics;
 ```
 
-The first time, the compiler fetches the package from its repository at the
-pinned tag into `~/.klang/pkg`, builds its C with cmake and the C compiler,
-and keeps both. A compiler configured with
-`-DKLANG_BUILTIN_LIBS=all` has the blessed packages compiled in and runs
-such a program with nothing else installed; `klang toolchain` lists what is
+These packages ship with K. The first build resolves their native
+dependencies at pinned revisions, builds their C, and caches the results.
+A compiler configured with
+`-DK_BUILTIN_LIBS=all` has the blessed packages compiled in and runs
+such a program with nothing else installed; `k toolchain` lists what is
 built in.
 
 Any other package, or another version of a blessed one, is declared in the
@@ -74,7 +74,7 @@ import mylib from "../mylib";                      // a directory, used in place
 module `name.k`; its other modules are imported with
 `import name.other;`. A git source needs a ref after `@`. A tag or a commit
 pins the package. A branch does too, until
-`klang fetch --update program.k` fetches it again. A path is relative
+`k fetch --update program.k` fetches it again. A path is relative
 to the file that contains the import, and nothing is copied: you can edit
 the library and run the program.
 
@@ -88,7 +88,7 @@ it from a different source, that is an error. So a program's dependencies
 are flat, pinned and in one place, and a program contains only one version
 of each package.
 
-`klang fetch program.k` fetches everything the root declares, for a
+`k fetch program.k` fetches everything the root declares, for a
 later offline session, and `--offline` makes any command fetch nothing.
 When a tool that is needed is missing, the error
 names it: `git` to fetch, `cmake` for a package built with CMake, and a C
@@ -115,7 +115,7 @@ output = "foo";                                // the executable's name, if not 
 The file looks like K (`//` comments, `key = value;`, strings, `true`
 and `false`, `[lists]`), and every `c_*` key can take a `_windows`,
 `_linux` or `_macos` suffix for a part that applies to one platform only.
-`klang build` compiles and links that C; `klang run` builds it into a
+`k build` compiles and links that C; `k run` builds it into a
 library that the in-process run loads. Either way, an `extern fn` in the
 program can call it:
 
@@ -169,7 +169,7 @@ program's sidecar can override any of those names, with precedence determined
 separately for each platform. Mapping a name that no block declares is an error.
 
 A program that calls only these functions compiles and links no native code and
-can run with `klang run` without a C toolchain. The rest of this section covers
+can run with `k run` without a C toolchain. The rest of this section covers
 packages that compile their own C.
 
 A package can include headers in the program's generated C, so the C compiler
@@ -186,7 +186,7 @@ precede extern prototypes and function bodies. They can define `static inline`
 implementations of `extern fn` declarations without a separate object file
 or a command-line `--include`. Types from unimported modules are not available.
 Headers must compile with the selected backend, including TinyCC for
-`klang run`; a header-only package needs no external C toolchain for that mode.
+`k run`; a header-only package needs no external C toolchain for that mode.
 
 `c_headers` takes the same platform suffixes as the other `c_*` lists. Headers
 are included in list order: command-line `--include` entries, the program's
@@ -222,7 +222,7 @@ cloned with it. Either way, the native part is built once per C compiler
 under `~/.klang/build`, and a program links it statically.
 
 The functions that the package's `extern fn`s name must be defined by that
-C (or by the C library); the runtime's own `gs_os_*` functions and similar
+C (or by the C library); the runtime's own `k_os_*` functions and similar
 ones belong to the standard library. Every `.k` file under the package
 root belongs to the package, except files in a directory below the root
 that has a sidecar of its own (such as an example program with its own C),
@@ -241,16 +241,16 @@ repository of its own.
 Most values an `extern fn` passes have layouts that C can declare for
 itself, such as a slice as `{ data, len }` (spec §7.10). A builder
 (`T[>..]&`, such as `u8[>..]&`) is the exception: C appends to it through
-the runtime's `gs_rref`, and `klang.h` gives separately compiled C access to
-the runtime for this, along with `gs_bld_append` for bytes. The
+the runtime's `k_rref`, and `klang.h` gives separately compiled C access to
+the runtime for this, along with `k_bld_append` for bytes. The
 compiler puts that header on the include path of every native part,
 including the program's own and CMake targets, and rebuilds them all when
 the header changes:
 
 ```c
 #include "klang.h"
-void mylib_name(gs_rref out, int64_t id) {   /* extern fn mylib_name(out: u8[>..]&, id: i64); */
-    gs_bld_append(out, "item", 4);
+void mylib_name(k_rref out, int64_t id) {   /* extern fn mylib_name(out: u8[>..]&, id: i64); */
+    k_bld_append(out, "item", 4);
 }
 ```
 
@@ -303,7 +303,7 @@ fn main() {
 }
 ```
 
-`klang run app.k` prints `22 20`; `klang build app.k` builds the
+`k run app.k` prints `22 20`; `k build app.k` builds the
 same program with the native C compiler. Neither needs `--include` or a
 separately compiled `.c` file.
 
@@ -320,7 +320,7 @@ The `5` is the length of `mylib`, not an import-order number. For example,
 `goosimd::Bytes32` becomes `goosimd_Bytes32_g7`. A package's import path does
 not set these names; its `namespace` declaration does.
 
-Inspect the actual declarations with `klang -o app.c app.k`: the type
+Inspect the actual declarations with `k -o app.c app.k`: the type
 definitions appear before the adapter's `#include`, and extern prototypes
 follow it. This is especially useful for generic or composite types, whose
 names include their type arguments and may need collision suffixes. User

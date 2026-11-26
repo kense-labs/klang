@@ -67,8 +67,8 @@ fn alloc_index_with<T, F>(pool: slot_pool<T>&) -> i64 {
         # Direct field accesses expose that identity to native alias analysis.
         direct = c
         for field, num in [("items", 0), ("free_slots", 1)]:
-            for member, replacement in [("hdr", f"GS_GL->gs_component_pool_g_{num}."),
-                                         ("stk", f"GS_GL->gs_gstk_gs_component_pool_g_{num}.")]:
+            for member, replacement in [("hdr", f"K_GL->k_component_pool_g_{num}."),
+                                         ("stk", f"K_GL->k_gstk_k_component_pool_g_{num}.")]:
                 old = f"(*pool_g_2).{field}_g.{member}->"
                 assert old in direct
                 direct = direct.replace(old, replacement)
@@ -96,7 +96,7 @@ fn free_known_pool(i: i64) {
     # Only the recycled-index lookup in alloc_with loses its check. In the
     # library the public freelist does not establish that this index is valid.
     unchecked, count = re.subn(
-        r"GS_IDX\(\(int64_t\)\((t\d+)\), \((t\d+)\), gs_file[13], 32\)", r"(\1)", c)
+        r"K_IDX\(\(int64_t\)\((t\d+)\), \((t\d+)\), k_file[13], 32\)", r"(\1)", c)
     assert count == (3 if name == "lru_indices" else 2)
     result["unchecked_reuse"] = unchecked
     return result

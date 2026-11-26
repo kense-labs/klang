@@ -1,4 +1,4 @@
-# The klang command line
+# The k command line
 
 <details>
 <summary>Table of contents</summary>
@@ -8,7 +8,7 @@
 - [3. Building an executable](#3-building-an-executable)
 - [4. Checking a program](#4-checking-a-program)
 - [5. Options for run, build and check](#5-options-for-run-build-and-check)
-- [6. What klang prints](#6-what-klang-prints)
+- [6. What k prints](#6-what-k-prints)
 - [7. Packages](#7-packages)
 - [8. Writing the C yourself](#8-writing-the-c-yourself)
 - [9. Formatting](#9-formatting)
@@ -20,53 +20,53 @@
 
 </details>
 
-One executable, `klang`, is the compiler, the in-process runner, the build
+One executable, `k`, is the compiler, the in-process runner, the build
 tool, the package fetcher, the formatter and the language server. This page
-describes all of it. `klang help` prints a summary, and `klang help
+describes all of it. `k help` prints a summary, and `k help
 <command>` the options of one command. How a program uses libraries, and how
 to make one, is in [packages.md](packages.md).
 
 ## 1. Commands
 
 ```
-klang <command> file.k [options] [-- program args...]
-klang file.k [options] [-- program args...]
+k <command> file.k [options] [-- program args...]
+k file.k [options] [-- program args...]
 ```
 
 | Command | What it does |
 |---|---|
-| `klang run file.k` | Compile the program and run it in this process ([§2](#2-running-a-program)). `klang file.k` is the same. |
-| `klang build file.k` | Build an executable, or with `--shared` a shared library, using a C compiler on this machine ([§3](#3-building-an-executable)). |
-| `klang check file.k` | Parse and typecheck the program, and write and run nothing ([§4](#4-checking-a-program)). |
-| `klang fetch file.k` | Fetch the packages the program declares ([§7](#7-packages)). |
-| `klang format file.k\|dir...` | Rewrite files in the standard layout ([§9](#9-formatting)). |
-| `klang toolchain` | Report the C compiler, cmake and git found, and `KLANG_HOME` ([§11](#11-toolchain-version-help-and-completion)). |
-| `klang version` | Print the compiler's version and its runtime's. |
-| `klang lsp` | Serve an editor over the Language Server Protocol ([§10](#10-the-language-server)). |
-| `klang completion <shell>` | Print a completion script for bash, zsh, fish or PowerShell. |
-| `klang help [command]` | Print the help, on everything or on one command. |
+| `k run file.k` | Compile the program and run it in this process ([§2](#2-running-a-program)). `k file.k` is the same. |
+| `k build file.k` | Build an executable, or with `--shared` a shared library, using a C compiler on this machine ([§3](#3-building-an-executable)). |
+| `k check file.k` | Parse and typecheck the program, and write and run nothing ([§4](#4-checking-a-program)). |
+| `k fetch file.k` | Fetch the packages the program declares ([§7](#7-packages)). |
+| `k format file.k\|dir...` | Rewrite files in the standard layout ([§9](#9-formatting)). |
+| `k toolchain` | Report the C compiler, cmake and git found, and `K_HOME` ([§11](#11-toolchain-version-help-and-completion)). |
+| `k version` | Print the compiler's version and its runtime's. |
+| `k lsp` | Serve an editor over the Language Server Protocol ([§10](#10-the-language-server)). |
+| `k completion <shell>` | Print a completion script for bash, zsh, fish or PowerShell. |
+| `k help [command]` | Print the help, on everything or on one command. |
 
 The command comes first. A first argument that is not a command is read as
-an option or a file, so `klang file.k` runs the program. A first word
+an option or a file, so `k file.k` runs the program. A first word
 with no dot or slash in it, which is neither a command nor an existing
-file, is taken as a mistyped command: `klang biuld x.k` suggests
+file, is taken as a mistyped command: `k biuld x.k` suggests
 `build` and does nothing.
 
 Options may come before or after the file, in any order. Each command takes
 one program, its *root file*: the file that holds `main` and declares the
 program's packages. Everything after `--` belongs to the program being run.
 `--help` or `-h` anywhere before a `--` prints the help on the command given,
-and `klang --version` is `klang version`.
+and `k --version` is `k version`.
 
 ## 2. Running a program
 
 ```bash
-klang hello.k
-klang run hello.k -- input.txt --verbose
+k hello.k
+k run hello.k -- input.txt --verbose
 ```
 
-`klang run` compiles the program to C, compiles that C in memory with the
-TinyCC compiler built into `klang`, and runs it in the compiler's own
+`k run` compiles the program to C, compiles that C in memory with the
+TinyCC compiler built into `k`, and runs it in the compiler's own
 process. There is no build step and no file is written. On Windows nothing
 else is needed. On Linux the C library's headers are needed (`libc6-dev` or
 `glibc-devel`), and on macOS the SDK of the Xcode command line tools.
@@ -85,7 +85,7 @@ fn main() {
 }
 ```
 
-`klang run` exits with the program's exit code: 0 when `main` returns,
+`k run` exits with the program's exit code: 0 when `main` returns,
 the code given to `exit(code)`, and 1 when the program fails a check or
 calls `abort` (`klang runtime error: ...` on stderr). A program that does
 not compile also exits with 1, after its errors.
@@ -94,7 +94,7 @@ What a run cannot do, a build can:
 
 * A program that starts threads must be built. TinyCC cannot place the
   thread-local storage that each worker's data stacks are kept in, so
-  `klang run` refuses it.
+  `k run` refuses it.
 * TinyCC does not optimize, so a run is for trying things out, and
   timing is done on a build.
 * An `extern fn` that binds a C library function resolves in a run only
@@ -108,28 +108,28 @@ What a run cannot do, a build can:
   the working directory either way.
 
 A program whose packages have C of their own still runs this way. Packages
-compiled into `klang` (`klang toolchain` lists them) need nothing more. The
+compiled into `k` (`k toolchain` lists them) need nothing more. The
 C of any other package, and the program's own C named in its sidecar
 ([packages.md](packages.md#3-a-program-with-c-of-its-own)), is built into
 a shared library with a C compiler on the machine, once, and loaded into
 the run. `--cc` picks that compiler as it does for a build, and `-v` prints
 the commands that build it.
 
-`klang run` takes the options in [§5](#5-options-for-run-build-and-check).
-It takes no `-o`: the flag form `klang -o out.c` writes C instead
+`k run` takes the options in [§5](#5-options-for-run-build-and-check).
+It takes no `-o`: the flag form `k -o out.c` writes C instead
 ([§8](#8-writing-the-c-yourself)).
 
 ## 3. Building an executable
 
 ```bash
-klang build hello.k && ./hello
-klang build -o out/hello hello.k     # the executable elsewhere
-klang build --debug hello.k          # checked, with debug information
-klang build --dry-run hello.k        # print the commands and run none
-klang build --shared hello.k         # libhello.so/.dylib, or hello.dll
+k build hello.k && ./hello
+k build -o out/hello hello.k     # the executable elsewhere
+k build --debug hello.k          # checked, with debug information
+k build --dry-run hello.k        # print the commands and run none
+k build --shared hello.k         # libhello.so/.dylib, or hello.dll
 ```
 
-`klang build` writes the program's C, compiles it with a C compiler on the
+`k build` writes the program's C, compiles it with a C compiler on the
 machine, and links it with the runtime and the native parts of the packages
 the program uses. The executable goes beside the root file, named after it
 (`hello`, or `hello.exe` on Windows), unless `-o` or the sidecar's
@@ -139,8 +139,8 @@ is done.
 The C compiler is the first of these that names one:
 
 1. `--cc name|path`
-2. the `KLANG_CC` environment variable
-3. `cc = "clang";` in `KLANG_HOME/config` (`~/.klang/config`)
+2. the `K_CC` environment variable
+3. `cc = "clang";` in `K_HOME/config` (`~/.klang/config`)
 4. the first compiler found on the machine.
 
 A name is one of `msvc` (or `cl`), `clang-cl`, `clang`, `gcc` and `cc`, and
@@ -148,10 +148,10 @@ a path names the compiler's executable. Without a request, Windows looks for
 `cl` on `PATH` (as in a Developer Command Prompt), then `clang-cl` and
 `clang` in Visual Studio's LLVM or on `PATH`, then MSVC through Visual
 Studio's `vcvars64.bat`, then `gcc` and `cc` on `PATH`. Other systems look
-for `cc`, `gcc` and `clang` on `PATH`. `klang toolchain` shows which one a
+for `cc`, `gcc` and `clang` on `PATH`. `k toolchain` shows which one a
 build would use, and why. Setting up Visual Studio's environment takes a
-second or two, so `klang` keeps the result in `KLANG_HOME/toolchain` and
-`klang toolchain --refresh` sets it up again.
+second or two, so `k` keeps the result in `K_HOME/toolchain` and
+`k toolchain --refresh` sets it up again.
 
 The C is always compiled optimized (`/O2` or `-O2`), whatever `-O` level
 the K compiler used, except under `--debug`. The options of a build,
@@ -160,14 +160,14 @@ beyond those in [§5](#5-options-for-run-build-and-check):
 | Option | What it does |
 |---|---|
 | `-o exe` | Where the executable goes. Its directory is made if needed. |
-| `--debug` | Turn on the overflow, range and tag checks (`GS_DEBUG=1`), and build the C without optimization and with debug information (`/Od /Zi`, or `-O0 -g`), for a debugger. |
+| `--debug` | Turn on the overflow, range and tag checks (`K_DEBUG=1`), and build the C without optimization and with debug information (`/Od /Zi`, or `-O0 -g`), for a debugger. |
 | `--cc name\|path` | The C compiler, as above. |
 | `--standalone` | Compile the runtime into the program, rather than linking the runtime object built once per C compiler. |
-| `--shared` | Build a self-contained shared library (`lib<stem>.so`, `lib<stem>.dylib` or `<stem>.dll`) instead of an executable. The library has no C `main`; `klang_init`, `klang_exit` and the program's `export fn` symbols are its host API ([reference §24](reference.md#24-calling-c-and-being-called-from-c)). This implies `--standalone`; `--header out.h` ([§8](#8-writing-the-c-yourself)) writes the host's header too. |
+| `--shared` | Build a self-contained shared library (`lib<stem>.so`, `lib<stem>.dylib` or `<stem>.dll`) instead of an executable. The library has no C `main`; `k_init`, `k_exit` and the program's `export fn` symbols are its host API ([reference §24](reference.md#24-calling-c-and-being-called-from-c)). This implies `--standalone`; `--header out.h` ([§8](#8-writing-the-c-yourself)) writes the host's header too. |
 | `-v` | Print each command the build runs, and what it prints. |
 | `--dry-run` | Print the commands the build would run, with their paths, and run none of them. A Makefile or CMake project can take them from here. |
 
-Everything a build makes along the way goes under `KLANG_HOME`. The program's
+Everything a build makes along the way goes under `K_HOME`. The program's
 C, objects and logs go in `build/prog/<name>-<hash>/`, one directory per
 root file. The runtime object is compiled the first time a C compiler is
 used, once per compiler and per release or debug configuration, into
@@ -177,26 +177,26 @@ and what it printed, and says where the log is.
 ## 4. Checking a program
 
 ```bash
-klang check hello.k
+k check hello.k
 ```
 
-`klang check` parses and typechecks the program and everything it imports,
+`k check` parses and typechecks the program and everything it imports,
 including the lifetime and bounds checks the compiler makes, and writes and
 runs nothing. It prints nothing when the program is correct, and its errors
 and exit code 1 when it is not. It takes the options in
 [§5](#5-options-for-run-build-and-check). `--diagnostics json` gives an
-editor or another tool the errors as data ([§6](#6-what-klang-prints)), and
+editor or another tool the errors as data ([§6](#6-what-k-prints)), and
 with `--stacks` a check also reports the program's data stacks.
 
 ## 5. Options for run, build and check
 
-These options have the same meaning for `klang run`, `klang build`,
-`klang check` and the flag form `klang -o out.c`.
+These options have the same meaning for `k run`, `k build`,
+`k check` and the flag form `k -o out.c`.
 
 | Option | What it does |
 |---|---|
 | `-O0`, `-O1`, `-O2` | How much the K compiler inlines: nothing, a little, or the most (the default). Constant folding and propagation run at every level, and a build's C compiler optimizes at every level. |
-| `--debug` | Turn on the overflow checks, the range checks of `as` casts and the tag checks (`GS_DEBUG=1`). Each failure names its source line, and an overflow or a cast names the values involved. A build also gets debug information ([§3](#3-building-an-executable)). |
+| `--debug` | Turn on the overflow checks, the range checks of `as` casts and the tag checks (`K_DEBUG=1`). Each failure names its source line, and an overflow or a cast names the values involved. A build also gets debug information ([§3](#3-building-an-executable)). |
 | `-D NAME[=VALUE]` | Define a C macro in the generated program, as `-DNAME[=VALUE]` does too. The define is written into the C itself, so a run and a build see the same source. The value is 1 when none is given. |
 | `--stack-reserve size` | The address space reserved for each data stack, from 64K up to 256T with a `K`, `M`, `G` or `T` suffix. The default is 2G. The address space is committed as it is used, so a large reservation costs nothing until it is used. |
 | `--stacks` | Report how many data stacks the program and each of its workers use, what that adds up to, and the cap it puts on `hardware_threads()`. |
@@ -204,8 +204,8 @@ These options have the same meaning for `klang run`, `klang build`,
 | `--no-bce` | Keep every bounds check. The program's `checkfree` functions are then not verified, and the compiler warns about that. |
 | `--specs` | Print every specialization of each function, after optimization, as source. |
 | `--stats` | Print a few lines about what the compile did: the declarations parsed, the specializations and optimizations, the bounds checks removed, and the files written. |
-| `--color auto\|always\|never` | Whether errors and warnings are in color ([§6](#6-what-klang-prints)). |
-| `--diagnostics text\|json` | Print errors and warnings as text on stderr (the default), or as JSON on stdout ([§6](#6-what-klang-prints)). |
+| `--color auto\|always\|never` | Whether errors and warnings are in color ([§6](#6-what-k-prints)). |
+| `--diagnostics text\|json` | Print errors and warnings as text on stderr (the default), or as JSON on stdout ([§6](#6-what-k-prints)). |
 | `--offline` | Fetch nothing: a package that is not fetched yet is an error at its import ([§7](#7-packages)). |
 | `--update` | Fetch the packages declared at a tag or branch again ([§7](#7-packages)). |
 | `--stdlib dir` | Where the standard library is ([§12](#12-environment-and-files)). |
@@ -216,21 +216,21 @@ The `-D` macros that the runtime reads, which configure a program:
 
 | Macro | Default | What it sets |
 |---|---|---|
-| `GS_DEBUG` | 0 | 1 is what `--debug` sets: the overflow, range and tag checks. |
-| `GS_STACK_STATS` | 0 | 1 makes each thread program report its data stack use on stderr as it ends. |
-| `GS_STACK_RESERVE` | 2 GB | The address space reserved per data stack, which `--stack-reserve` sets. |
-| `GS_THREAD_STACK` | 8 MB | The native stack each worker thread reserves, where the system's default is less (512 KB on macOS, 1 MB on Windows). |
-| `GS_STACK_GAP` | 1 MB | The unmapped gap after each data stack, which makes runaway growth abort. |
-| `GS_STACK_BUDGET` | 32 TB | The address space all thread programs together are meant to take; `hardware_threads()` is capped at what it has room for. |
-| `GS_MAX_STACKS` | 1024 | The most data stacks one thread program may use. A program that needs more fails to compile. |
-| `GS_SIMD` | 2 | The highest CPU level for `simd` functions' versions under clang on x86-64: 0 or 1 lowers it. |
+| `K_DEBUG` | 0 | 1 is what `--debug` sets: the overflow, range and tag checks. |
+| `K_STACK_STATS` | 0 | 1 makes each thread program report its data stack use on stderr as it ends. |
+| `K_STACK_RESERVE` | 2 GB | The address space reserved per data stack, which `--stack-reserve` sets. |
+| `K_THREAD_STACK` | 8 MB | The native stack each worker thread reserves, where the system's default is less (512 KB on macOS, 1 MB on Windows). |
+| `K_STACK_GAP` | 1 MB | The unmapped gap after each data stack, which makes runaway growth abort. |
+| `K_STACK_BUDGET` | 32 TB | The address space all thread programs together are meant to take; `hardware_threads()` is capped at what it has room for. |
+| `K_MAX_STACKS` | 1024 | The most data stacks one thread program may use. A program that needs more fails to compile. |
+| `K_SIMD` | 2 | The highest CPU level for `simd` functions' versions under clang on x86-64: 0 or 1 lowers it. |
 
 A program that runs out of a data stack ends with a message that names
-`--stack-reserve`. `--stacks` and `-DGS_STACK_STATS=1` show how many stacks
+`--stack-reserve`. `--stacks` and `-DK_STACK_STATS=1` show how many stacks
 a program uses, and the [implementation
 notes](implementation.md#7-the-runtime) explain how they are reserved.
 
-## 6. What klang prints
+## 6. What k prints
 
 A run prints only what the program prints. A check that succeeds prints
 nothing, and a build prints only the `built` line. Errors and warnings go to
@@ -256,11 +256,11 @@ terminal, a live line below it shows what is running, for how long, and the
 last line the tool printed, and it is erased when the work is done. When
 stderr goes anywhere else (a file, a pipe, a CI log, an agent running the
 command), or `TERM` is `dumb`, there is no live line, only the one-line
-notes. `KLANG_PROGRESS=plain` or `KLANG_PROGRESS=live` overrides that
+notes. `K_PROGRESS=plain` or `K_PROGRESS=live` overrides that
 choice, and `-v` and `--dry-run` always use plain output.
 
 `--diagnostics json` prints the errors and warnings on stdout as a JSON
-array, after anything a run's program printed. What `klang` itself would
+array, after anything a run's program printed. What `k` itself would
 have printed on stdout, the `--stats` lines and a build's `built` line,
 goes to stderr instead. The exit code stays what it would be:
 
@@ -285,17 +285,17 @@ message and text only.
 ## 7. Packages
 
 A program that imports a package that has not been fetched yet fetches it
-with git into `KLANG_HOME/pkg` the first time it is run, built or checked,
+with git into `K_HOME/pkg` the first time it is run, built or checked,
 and builds the package's C there once per C compiler.
 [packages.md](packages.md) describes how a program declares its packages.
 
 ```bash
-klang fetch app.k               # fetch what app.k declares, and compile nothing
-klang fetch --update app.k      # fetch packages at a tag or a branch again
-klang run --offline app.k       # fetch nothing; a package not fetched is an error
+k fetch app.k               # fetch what app.k declares, and compile nothing
+k fetch --update app.k      # fetch packages at a tag or a branch again
+k run --offline app.k       # fetch nothing; a package not fetched is an error
 ```
 
-`klang fetch` makes a later session work without a network. A package
+`k fetch` makes a later session work without a network. A package
 pinned to a commit is never fetched again. One pinned to a tag or a branch
 is fetched again only with `--update`, which every command that compiles
 also takes. The language server never fetches anything.
@@ -303,45 +303,45 @@ also takes. The language server never fetches anything.
 When a tool that is needed is missing, the error names it: git to fetch,
 cmake for a package built with CMake, and a C compiler for any C code. A
 program that has no C of its own and uses no package with C needs none of
-them. Deleting `KLANG_HOME` loses nothing that a build cannot recreate
+them. Deleting `K_HOME` loses nothing that a build cannot recreate
 ([packages.md](packages.md#5-the-cache) shows what is in it).
 
 ## 8. Writing the C yourself
 
-`klang build` covers most needs, and `klang build --dry-run` shows the
+`k build` covers most needs, and `k build --dry-run` shows the
 commands it runs. To build the C in a build system of your own, or to link
 a K program into a C or C++ host, give the compiler an output file
 instead of a command:
 
 ```bash
-klang -o tour.c tour.k                    # the program's C
-klang --emit-runtime klang_runtime.c          # the runtime's C
-cc -O2 -c klang_runtime.c                     # once, with the programs' compiler and flags
-cc -O2 tour.c klang_runtime.o -o tour -lm -pthread
+k -o tour.c tour.k                    # the program's C
+k --emit-runtime k_runtime.c          # the runtime's C
+cc -O2 -c k_runtime.c                     # once, with the programs' compiler and flags
+cc -O2 tour.c k_runtime.o -o tour -lm -pthread
 ```
 
-On Windows the last two are `cl /O2 /c klang_runtime.c` and
-`cl /O2 tour.c klang_runtime.obj`. On Linux, add `-ldl` before glibc 2.34.
+On Windows the last two are `cl /O2 /c k_runtime.c` and
+`cl /O2 tour.c k_runtime.obj`. On Linux, add `-ldl` before glibc 2.34.
 
 `-o out.c` writes the program's C and runs nothing; `--jit` also runs the
-program in-process as `klang run` would. The C holds the program and the part
+program in-process as `k run` would. The C holds the program and the part
 of the runtime that is inlined into it. The rest of the runtime (the OS
 layer, the reservation of data stacks, threads and printing) is the C that
 `--emit-runtime` writes, which is compiled once and linked with every
 program. It takes no `-D` of its own, since a program hands the runtime its
 configuration as it starts. Build it with the same C compiler and flags as
 the programs. A program from another version of the compiler fails to link
-against it (`klang version` prints the runtime's hash, which must match).
+against it (`k version` prints the runtime's hash, which must match).
 
 | Option | What it does |
 |---|---|
 | `-o out.c` | Write the program's C, and do not run it. |
 | `--standalone` | Write C that holds the whole runtime, and builds on its own: `cc -O2 tour.c -o tour -lm -pthread`. |
-| `--header out.h` | Also write a header for a C host, declaring the program's `export fn`s, of which there must be one at least. The C then has no `main`: the host calls `klang_init(argc, argv)` once, which runs the program's `main`, and then calls the exported functions; `klang_exit()` ends the program, after which `klang_init` may start it again. |
+| `--header out.h` | Also write a header for a C host, declaring the program's `export fn`s, of which there must be one at least. The C then has no `main`: the host calls `k_init(argc, argv)` once, which runs the program's `main`, and then calls the exported functions; `k_exit()` ends the program, after which `k_init` may start it again. |
 | `--include header.h` | Have the generated C include this header, for small shims written against the generated types (spec §7.10). May be repeated. |
 | `--jit` | Also run the program in this process. |
 | `--emit-runtime out.c` | Write the runtime's C. |
-| `--<package>-link msvc\|cc` | Print the path of the response file that links the native part of a package compiled into `klang`, for the `msvc` or `cc` style of command line. |
+| `--<package>-link msvc\|cc` | Print the path of the response file that links the native part of a package compiled into `k`, for the `msvc` or `cc` style of command line. |
 
 The [tutorial](tutorial.md#19-calling-k-from-c) and the
 [reference](reference.md#export-fn) show a C host. All the options in
@@ -349,27 +349,27 @@ The [tutorial](tutorial.md#19-calling-k-from-c) and the
 them.
 
 A program that uses `audio`, `gfx`, `physics` or `ui` also links that
-package's native part. When the package is compiled into `klang`, its
+package's native part. When the package is compiled into `k`, its
 response file is part of the compiler's installation:
 
 ```bash
-cc -O2 cube.c klang_runtime.o -o cube @$(klang --gfx-link cc) -lm -pthread
+cc -O2 cube.c k_runtime.o -o cube @$(k --gfx-link cc) -lm -pthread
 ```
 
 A `ui` program puts the `ui` response file before the `gfx` one it draws
 through. For packages that are not compiled in, and for a program's own C,
-`klang build --dry-run` prints the commands that build each native part and
+`k build --dry-run` prints the commands that build each native part and
 the response file it makes.
 
 ## 9. Formatting
 
 ```bash
-klang format src/                  # rewrite every .k file under src/
-klang format --check .             # list the files that are not formatted
-klang format < in.k > out.k
+k format src/                  # rewrite every .k file under src/
+k format --check .             # list the files that are not formatted
+k format < in.k > out.k
 ```
 
-`klang format` rewrites each file in place in the standard layout: the
+`k format` rewrites each file in place in the standard layout: the
 indentation, the spaces between tokens, blank lines and trailing commas.
 Line breaks stay where they are. A directory stands for the `.k` files
 under it, except those in directories whose names start with a dot and in
@@ -386,23 +386,23 @@ to format on save.
 ## 10. The language server
 
 ```bash
-klang lsp
+k lsp
 ```
 
-`klang lsp` serves an editor over the Language Server Protocol on stdin
+`k lsp` serves an editor over the Language Server Protocol on stdin
 and stdout: diagnostics as files change, hover, go to definition,
 references and rename, symbols, semantic highlighting, signature help,
 completion, inlay hints, folding, code lenses and formatting. It analyzes
 the programs whose root files the editor names in its
 `initializationOptions` (`entryFiles`), and every open file that none of
 them imports. It never fetches a package: one that is not fetched yet is an
-error at its import, which `klang fetch` resolves.
+error at its import, which `k fetch` resolves.
 
 | Option | What it does |
 |---|---|
 | `--stdio` | Serve on stdin and stdout, as it does anyway. Clients pass it. |
 | `--stdlib dir` | Where the standard library is. |
-| `--probe` | Print the protocol version (`klang lsp 3.17`) and exit. |
+| `--probe` | Print the protocol version (`k lsp 3.17`) and exit. |
 
 The [VS Code extension](../vscode/README.md) starts the server itself;
 [editors.md](editors.md) has the configuration for Neovim, Helix and
@@ -410,57 +410,57 @@ Emacs, and the [design notes](design/language_server.md) the details.
 
 ## 11. toolchain, version, help and completion
 
-`klang toolchain` reports the C compiler a build would use (its name,
+`k toolchain` reports the C compiler a build would use (its name,
 version, path, the style of its command line and how it was found), its C++
-driver, cmake, git, the packages compiled into `klang`, and `KLANG_HOME`.
+driver, cmake, git, the packages compiled into `k`, and `K_HOME`.
 It exits with 1 when there is no C compiler. It takes `--cc` to look for a
 particular compiler, `--json` for a report as JSON, and `--refresh` to set
 up Visual Studio's environment again rather than take the one kept from
 last time.
 
-`klang version`, or `klang --version`, prints the compiler's version and
+`k version`, or `k --version`, prints the compiler's version and
 its runtime's: a hash of the runtime's text, which the runtime that
 `--emit-runtime` writes must match.
 
-`klang help` lists the commands and the common options; `klang help
-<command>` (or `klang <command> --help`) the options of one. `klang help c`
-covers writing the C yourself, and `klang help internals` the options in
-[§14](#14-options-for-working-on-the-compiler). `klang help --man` prints
-all of it as a man page, which a release ships as `man/klang.1`.
+`k help` lists the commands and the common options; `k help
+<command>` (or `k <command> --help`) the options of one. `k help c`
+covers writing the C yourself, and `k help internals` the options in
+[§14](#14-options-for-working-on-the-compiler). `k help --man` prints
+all of it as a man page, which a release ships as `man/k.1`.
 
-`klang completion bash` (or `zsh`, `fish`, `powershell`) prints a script
+`k completion bash` (or `zsh`, `fish`, `powershell`) prints a script
 that completes the commands, their options and `.k` files. To have it in
 every shell:
 
 ```bash
-klang completion bash > ~/.local/share/bash-completion/completions/klang
-klang completion zsh > "${fpath[1]}/_klang"
-klang completion fish > ~/.config/fish/completions/klang.fish
-klang completion powershell >> $PROFILE
+k completion bash > ~/.local/share/bash-completion/completions/k
+k completion zsh > "${fpath[1]}/_k"
+k completion fish > ~/.config/fish/completions/k.fish
+k completion powershell >> $PROFILE
 ```
 
-or, for the shell at hand, `source <(klang completion bash)`.
+or, for the shell at hand, `source <(k completion bash)`.
 
 ## 12. Environment and files
 
 | Variable | What it does |
 |---|---|
-| `KLANG_HOME` | Where fetched packages, build intermediates and settings go. The default is `~/.klang` (`%USERPROFILE%\.k` on Windows). |
-| `KLANG_CC` | The C compiler, where `--cc` is not given. |
-| `KLANG_STDLIB` | The standard library's directory, where `--stdlib` is not given. |
-| `KLANG_PROGRESS` | `plain` or `live`: how progress shows on stderr. |
+| `K_HOME` | Where fetched packages, build intermediates and settings go. The default is `~/.klang` (`%USERPROFILE%\.klang` on Windows). |
+| `K_CC` | The C compiler, where `--cc` is not given. |
+| `K_STDLIB` | The standard library's directory, where `--stdlib` is not given. |
+| `K_PROGRESS` | `plain` or `live`: how progress shows on stderr. |
 | `NO_COLOR` | Set and not empty: no color, unless `--color` says otherwise. |
 | `CLICOLOR_FORCE` | Set to anything but 0: color, even when stderr is not a terminal. |
-| `KLANG_TCCLIB` | Where TinyCC's headers and support library are, for a compiler moved away from both its installation and its build tree. |
+| `K_TCCLIB` | Where TinyCC's headers and support library are, for a compiler moved away from both its installation and its build tree. |
 
-Without `--stdlib` or `KLANG_STDLIB`, the compiler looks for the standard
+Without `--stdlib` or `K_STDLIB`, the compiler looks for the standard
 library in a `stdlib` directory beside its executable, then in the parent
 directories up to three levels above it, which finds a release's and a
 source tree's, then in the directory it was built to use (the `stdlib`
 of its source tree, wherever the build directory is, or where a package
-installs it, CMake's `KLANG_STDLIB_PATH`), and last in `./stdlib`.
+installs it, CMake's `K_STDLIB_PATH`), and last in `./stdlib`.
 
-`KLANG_HOME/config` holds settings that apply to every build. It is written
+`K_HOME/config` holds settings that apply to every build. It is written
 like a sidecar, and its one setting is the C compiler:
 
 <!-- fragment -->
@@ -472,7 +472,7 @@ cc = "clang";
 A program's *sidecar*, `foo.build` beside `foo.k`, names the program's
 own C, the libraries it links and the executable's name
 ([packages.md](packages.md#3-a-program-with-c-of-its-own)). The cache under
-`KLANG_HOME` is described in [packages.md](packages.md#5-the-cache).
+`K_HOME` is described in [packages.md](packages.md#5-the-cache).
 
 ## 13. Exit status
 
@@ -487,26 +487,26 @@ own C, the libraries it links and the executable's name
 ## 14. Options for working on the compiler
 
 These look into what the compiler does, and serve its test suite
-([testing.md](testing.md)). `klang help internals` lists them.
+([testing.md](testing.md)). `k help internals` lists them.
 
 | Option | What it does |
 |---|---|
 | `--tokens` | Print the file's tokens. |
 | `--parse` | Stop after parsing. |
-| `--check` | Stop after typechecking, as `klang check` does. |
+| `--check` | Stop after typechecking, as `k check` does. |
 | `--dump` | Print the parsed program back as source. |
 | `--dump-docs` | Print the documentation comments of the program's declarations, fields and variants. |
 | `--dump-file out` | Write that dump to a file, and go on. |
 | `--roundtrip` | Check that the dump parses and dumps back to itself. |
-| `--multi-test file...` | Compile each file as a run of its own would, and end what each printed with a line on stdout and stderr: `==== klang --multi-test: exit <code> <file>`. A `%` in `-o` stands for each file's name. |
+| `--multi-test file...` | Compile each file as a run of its own would, and end what each printed with a line on stdout and stderr: `==== k --multi-test: exit <code> <file>`. A `%` in `-o` stands for each file's name. |
 | `--bce-test` | Verify the `// bce:elide` and `// bce:keep` annotations in the source. |
 | `--unsafe-no-rf-check` | Leave out the checks after calls that a `return ... from` can pass through. This is unsound, and is only for measuring what they cost. |
 | `--no-copy-elision` | Copy every argument and result of a fixed struct over 256 bytes, where the generated C would otherwise share the caller's storage. A program prints the same either way; the test suite compares the two. |
-| `--gen-runtime-header` | Regenerate `src/runtime_inline.h` from `src/runtime/` (`KLANG_RUNTIME` names that directory if it is not found). |
+| `--gen-runtime-header` | Regenerate `src/runtime_inline.h` from `src/runtime/` (`K_RUNTIME` names that directory if it is not found). |
 | `--compile-shader file` | Print what a shader compiles to, without a program around it; `--shader-source msl` or `hlsl` prints that source as well. |
 
-`klang format --verify file.k|dir...` formats each file in memory and
+`k format --verify file.k|dir...` formats each file in memory and
 writes nothing. It checks the result as a format does, and that formatting
 it again changes nothing, and it skips a file that does not parse. Setting
-`KLANG_ROUNDS` in the environment makes the typechecker trace what keeps a
+`K_ROUNDS` in the environment makes the typechecker trace what keeps a
 recursive cycle's rounds going.

@@ -7,7 +7,7 @@
 // printed so the run shows something without one.
 //
 // Build and run (from this directory):
-//   klang -o raytrace.c 21_raytrace.k && cl raytrace.c && raytrace
+//   k -o raytrace.c 21_raytrace.k && cl raytrace.c && raytrace
 
 import std;
 import vec;

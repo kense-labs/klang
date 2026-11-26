@@ -1,4 +1,4 @@
-"""`klang format`: the layout it gives a file, and its command line. Each
+"""`k format`: the layout it gives a file, and its command line. Each
 golden case formats its input through standard input and must print the
 expected text, which must be a fixed point: formatting it again changes
 nothing. The command-line cases cover rewriting in place, --check, the
@@ -274,7 +274,7 @@ def check_cli(exe, root):
     for argv in ([str(exe), "help", "format"], [str(exe), "format", "--help"]):
         r = subprocess.run(argv, capture_output=True, timeout=60)
         expect(f"{' '.join(argv[1:])}", r.returncode == 0 and
-               r.stdout.startswith(b"usage: klang format") and b"Exit status" in r.stdout,
+               r.stdout.startswith(b"usage: k format") and b"Exit status" in r.stdout,
                r.stdout.decode() + r.stderr.decode())
 
 

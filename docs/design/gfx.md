@@ -1,0 +1,373 @@
+# The graphics module (`gfx`)
+
+<!-- Adapted for K. -->
+
+This document describes the optional graphics module's implementation, test
+coverage, and remaining work. See K's `docs/stdlib.md` for the API reference and
+`gfx.k` for the module source.
+
+For **text rendering, fonts, labels and game HUDs**, use the existing
+[`ui` module](../stdlib.md#text-rendering-and-game-huds): `ui::label` places
+text through layout, `ui::draw_text` places it on a window's canvas, and
+`ui::render` draws it over a gfx scene. Ordinary game text does not need a
+new font atlas or text renderer built directly on gfx. Custom sprite batching
+and games using their own bitmap artwork are separate concerns.
+
+## What it is
+
+`import gfx;` gives a K program a window, input, GPU buffers and textures,
+graphics and compute pipelines, render and compute passes, and reading results
+back. Underneath is SDL3's GPU API (SDL_GPU), which draws through Direct3D 12,
+Vulkan or Metal. Shaders are GLSL, compiled into the program by the builtin
+`embed_shader` when the program is compiled: written in it as a `"""` string
+after their stage (`embed_shader("frag", """ ... """)`), or in a file
+(`embed_shader("file.frag")`).
+
+    K program --extern fn--> k_gfx_* (k_gfx, native C) --> SDL3 (static)
+
+The layer between K and SDL, `k_gfx` (`src/gfx/`), is a natively
+compiled static library rather than a runtime header spliced into the
+generated C:
+
+* Neither the generated C nor TinyCC ever sees an SDL header. A JIT run only
+  needs the layer's own functions defined for it with `tcc_add_symbol`: the
+  64 of `src/gfx/gfx_api.h`, not SDL's 1,270.
+* Code that needs platform headers, such as calling `D3DCompile`, stays in
+  native code.
+* JIT and AOT execute the same compiled layer: a JIT run gets the copy linked
+  into `k`, an AOT program links the same archive.
+
+## How it is built
+
+* **A package** (K's `docs/design/packages.md`): this repository holds the
+  modules `gfx.k`, `audio.k` and `ui.k`, the sidecar `gfx.build`
+  naming the CMake target `k_gfx_package` and `main_thread_only`, the
+  three layers under `src/`, and the CMakeLists that builds them with SDL3
+  and Nuklear. The three are one package because they share SDL and ui
+  draws through gfx; `import gfx;`, `import audio;` and `import ui;` find
+  it through the blessed table (`src/blessed.txt`). A compiler configured
+  with `-DK_BUILTIN_LIBS=all` has it compiled in (`cmake/package.cmake`):
+  the layers' functions reach a JIT run through the symbol table CMake
+  generates from the modules' `extern fn`s, and the link closure of a probe
+  executable, read from CMake's file API reply once the compiler is built
+  (`cmake/linkclosure.cmake`), is the response file
+  `build/pkg/gfx/<config>/link-{cc,msvc}.rsp` that `k build` links
+  programs with (`k --gfx-link msvc|cc` prints its path). A compiler
+  without it builds the package into `K_HOME` the first time a program
+  uses it, through the wrapper project of `src/native.h`, and loads the
+  shared library that build makes for JIT runs.
+* **SDL3** comes from a pinned source archive verified by SHA-256. The
+  package's CMakeLists builds it static, without its
+  2D renderer, OpenGL or the camera, none of which SDL_GPU needs.
+  `SDL_DEPS_SHARED` stays on, so on Linux SDL links only the C library and
+  loads X11, Wayland, audio and udev at run time.
+* **The static C runtime on Windows** (`CMAKE_MSVC_RUNTIME_LIBRARY
+  MultiThreaded`, in every configuration): the compiler, TinyCC, SDL and the
+  layer share the runtime a plain `cl game.c` links, so a program can link the
+  same archives. `k.exe` imports KERNEL32 and ADVAPI32 directly; the nine
+  system DLLs SDL adds are delay-loaded, so a compiler run that opens no window
+  does not load them. Compile times were unchanged.
+* **`cute_spirv`** (`third_party/cute_spirv`, copied from cute_framework, see
+  its README) compiles GLSL to SPIR-V and transpiles it to HLSL and MSL. It is
+  built into every compiler, SDL or not, as `k_shaderc` (`src/shaderc.c`),
+  since shader compilation is the compiler's side of graphics. The blob it
+  writes is a contract between the compiler (`src/gfx_blob.h`) and the
+  package's layer, which carries its own copy of the header
+  (`src/gfx/gfx_blob.h`) and checks the blob's version.
+
+**Building without graphics**: a `K_BUILTIN_LIBS` without gfx or a Linux machine without
+the X11 and Wayland development files (where SDL's own configure would
+silently build an SDL that cannot open a window, the package's CMakeLists
+says what to install and builds nothing). The package is then not compiled
+in, and the compiler's configure says so. Gfx programs typecheck and
+generate the same C either way, and shaders still compile; running or
+building one then needs CMake and a C compiler. The first build resolves
+SDL and Nuklear.
+
+## The compiler's side
+
+* **`embed_shader`** is a builtin whose arguments are string literals, or
+  `let` or `const` globals initialized with one, which the checker puts in
+  their place. `embed_shader("frag", source, ...)` (`"vert"`, `"frag"` or
+  `"comp"`) compiles GLSL written in the program, its parts joined as lines,
+  with `#include` relative to the file containing the call;
+  `embed_shader("x.vert")` (`.vert`, `.frag` or `.comp`) compiles a file,
+  resolved relative to that file, with `#include` relative to the shader.
+  The checker compiles each distinct shader once (`TypeCheck::EmbedShader`,
+  `src/gfx.h`, `src/shaderc.c`), keeping the blobs in `Ast::shaders` and a
+  pointer to its blob on the call for codegen. Compilation failures are reported
+  at the call unless the shader compiler identifies a source line. For GLSL
+  written in the program, that line maps directly to the corresponding line
+  of the `"""` string (`StrLit::multiline`). If the source comes from a
+  global, the message also identifies the call that compiled it. Errors in
+  shader files include the shader's own `file:line`. The result is a `const u8[:]` into static
+  data, like a string literal's, which codegen emits as an initializer list
+  of bytes.
+* **The blob** (`src/gfx_blob.h`, and the package's copy of it, which `shaderc.c` and the layer share)
+  holds SPIR-V, MSL and HLSL together, so the generated C builds anywhere,
+  plus the reflection SDL_GPU needs: counts of samplers, storage textures and
+  storage buffers (read-only and read-write), the std140 size of each uniform
+  block, the vertex inputs by location, and a compute shader's local size.
+* **SDL_GPU's binding contract is checked at compile time.** Each resource must
+  sit in the set SDL_GPU gives its kind and stage, numbered from 0 in the order
+  samplers, storage textures, storage buffers. A resource in the wrong place
+  works on no backend or on only some; here it is a compile error naming the
+  rule (`test/gfx/gfx_err_shader_binding.k`).
+* **Calls into the layer** are extern fns of the gfx package: codegen
+  notes the packages a program's extern calls reach (`NativePackagesUsed`),
+  and a JIT run takes their functions from the compiled-in table or the
+  package's library before relocating the program.
+* **A `thread_fn` never reaches the layer**: SDL_GPU and windowing are
+  main-thread only, and a thread program calling into gfx is a compile error.
+
+## The layer (`src/gfx/`)
+
+The layer handles SDL_GPU's resource management and validation rules for the
+K API. `gfx_api.h` lists every function once (`K_GFX_API`) and every constant
+(`K_GFX_CONSTANTS`); `test/api_check.py` checks `gfx.k`
+declares exactly those functions with the same C shapes, the same struct
+fields in the same order, and the same constant values.
+
+* **Handles** are one `u32`: a slot index and a generation, so a released
+  handle is an error, not a crash.
+* **Errors come in two kinds.** A failure outside the program's control (no
+  GPU, a missing file) returns false or a zero handle, with the reason in
+  `gfx::error()`. A call the program should not have made is a *misuse*: it is
+  skipped, printed as it happens, counted, and the K side aborts with the
+  reason at the next `frame()`, `check()`, read back or `close()`. SDL_GPU's
+  own validation asserts are routed into the same path instead of SDL's
+  dialog. Draws and dispatches check that every sampler, storage resource,
+  uniform block and vertex buffer the bound pipeline's shaders read was
+  provided, and a pushed uniform block must have the shader's std140 size.
+* **The screen** is an RGBA8 texture, not the swapchain:
+  a frame draws into it, and `frame()` blits it to the window. Pipelines then
+  never depend on the swapchain's format, screenshots and readback of the
+  screen are ordinary texture downloads, and a minimized window (no swapchain
+  image) only skips the blit. A headless device (`open_headless`, or `open`
+  under `K_GFX_HEADLESS=1`) has the same screen and no window.
+  The screen's depth texture is made on the first `screen_depth()`, which
+  `begin_screen` calls, and remade with the screen after that; a 2D program
+  that draws with `begin_pass(screen(), Texture { 0 }, clear)` has none.
+  Clearing the screen or its depth doesn't cycle them: the last frame nearly
+  always still uses them, so cycling would keep two or three window-sized
+  copies of each.
+* **Drawing on demand** is the `WAIT_WHEN_IDLE` open flag. Without it every
+  `frame()` presents. With it, `frame()` presents only when something used
+  the GPU since the last one (a pass, a copy, an upload) or the window needs
+  its image again (exposed, shown, restored, back in the foreground). After a
+  frame that presented nothing, the next `frame()` waits for an event, up to
+  a second so a program's timers still run, except after `quit()`;
+  `delta_time()` leaves the wait out, so a timer that runs while idle reads
+  `time()`. A resize makes a new, black screen, so a program redraws when
+  `screen_size()` changes. When the window gives no image (minimized, or
+  Android recreating its surface), the present is retried for up to 8
+  frames, then after each wait until it succeeds. On Android the flag turns
+  off SDL's poll sentinel, which would end every wait at once.
+* **A lost device ends the program's loop.** Once Vulkan reports
+  `VK_ERROR_DEVICE_LOST`, every later wait and submit fails at once, so a
+  program drawing each frame would spin. gfx prints the first such failure,
+  and `frame()` returns false from then on, as if the window were closed.
+  Direct3D 12's device removal and Metal's loss aren't recognized yet, as
+  SDL words them differently.
+* **A resolving pass is its multisampled targets' last.** A pass that
+  resolves drops the samples of its multisampled color and depth targets
+  rather than store them, so a tiling GPU never writes them to memory. A
+  later pass that loads them rather than clears them is a misuse. A pass
+  that doesn't resolve stores them, so a frame can draw over several passes
+  and resolve in the last. Multisampled targets aren't cycled on clear.
+* **A window for another renderer** is the `WINDOW_ONLY` open flag: gfx opens
+  the window and keeps its input, events, cursor, clipboard, time and
+  `WAIT_WHEN_IDLE`'s wait, but makes no GPU device, and a call that needs one
+  is a misuse. `native_window()` is the handle the renderer draws into: a
+  `CAMetalLayer` on Apple's systems, the `HWND` on Windows, the
+  `ANativeWindow` on Android, a new one each time the app comes back to the
+  foreground (`native_window()` reads it again; 0 in the background), so
+  the renderer remakes its surface then; on Linux the `wl_surface` or X11
+  window, with `native_display()` its `wl_display` or `Display*` and
+  `native_kind()` `NATIVE_WAYLAND` or `NATIVE_X11`; 0 headless. Another
+  video driver or platform fails the `open`. `screen_size()` follows the
+  window's size in pixels. With `WAIT_WHEN_IDLE` the renderer reports each
+  frame with `presented(shown)`, and a frame that showed nothing makes the
+  next `frame()` wait; `needs_present()` is true for a few frames after the
+  window is exposed, shown, restored or resized, until the renderer reports
+  a frame shown. `presented()` without `WINDOW_ONLY` is a misuse. A program can use the flag
+  to choose its renderer at run time.
+* **Everything is in pixels.** A window always asks for the display's full
+  pixel density, so on a high-density display its screen has more pixels
+  than its size in the display's coordinates, which SDL gives the mouse in:
+  positions and motion are multiplied by the window's size in pixels and
+  divided by its size in those coordinates, in double, so a whole pixel
+  comes out whole. Injected mouse input is in pixels already.
+* **Scale belongs to the program.** `pixel_density()` and `display_scale()`
+  report what SDL says of the window, and nothing in gfx or ui acts on them:
+  the distance a screen is viewed from varies too much for a reported scale
+  to say how big a ui should be, and many games size theirs by the height of
+  the screen instead. A program that does want the system's size passes
+  `display_scale()` to `ui::set_scale`.
+* **First-person input** uses SDL's per-window relative mouse mode. Turning
+  it on hides the cursor and gives continuous pixel deltas. Focus changes
+  are ordered events as well as a query. Focus loss clears held input and
+  motion, releases relative mode, and shows the cursor; focus gain never
+  recaptures without a call from the program. The headless implementation
+  keeps the same logical states, with injected focus for deterministic tests,
+  without changing the desktop cursor.
+* **System cursors** are selected with `set_cursor(CURSOR_POINTER)`,
+  `set_cursor(CURSOR_TEXT)`, or another `CURSOR_*` constant matching
+  [SDL_SystemCursor](https://wiki.libsdl.org/SDL3/SDL_SystemCursor).
+  The pinned SDL supports the 20 shapes from `CURSOR_DEFAULT` through
+  `CURSOR_W_RESIZE`. The call returns false on failure, with details in
+  `error()`. It leaves visibility and relative mode unchanged. Headless calls
+  validate the shape without touching the desktop cursor. `close()` restores
+  the default cursor and releases cached shapes.
+* **Gamepads** take the slots `0` to `MAX_GAMEPADS - 1` in the order they
+  connect. SDL's gamepad subsystem is opened with video, and a machine without
+  one has no gamepads rather than a failed `open`. Buttons are kept from SDL's
+  events as held state plus the latest `frame()`'s edges, as keys are, and a
+  pad that disconnects releases what it held. Axes and rumble go straight to
+  SDL, with no deadzone. SDL reads an open pad every millisecond, which would
+  keep `WAIT_WHEN_IDLE`'s wait awake, so with that flag gfx reads the pads
+  at each `frame()`, and while a pad is open and the window has focus the
+  idle wait lasts 16 ms rather than a second, so a stick move shows as soon
+  as it would while drawing.
+* **Fullscreen** is borderless, at the desktop's resolution, and SDL changes it
+  asynchronously: `fullscreen()` can lag a frame or two behind
+  `set_fullscreen`, and the screen follows the window as with any resize.
+* **Pipelines are created for their render targets.** A pipeline description
+  does not name its targets. The layer creates a pipeline on first use with
+  each combination of color formats, depth format, and sample count.
+* **The vertex layout comes from the shader**: its inputs in location order,
+  packed one after another as a K struct lays out its fields, per vertex
+  from buffer 0, from `instance_location` on per instance from buffer 1.
+  `PipelineDesc.formats` overrides a location's format, for bytes as colors.
+* **Copies are in program order.** A new resource's first contents go through
+  a command buffer of their own; any other upload, readback or mip generation
+  is recorded in the frame's command buffer, and so happens between passes. A
+  rewrite of a whole buffer lets SDL cycle it rather than wait for a draw still
+  using it. Readback submits and waits.
+* **Small uploads share one buffer.** Creating and releasing a transfer buffer
+  costs a tenth of a millisecond or more each time on Direct3D 12, so uploads
+  up to 4 MB are packed one after another into a 4 MB buffer kept for the
+  device's life. Each takes the next free region, mapped without cycling, since
+  nothing pending reads a region not yet handed out. When the next doesn't fit,
+  the buffer is mapped with cycling and filling starts again at 0. Texture
+  uploads start on a 512-byte boundary, Direct3D 12's placement alignment
+  (otherwise SDL copies the data again), and buffer uploads on a 16-byte one.
+  Larger uploads get a buffer of their own.
+* **Compressed textures** (`BC1`, `BC3`, `BC7`, `ASTC_4x4` to `ASTC_8x8`) are
+  sampled only and uploaded a whole mip at a time (a region of `w` 0), in
+  whole blocks, tightly packed: Vulkan's row length must be a whole number
+  of blocks, which a mip's width need not be. They can't be read back or
+  given `generate_mips`. `format_supported` asks the device whether it
+  samples a format: BC is a desktop GPU's, ASTC a mobile or Apple GPU's.
+* **Shaders**: the device takes SPIR-V where it can, else DXBC, else MSL. DXBC
+  is the blob's HLSL compiled at load time by `d3dcompiler_47.dll`, which ships
+  with Windows 10 and 11, loaded by name. Each SDL shader is made once per blob.
+* **Debug mode** (SDL's validation, and the platform's validation layers where
+  installed) is on in a debug build of the layer, with the `DEBUG` open flag,
+  or `K_GFX_DEBUG=1`.
+
+## The K module (`gfx.k`)
+
+Namespace `gfx`: constants, the handle and description structs, the `extern`
+declarations, and thin wrappers. Descriptions have defaults and are passed by
+value to the wrappers, which pass them on by reference, so
+`gfx::pipeline(vs, fs, gfx::PipelineDesc { depth_test: true })` works.
+`uniforms(stage, slot, value)` pushes any flat struct; readback helpers infer
+the element type from the array they append to (`read_buffer(b, floats, n)`),
+and `read_pixels(t)` gives a texture's bytes. Column-major `mat4` helpers
+(`perspective`, `ortho`, `look_at`, `rotate`, `mul`) produce matrices for
+SDL_GPU's clip space. K's `docs/stdlib.md` is the reference.
+
+## Testing
+
+`test/gfx/gfx_mouse_capture.k` checks capture/visibility transitions,
+focus loss and reacquisition, release edges/events, ignored background input,
+and headless close/reopen. `python packages/gfx/test/window/run_input_test.py --exe
+<k>` complements it on a machine with a display and GPU: a hidden real
+window verifies the SDL mode/visibility setters, unrelated-window focus
+filtering, double-click cleanup, cursor restoration after close, and that
+with `WAIT_WHEN_IDLE` `frame()` waits after a frame that drew nothing, not
+after one that drew, until an event; with SDL's virtual gamepad, that a
+press let go before `frame()` still counts, that the wait is short with a pad
+open, and that a slight stick move and a press show at the next frame; and
+that `WINDOW_ONLY` gives a native window, the window's size, input, and the
+wait. Physical mouse confinement and Alt-Tab still need an interactive check
+on each platform.
+
+* **`test/gfx/`** in the regular suite: headless programs that render into
+  textures and read them back (geometry, depth, instancing, storage-buffer
+  vertex pulling, blending, MSAA resolve; 2D, 3D, cube and array textures,
+  regions, mips, float texels, rendering into a cube face), compute (storage
+  buffers, a storage texture, atomics, a compute shader sampling a texture),
+  frames and injected input, input events in order with key names and the
+  headless clipboard, and one runtime misuse aborting as designed. They
+  draw only on pixel boundaries, so their output is exact on every backend.
+  They build and run AOT and JIT where the compiler has the layer, and a
+  machine without a GPU device reports them skipped (the program prints `gfx:
+  no GPU device`). Their shaders are written in them. Beside them are a
+  check that a shader from a file, written in the program and given in parts
+  compiles to the same blob, the rejection tests (a shader that does not
+  compile, whose error must land on the offending line of the program, also
+  in a part a global holds; a binding in the wrong set; a missing file; an
+  unknown extension or stage name; source given without a stage; a local
+  variable as an argument; gfx from a `thread_fn`), probes of the hidden
+  `--compile-shader` flag on the shader files kept for it, and the API check.
+  The suite sets `K_GFX_HEADLESS=1`, so nothing it runs opens a window.
+* **`samples/27_gfx_cube.k`** runs in the samples runner, headless, for 30
+  frames.
+* **`test/window/`** is not in the suite, since it needs a display: a
+  showcase program using a wide spread of the API in one scene (a shadow map,
+  a multisampled HDR pass, instances and particles moved by compute shaders, a
+  cube-map sky, 2D, 3D and array textures, an sRGB PNG round trip, wireframe,
+  lines, blending, a viewport and scissor, tone mapping), checking itself
+  through readbacks and saving screenshots. `run_window_test.py` runs it in
+  every way the machine can and compares the screenshots across them.
+
+### Platforms tested
+
+| | Windows 11 (RTX 3080) | Linux (Ubuntu 24.04 under WSL2, WSLg) | macOS 26 (M1 Pro) |
+|---|---|---|---|
+| Build, opt-out builds | yes | yes | yes |
+| Suite, incl. `test/gfx/` | yes: MSVC, TinyCC | yes: gcc, TinyCC; sanitizer profile without SDL | yes: clang, TinyCC |
+| Showcase | JIT, cl, clang-cl, clang; Direct3D 12 and Vulkan | JIT, gcc, clang; Vulkan | JIT, clang; Metal |
+
+On Windows the showcase's screenshots from Direct3D 12 and Vulkan differ by
+0.65 of 255 per channel on average. `open_headless` (and a program run with
+`K_GFX_HEADLESS=1`) initializes SDL's video with its offscreen driver,
+which gives the Vulkan backend what it needs without a display: the
+`test/gfx/` programs run unchanged on Linux with no display at all (the CI
+runner's case). It does not try the display servers first: in WSL, with
+`DISPLAY` set and WSLg's X server not answering, SDL's X11 driver took 86
+seconds to fail before the fallback, on every program. On Apple's systems
+headless uses the default driver (Cocoa), which starts at once without a
+display: SDL_GPU's Metal backend needs a video driver that makes Metal
+views, which the offscreen driver doesn't. On macOS the showcase's
+screenshots from TinyCC and clang are identical.
+
+## Decisions on the plan's open questions
+
+* The builtin is `embed_shader`, one shader per stage: its GLSL written in
+  the program after the stage's name, or a file whose extension names it.
+* gfx from a `thread_fn` is a compile error.
+* Uniform structs are checked against the shader's block size, not member
+  offsets.
+* AOT programs stay console applications.
+* The cost of static SDL on macOS compiler start-up, and whether `k` should
+  split off a `k-gfx`, is still to be measured on a Mac.
+
+## Follow-up work
+
+* **macOS**: run the suite and the showcase; measure the start-up cost above.
+* **Compiler bugs found on the way**, each with a workaround in the module or
+  the tests: a fresh resizable result passed straight to an inlined
+  function's slice parameter produces invalid C at `-O1`/`-O2` (bind it to a
+  local first); and a struct field's default cannot name a global constant
+  (the gfx descriptions spell their defaults as numbers).
+* **API**: indirect draws,
+  stencil, blend constants, debug labels, a `Region` for readback of depth
+  textures (SDL_GPU cannot download one directly), checking uniform block
+  member offsets rather than size alone, and readback forms that return a
+  fresh array of an explicit element type (`read_buffer<f32>(b, n)`) beside
+  the ones that append to an out-array.
+* **A 2D and 3D immediate-mode layer in K** on top of this one, as
+  Lobster has, and shader hot reload.

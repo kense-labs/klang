@@ -22,8 +22,8 @@ note works them out. Its cost figures are estimates, not measurements.
 ## 1. The problem
 
 Each data stack is a region of reserved address space, committed as it is
-touched ([spec §1.2](../klang_spec.md#12-memory-model),
-[§10.4](../klang_spec.md#104-runtime-environment),
+touched ([spec §1.2](../k_spec.md#12-memory-model),
+[§10.4](../k_spec.md#104-runtime-environment),
 [implementation §7](../implementation.md#7-the-runtime)). Growth is a
 pointer bump with no capacity check, and a guard gap past each region turns
 an overrun into an abort. References into a stack are plain addresses and
@@ -51,8 +51,8 @@ The checks go wherever a stack's top moves up:
   `EmitReprefix`, `EmitSlidePrefix`, varint prefixes), frame objects, the
   `_er` twins, the generated walkers;
 * the runtime: a slice pool's freelist, which grows on a stack of its own
-  (`gs_spans_*`), `gs_bld_append` in `klang.h`, and the helpers that write at
-  a top with no bound, such as `gs_fmt_i64(top, v)` (up to 20 bytes). Each of
+  (`k_spans_*`), `k_bld_append` in `klang.h`, and the helpers that write at
+  a top with no bound, such as `k_fmt_i64(top, v)` (up to 20 bytes). Each of
   these needs a reservation first: a worst case for a scalar, a check per
   chunk when rendering a nested value.
 
@@ -64,8 +64,8 @@ known trip count can reserve once before it.
 
 Each stack gets a fixed slice of linear memory, and a failed check aborts
 with the overrun message native builds give. This is mostly configuration of
-the existing runtime: `GS_STACK_RESERVE` is the linear memory divided by the
-region count, and `GS_STACK_BUDGET` is the linear memory, which the runtime
+the existing runtime: `K_STACK_RESERVE` is the linear memory divided by the
+region count, and `K_STACK_BUDGET` is the linear memory, which the runtime
 already uses to cap `hardware_threads()`.
 
 * **RAM.** On 64-bit desktop engines, linear memory that is grown but never
@@ -83,7 +83,7 @@ already uses to cap `hardware_threads()`.
   On Windows the fault handler commits on demand and so can report each
   region's depth (its commit mark). macOS and Linux would need explicit
   instrumentation to track the highest top across stack rewinds.
-  `GS_STACK_STATS` reports only counts today. Stack numbering is
+  `K_STACK_STATS` reports only counts today. Stack numbering is
   specific to one build, and a profile fits only the input it came from,
   while the inputs that overflow are the large ones.
 * **The open end.** The partition at the end of linear memory can keep
@@ -108,7 +108,7 @@ address: it holds a handle.
   locals live). Its base table entry is 0. References stay 8 bytes, so every
   layout stays the same as on the 64-bit hosts the C backend targets
   (implementation §6.1). The base table belongs to the thread program, like
-  `gs_stks`, and also covers the globals' dedicated stacks.
+  `k_stks`, and also covers the globals' dedicated stacks.
 * **Arithmetic is unchanged.** `base + i * size`, field offsets, the
   cursors that walk variable-size fields (`FieldPtr`), differences within a
   stack and a pool's range test all work on the integer. Only loads, stores
@@ -133,7 +133,7 @@ address: it holds a handle.
 
 * **Multi-memory.** A memory per stack would keep offsets stable across
   `memory.grow`, but a load names its memory as an immediate. Stacks are
-  chosen at run time (`gs_sp + k`, a fat reference's `stk`), and C cannot
+  chosen at run time (`k_sp + k`, a fat reference's `stk`), and C cannot
   target several memories.
 * **The memory-control proposal** (`memory.discard`, protect, map) would bring
   back reserve, commit and guard pages, and with them the native model. It
@@ -163,7 +163,7 @@ In order of risk, not size:
    decoded at the call, since a C callee can grow a K stack only through
    a builder. A builder parameter gets a staging stack whose contents are
    appended after the call returns. Packages then recompile unchanged, with
-   `gs_bld_append` gaining its capacity check.
+   `k_bld_append` gaining its capacity check.
 4. **The way codegen writes memory accesses**, which is mechanical work to
    change. A rough count is 35 `*(T *)` dereferences, 140 emitted `->`, 26
    `mem*` calls and 21 `->top`, mostly through `LoadLoc`, `IndexLoc`,

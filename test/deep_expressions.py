@@ -84,19 +84,19 @@ def check_deep_expressions(exe, cc, base):
         want = expected()
         r = run([exe, "-o", root / "deep.c", source], root)
         if r.returncode != 0:
-            raise RuntimeError(f"klang -o:\n{r.stdout}{r.stderr}")
+            raise RuntimeError(f"k -o:\n{r.stdout}{r.stderr}")
         deepest = max_brackets((root / "deep.c").read_text(encoding="utf-8"))
         if deepest > MAX_BRACKETS:
             raise RuntimeError(f"the C nests {deepest} brackets deep, more than {MAX_BRACKETS}")
         r = run([exe, "run", source], root)
         if r.returncode != 0 or r.stdout.split() != want:
-            raise RuntimeError(f"klang run: exit {r.returncode}, wanted {want}:\n"
+            raise RuntimeError(f"k run: exit {r.returncode}, wanted {want}:\n"
                                f"{r.stdout}{r.stderr}")
         if cc:
             app = root / ("deep" + tc.EXE_SUFFIX)
             r = run([exe, "build", "-o", app, source], root)
             if r.returncode != 0:
-                raise RuntimeError(f"klang build:\n{r.stdout}{r.stderr}")
+                raise RuntimeError(f"k build:\n{r.stdout}{r.stderr}")
             r = run([app], root)
             if r.returncode != 0 or r.stdout.split() != want:
                 raise RuntimeError(f"built: exit {r.returncode}, wanted {want}:\n"
@@ -105,5 +105,5 @@ def check_deep_expressions(exe, cc, base):
         tc.write_text(order, ORDER)
         r = run([exe, "run", "--debug", order], root)
         if r.returncode == 0 or "division by zero" not in r.stderr:
-            raise RuntimeError(f"klang run of a division ahead of a deep sum: exit "
+            raise RuntimeError(f"k run of a division ahead of a deep sum: exit "
                                f"{r.returncode}:\n{r.stdout}{r.stderr}")

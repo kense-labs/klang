@@ -12,7 +12,7 @@ callees the inliner takes.
 
 Run on its own for a wider sweep:
 
-    python test/copy_elision.py --exe build/klang --seeds 0-499 [--cc]
+    python test/copy_elision.py --exe build/k --seeds 0-499 [--cc]
 
 which prints the seeds whose programs disagree and keeps their sources."""
 import argparse
@@ -300,7 +300,7 @@ def check_copy_elision(exe, cc, base, seeds=SUITE_SEEDS, jobs=8):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--exe", default=str(HERE.parent / "build" / ("klang" + tc.EXE_SUFFIX)))
+    ap.add_argument("--exe", default=str(HERE.parent / "build" / ("k" + tc.EXE_SUFFIX)))
     ap.add_argument("--seeds", default="0-7", help="a range, as 0-499, or one seed")
     ap.add_argument("--cc", action="store_true", help="build with a C compiler, not the JIT")
     ap.add_argument("-j", "--jobs", type=int, default=8)

@@ -8,7 +8,7 @@
 
 #include "libtcc.h"
 #include "jit_runtime.h"
-#include "build_paths.h"   // KLANG_TCC_LIB_PATH, KLANG_STDLIB_PATH
+#include "build_paths.h"   // K_TCC_LIB_PATH, K_STDLIB_PATH
 #include <filesystem>
 
 namespace klang {
@@ -17,9 +17,9 @@ namespace klang {
 // explicit override for a moved build tree, next to the compiler binary for an
 // installed one, and otherwise the directory CMake wrote them to.
 inline string JitLibPath(const string &exedir) {
-    if (auto env = getenv("KLANG_TCCLIB")) return env;
-    #ifdef KLANG_TCC_LIB_PATH
-        auto staged = string(KLANG_TCC_LIB_PATH);
+    if (auto env = getenv("K_TCCLIB")) return env;
+    #ifdef K_TCC_LIB_PATH
+        auto staged = string(K_TCC_LIB_PATH);
     #else
         auto staged = string();
     #endif
@@ -67,7 +67,7 @@ inline TCCState *CompileJit(const string &csrc, const string &libpath,
     #else
         auto support = cat(libpath, "/libtcc1.a");
     #endif
-    for (auto p = klang_jit_symbols(); p->name; ++p)
+    for (auto p = k_jit_symbols(); p->name; ++p)
         tcc_add_symbol(s, p->name, p->address);
     for (auto &[name, addr] : symbols) tcc_add_symbol(s, name.c_str(), addr);
     if (tcc_compile_string(s, csrc.c_str()) < 0) fail("compiling the generated C failed");
@@ -86,7 +86,7 @@ inline int RunJit(TCCState *s, const string &progname, const vector<string> &pro
         throw CompileError { cat("libtcc: ", what) };
     };
     auto entry = (int (*)(int, char **))tcc_get_symbol(s, "main");
-    auto cleanup = (void (*)(void))tcc_get_symbol(s, "gs_jit_cleanup");
+    auto cleanup = (void (*)(void))tcc_get_symbol(s, "k_jit_cleanup");
     if (!entry || !cleanup) fail("cannot find the program entry points");
     std::error_code patherror;
     auto root = filesystem::absolute(filesystem::path(progname), patherror).parent_path();
@@ -102,7 +102,7 @@ inline int RunJit(TCCState *s, const string &progname, const vector<string> &pro
     argv.push_back(name.data());
     for (auto &a : args) argv.push_back(a.data());
     argv.push_back(nullptr);
-    auto code = klang_jit_run(entry, cleanup, (int)argv.size() - 1, argv.data(),
+    auto code = k_jit_run(entry, cleanup, (int)argv.size() - 1, argv.data(),
                               resource_dir.c_str());
     tcc_delete(s);
     return code;

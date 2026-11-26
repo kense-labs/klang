@@ -7,10 +7,10 @@
 // string builder, which C appends to. The C for this sample is call_c.h.
 //
 // Build and run (from this directory):
-//   klang --include call_c.h -o call_c.c 24_call_c.k
-//   klang --emit-runtime klang_runtime.c
-//   cc call_c.c klang_runtime.c -o call_c -lm -pthread && ./call_c
-//   (or: cl call_c.c klang_runtime.c && call_c)
+//   k --include call_c.h -o call_c.c 24_call_c.k
+//   k --emit-runtime k_runtime.c
+//   cc call_c.c k_runtime.c -o call_c -lm -pthread && ./call_c
+//   (or: cl call_c.c k_runtime.c && call_c)
 
 import std;
 

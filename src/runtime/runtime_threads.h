@@ -1,7 +1,7 @@
 /* K runtime — threads and typed queues (§11.2), as runtime.h declares
    them. Follows runtime_impl.h. A standalone program's unit compiles only
    hardware_threads() unless the program uses threads or queues (the compiler
-   defines GS_NEED_THREADS 1 before the runtime paste); the runtime object
+   defines K_NEED_THREADS 1 before the runtime paste); the runtime object
    compiles it all. This is the one part of the runtime allowed to allocate
    internally. */
 
@@ -9,12 +9,12 @@
 
 /* hardware_threads() sizes worker pools, and a program that spawns none may
    still ask; it needs nothing below. It reports no more workers than the
-   data stack budget holds beside the main program (gs_rt_start), so a pool
+   data stack budget holds beside the main program (k_rt_start), so a pool
    sized by it never runs the program out of address space. */
 #ifdef _WIN32
 /* The CPUs the process may run on, which `start /affinity` or a job object
    can make fewer than the machine has. */
-static int64_t gs_os_threads(void) {
+static int64_t k_os_threads(void) {
     DWORD_PTR proc, sys;
     if (GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) && proc) {
         int64_t n = 0;
@@ -33,7 +33,7 @@ static int64_t gs_os_threads(void) {
 /* The CPUs the process may run on, which taskset or a cgroup cpuset can make
    fewer than the machine has. Linux asks the system call itself: glibc
    declares sched_getaffinity and CPU_COUNT only under _GNU_SOURCE. */
-static int64_t gs_os_threads(void) {
+static int64_t k_os_threads(void) {
     #ifdef __linux__
         unsigned long mask[1024 / (8 * sizeof(unsigned long))];
         long len = syscall(SYS_sched_getaffinity, 0, sizeof mask, mask);
@@ -49,62 +49,62 @@ static int64_t gs_os_threads(void) {
 }
 #endif
 
-GS_API int64_t gs_hardware_threads(void) {
-    int64_t n = gs_os_threads();
-    return n < gs_thread_cap ? n : gs_thread_cap;
+K_API int64_t k_hardware_threads(void) {
+    int64_t n = k_os_threads();
+    return n < k_thread_cap ? n : k_thread_cap;
 }
 
-GS_API void gs_stack_stats(int64_t stacks) {
+K_API void k_stack_stats(int64_t stacks) {
     char who[40], reserve[40], budget[40];
-    if (gs_current_thread_id < 0) snprintf(who, sizeof who, "main");
-    else snprintf(who, sizeof who, "worker %lld", (long long)gs_current_thread_id);
-    *gs_size(reserve, gs_region_usable) = 0;
-    *gs_size(budget, gs_stack_budget) = 0;
-    uint64_t per = gs_region_usable + gs_region_gap;
+    if (k_current_thread_id < 0) snprintf(who, sizeof who, "main");
+    else snprintf(who, sizeof who, "worker %lld", (long long)k_current_thread_id);
+    *k_size(reserve, k_region_usable) = 0;
+    *k_size(budget, k_stack_budget) = 0;
+    uint64_t per = k_region_usable + k_region_gap;
     char cap[64];
-    if (gs_workerregions > 0)
-        snprintf(cap, sizeof cap, "a worker %lld, thread cap %lld", (long long)gs_workerregions,
-                 (long long)gs_thread_cap);
+    if (k_workerregions > 0)
+        snprintf(cap, sizeof cap, "a worker %lld, thread cap %lld", (long long)k_workerregions,
+                 (long long)k_thread_cap);
     else
         snprintf(cap, sizeof cap, "no workers");
     fprintf(stderr, "klang stack stats: %s: %lld data stacks, %ld regions (reserving %s each); "
             "budget %s for %llu, main program %lld, %s\n",
-            who, (long long)stacks, gs_nregions, reserve, budget,
-            (unsigned long long)(per ? gs_stack_budget / per : 0), (long long)gs_mainregions,
+            who, (long long)stacks, k_nregions, reserve, budget,
+            (unsigned long long)(per ? k_stack_budget / per : 0), (long long)k_mainregions,
             cap);
 }
 
-#if GS_NEED_THREADS
+#if K_NEED_THREADS
 
 #ifdef _WIN32
 
-typedef SRWLOCK gs_mutex;
-typedef CONDITION_VARIABLE gs_cond;
-#define GS_MUTEX_INIT SRWLOCK_INIT
-#define GS_COND_INIT  CONDITION_VARIABLE_INIT
-#define gs_mutex_init(m)   InitializeSRWLock(m)
-#define gs_cond_init(c)    InitializeConditionVariable(c)
-#define gs_mutex_lock(m)   AcquireSRWLockExclusive(m)
-#define gs_mutex_unlock(m) ReleaseSRWLockExclusive(m)
-#define gs_cond_wait(c, m) SleepConditionVariableSRW((c), (m), INFINITE, 0)
-#define gs_cond_signal(c)  WakeConditionVariable(c)
-#define gs_cond_broadcast(c) WakeAllConditionVariable(c)
+typedef SRWLOCK k_mutex;
+typedef CONDITION_VARIABLE k_cond;
+#define K_MUTEX_INIT SRWLOCK_INIT
+#define K_COND_INIT  CONDITION_VARIABLE_INIT
+#define k_mutex_init(m)   InitializeSRWLock(m)
+#define k_cond_init(c)    InitializeConditionVariable(c)
+#define k_mutex_lock(m)   AcquireSRWLockExclusive(m)
+#define k_mutex_unlock(m) ReleaseSRWLockExclusive(m)
+#define k_cond_wait(c, m) SleepConditionVariableSRW((c), (m), INFINITE, 0)
+#define k_cond_signal(c)  WakeConditionVariable(c)
+#define k_cond_broadcast(c) WakeAllConditionVariable(c)
 
 #else  /* posix */
 
 #include <pthread.h>
 
-typedef pthread_mutex_t gs_mutex;
-typedef pthread_cond_t gs_cond;
-#define GS_MUTEX_INIT PTHREAD_MUTEX_INITIALIZER
-#define GS_COND_INIT  PTHREAD_COND_INITIALIZER
-#define gs_mutex_init(m)   pthread_mutex_init((m), NULL)
-#define gs_cond_init(c)    pthread_cond_init((c), NULL)
-#define gs_mutex_lock(m)   pthread_mutex_lock(m)
-#define gs_mutex_unlock(m) pthread_mutex_unlock(m)
-#define gs_cond_wait(c, m) pthread_cond_wait((c), (m))
-#define gs_cond_signal(c)  pthread_cond_signal(c)
-#define gs_cond_broadcast(c) pthread_cond_broadcast(c)
+typedef pthread_mutex_t k_mutex;
+typedef pthread_cond_t k_cond;
+#define K_MUTEX_INIT PTHREAD_MUTEX_INITIALIZER
+#define K_COND_INIT  PTHREAD_COND_INITIALIZER
+#define k_mutex_init(m)   pthread_mutex_init((m), NULL)
+#define k_cond_init(c)    pthread_cond_init((c), NULL)
+#define k_mutex_lock(m)   pthread_mutex_lock(m)
+#define k_mutex_unlock(m) pthread_mutex_unlock(m)
+#define k_cond_wait(c, m) pthread_cond_wait((c), (m))
+#define k_cond_signal(c)  pthread_cond_signal(c)
+#define k_cond_broadcast(c) pthread_cond_broadcast(c)
 
 #endif
 
@@ -118,100 +118,100 @@ typedef pthread_cond_t gs_cond;
    message until a wait takes it. Workers still
    running at process exit are killed by teardown (§11.2). */
 
-typedef struct gs_thread {
-    struct gs_thread *next;
+typedef struct k_thread {
+    struct k_thread *next;
     int64_t id;
     void (*run)(void (*)(uint8_t *), uint8_t *);
     void (*release)(void);
     void (*entry)(uint8_t *args);
     uint8_t *args;
     int contained;
-} gs_thread;
+} k_thread;
 
-static gs_thread *gs_threads;
-static int64_t gs_numthreads;
-static gs_mutex gs_threads_mutex = GS_MUTEX_INIT;
-static gs_cond gs_threads_done = GS_COND_INIT;
+static k_thread *k_threads;
+static int64_t k_numthreads;
+static k_mutex k_threads_mutex = K_MUTEX_INIT;
+static k_cond k_threads_done = K_COND_INIT;
 
 /* The contained workers that aborted, from which thread_wait answers: a bit
-   for each one's id, and the messages of their aborts (gs_fail) that no
+   for each one's id, and the messages of their aborts (k_fail) that no
    wait has taken yet, the first wait that asks for one taking it. Under
-   gs_threads_mutex. */
-static uint8_t *gs_abortbits;
-static int64_t gs_abortbytes;
+   k_threads_mutex. */
+static uint8_t *k_abortbits;
+static int64_t k_abortbytes;
 typedef struct {
     int64_t id;
     uint8_t *msg;
     int64_t len;
-} gs_abort_rec;
-static gs_abort_rec *gs_aborted;
-static int64_t gs_naborted, gs_abortedcap;
+} k_abort_rec;
+static k_abort_rec *k_aborted;
+static int64_t k_naborted, k_abortedcap;
 
-static void gs_aborted_add(int64_t id, uint8_t *msg, int64_t len) {
-    if (id / 8 >= gs_abortbytes) {
-        int64_t n = gs_abortbytes ? gs_abortbytes : 16;
+static void k_aborted_add(int64_t id, uint8_t *msg, int64_t len) {
+    if (id / 8 >= k_abortbytes) {
+        int64_t n = k_abortbytes ? k_abortbytes : 16;
         while (n <= id / 8) n *= 2;
-        uint8_t *bits = (uint8_t *)realloc(gs_abortbits, (size_t)n);
-        if (!bits) gs_panic("out of memory recording an aborted thread");
-        memset(bits + gs_abortbytes, 0, (size_t)(n - gs_abortbytes));
-        gs_abortbits = bits;
-        gs_abortbytes = n;
+        uint8_t *bits = (uint8_t *)realloc(k_abortbits, (size_t)n);
+        if (!bits) k_panic("out of memory recording an aborted thread");
+        memset(bits + k_abortbytes, 0, (size_t)(n - k_abortbytes));
+        k_abortbits = bits;
+        k_abortbytes = n;
     }
-    gs_abortbits[id / 8] |= (uint8_t)(1u << (id % 8));
+    k_abortbits[id / 8] |= (uint8_t)(1u << (id % 8));
     if (!msg) return;
-    if (gs_naborted == gs_abortedcap) {
-        int64_t cap = gs_abortedcap ? gs_abortedcap * 2 : 16;
-        gs_abort_rec *p = (gs_abort_rec *)realloc(gs_aborted, (size_t)cap * sizeof(gs_abort_rec));
-        if (!p) gs_panic("out of memory recording an aborted thread");
-        gs_aborted = p;
-        gs_abortedcap = cap;
+    if (k_naborted == k_abortedcap) {
+        int64_t cap = k_abortedcap ? k_abortedcap * 2 : 16;
+        k_abort_rec *p = (k_abort_rec *)realloc(k_aborted, (size_t)cap * sizeof(k_abort_rec));
+        if (!p) k_panic("out of memory recording an aborted thread");
+        k_aborted = p;
+        k_abortedcap = cap;
     }
-    gs_abort_rec r = { id, msg, len };
-    gs_aborted[gs_naborted++] = r;
+    k_abort_rec r = { id, msg, len };
+    k_aborted[k_naborted++] = r;
 }
 
 /* Runs a contained worker's thread program, to which an abort in it
-   (gs_fail) returns: whether it aborted, its message then in `c`. */
-static int gs_run_contained(gs_thread *t, gs_contained *c) {
-    if (gs_setjmp(c->jump)) {
-        gs_contain = NULL;
+   (k_fail) returns: whether it aborted, its message then in `c`. */
+static int k_run_contained(k_thread *t, k_contained *c) {
+    if (k_setjmp(c->jump)) {
+        k_contain = NULL;
         return 1;
     }
-    gs_contain = c;
+    k_contain = c;
     t->run(t->entry, t->args);
-    gs_contain = NULL;
+    k_contain = NULL;
     return 0;
 }
 
 #ifdef _WIN32
-static DWORD WINAPI gs_thread_main(LPVOID p)
+static DWORD WINAPI k_thread_main(LPVOID p)
 #else
-static void *gs_thread_main(void *p)
+static void *k_thread_main(void *p)
 #endif
 {
-    gs_thread *t = (gs_thread *)p;
-    gs_regions_begin(gs_workerregions);
-    gs_native_stack_init();
-    gs_current_thread_id = t->id;
+    k_thread *t = (k_thread *)p;
+    k_regions_begin(k_workerregions);
+    k_native_stack_init();
+    k_current_thread_id = t->id;
     int aborted = 0;
-    gs_contained contain;
-    if (t->contained) aborted = gs_run_contained(t, &contain);
+    k_contained contain;
+    if (t->contained) aborted = k_run_contained(t, &contain);
     else t->run(t->entry, t->args);
     t->release();
     free(t->args);
-    gs_release_regions();
+    k_release_regions();
 
     /* Publish completion only after all K storage has been released.
        No waiter retains a pointer to this record. The detached native thread
        releases its own final OS stack/TLS state on returning below. */
-    gs_mutex_lock(&gs_threads_mutex);
-    gs_thread **slot = &gs_threads;
+    k_mutex_lock(&k_threads_mutex);
+    k_thread **slot = &k_threads;
     while (*slot != t) slot = &(*slot)->next;
     *slot = t->next;
-    if (aborted) gs_aborted_add(t->id, contain.msg, contain.len);
+    if (aborted) k_aborted_add(t->id, contain.msg, contain.len);
     free(t);
-    gs_cond_broadcast(&gs_threads_done);
-    gs_mutex_unlock(&gs_threads_mutex);
+    k_cond_broadcast(&k_threads_done);
+    k_mutex_unlock(&k_threads_mutex);
     #ifdef _WIN32
         return 0;
     #else
@@ -225,17 +225,17 @@ static void *gs_thread_main(void *p)
    native frames holding large fixed values can exhaust: a TLS handshake
    on a worker thread does. Reserved, not committed: pages are touched as
    the stack grows. A system default above this is kept. */
-#ifndef GS_THREAD_STACK
-#define GS_THREAD_STACK ((size_t)8 << 20)
+#ifndef K_THREAD_STACK
+#define K_THREAD_STACK ((size_t)8 << 20)
 #endif
 
-GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
+K_API int64_t k_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
                                void (*release)(void), void (*entry)(uint8_t *),
                                const void *args, int64_t argsize, int contained) {
     if (argsize < 0 || (uint64_t)argsize > SIZE_MAX)
-        gs_panic("invalid thread argument size");
-    gs_thread *t = (gs_thread *)malloc(sizeof(gs_thread));
-    if (!t) gs_panic("out of memory spawning thread");
+        k_panic("invalid thread argument size");
+    k_thread *t = (k_thread *)malloc(sizeof(k_thread));
+    if (!t) k_panic("out of memory spawning thread");
     t->run = run;
     t->release = release;
     t->entry = entry;
@@ -243,23 +243,23 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
     t->args = (uint8_t *)malloc(argsize ? (size_t)argsize : 1);
     if (!t->args) {
         free(t);
-        gs_panic("out of memory spawning thread");
+        k_panic("out of memory spawning thread");
     }
     if (argsize) memcpy(t->args, args, (size_t)argsize);
-    gs_mutex_lock(&gs_threads_mutex);
-    if (gs_numthreads == INT64_MAX) gs_panic("thread id space exhausted");
-    int64_t id = gs_numthreads++;
+    k_mutex_lock(&k_threads_mutex);
+    if (k_numthreads == INT64_MAX) k_panic("thread id space exhausted");
+    int64_t id = k_numthreads++;
     t->id = id;
-    t->next = gs_threads;
-    gs_threads = t;
+    t->next = k_threads;
+    k_threads = t;
     int failed;
     #ifdef _WIN32
-        HANDLE handle = CreateThread(NULL, GS_THREAD_STACK, gs_thread_main, t,
+        HANDLE handle = CreateThread(NULL, K_THREAD_STACK, k_thread_main, t,
                                       STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
         failed = handle == NULL;
         /* Closing the handle does not stop the worker. Completion is tracked
            above, so callers never need to retain or join a native handle. */
-        if (handle && !CloseHandle(handle)) gs_panic("cannot close thread handle");
+        if (handle && !CloseHandle(handle)) k_panic("cannot close thread handle");
     #else
         pthread_t handle;
         pthread_attr_t attr;
@@ -267,75 +267,75 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
         if (!failed) {
             size_t size = 0;
             failed = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-            if (!failed && !pthread_attr_getstacksize(&attr, &size) && size < GS_THREAD_STACK)
-                failed = pthread_attr_setstacksize(&attr, GS_THREAD_STACK);
-            if (!failed) failed = pthread_create(&handle, &attr, gs_thread_main, t);
+            if (!failed && !pthread_attr_getstacksize(&attr, &size) && size < K_THREAD_STACK)
+                failed = pthread_attr_setstacksize(&attr, K_THREAD_STACK);
+            if (!failed) failed = pthread_create(&handle, &attr, k_thread_main, t);
             pthread_attr_destroy(&attr);
         }
     #endif
     if (failed) {
-        gs_threads = t->next;
-        --gs_numthreads;
-        gs_mutex_unlock(&gs_threads_mutex);
+        k_threads = t->next;
+        --k_numthreads;
+        k_mutex_unlock(&k_threads_mutex);
         free(t->args);
         free(t);
-        gs_panic("cannot create thread");
+        k_panic("cannot create thread");
     }
-    gs_mutex_unlock(&gs_threads_mutex);
+    k_mutex_unlock(&k_threads_mutex);
     return id;
 }
 
-GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
+K_API uint8_t k_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
                                const char *file, int line) {
-    gs_mutex_lock(&gs_threads_mutex);
-    int err = id < 0 || id >= gs_numthreads ? GS_E_THREADID
-            : id == gs_current_thread_id    ? GS_E_THREADSELF : -1;
+    k_mutex_lock(&k_threads_mutex);
+    int err = id < 0 || id >= k_numthreads ? K_E_THREADID
+            : id == k_current_thread_id    ? K_E_THREADSELF : -1;
     if (err >= 0) {
-        /* A contained worker's abort returns to gs_thread_main, which locks. */
-        gs_mutex_unlock(&gs_threads_mutex);
-        gs_abort(err, file, line);
+        /* A contained worker's abort returns to k_thread_main, which locks. */
+        k_mutex_unlock(&k_threads_mutex);
+        k_abort(err, file, line);
     }
     for (;;) {
-        gs_thread *t = gs_threads;
+        k_thread *t = k_threads;
         while (t && t->id != id) t = t->next;
         if (!t) break;
-        gs_cond_wait(&gs_threads_done, &gs_threads_mutex);
+        k_cond_wait(&k_threads_done, &k_threads_mutex);
     }
     uint8_t returned = 1;
     if (msg) {
         *msg = NULL;
         *len = 0;
     }
-    if (id / 8 < gs_abortbytes && (gs_abortbits[id / 8] >> (id % 8) & 1)) {
+    if (id / 8 < k_abortbytes && (k_abortbits[id / 8] >> (id % 8) & 1)) {
         returned = 0;
-        for (int64_t i = 0; msg && i < gs_naborted; i++)
-            if (gs_aborted[i].id == id) {
-                *msg = gs_aborted[i].msg;
-                *len = gs_aborted[i].len;
-                gs_aborted[i] = gs_aborted[--gs_naborted];
+        for (int64_t i = 0; msg && i < k_naborted; i++)
+            if (k_aborted[i].id == id) {
+                *msg = k_aborted[i].msg;
+                *len = k_aborted[i].len;
+                k_aborted[i] = k_aborted[--k_naborted];
                 break;
             }
     }
-    gs_mutex_unlock(&gs_threads_mutex);
+    k_mutex_unlock(&k_threads_mutex);
     return returned;
 }
 
-GS_API void gs_free_msg(uint8_t *msg) {
+K_API void k_free_msg(uint8_t *msg) {
     free(msg);
 }
 
 /* ---------------------------------------------------------------------------
    Typed queues (runtime.h). A queue holds at most `limit` messages. */
 
-struct gs_qstate {
-    gs_qnode *head, *tail;
+struct k_qstate {
+    k_qnode *head, *tail;
     int64_t count, limit;
-    gs_mutex mutex;
-    gs_cond cond;
+    k_mutex mutex;
+    k_cond cond;
 };
 
 /* A monotonic clock in nanoseconds, for a wait's deadline. */
-static int64_t gs_qclock_ns(void) {
+static int64_t k_qclock_ns(void) {
     #ifdef _WIN32
         return (int64_t)GetTickCount64() * 1000000;
     #else
@@ -348,8 +348,8 @@ static int64_t gs_qclock_ns(void) {
 /* Waits on c until a signal, the deadline, or a spurious wakeup; 0 if the
    deadline had passed. macOS lacks pthread_condattr_setclock and waits a
    relative time, which a change to the date doesn't move either. */
-static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
-    int64_t left = deadline - gs_qclock_ns();
+static int k_cond_wait_until(k_cond *c, k_mutex *m, int64_t deadline) {
+    int64_t left = deadline - k_qclock_ns();
     if (left <= 0) return 0;
     #ifdef _WIN32
         int64_t ms = (left + 999999) / 1000000;
@@ -364,17 +364,17 @@ static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
     return 1;
 }
 
-GS_API void gs_qinit(gs_queue *q) {
-    struct gs_qstate *s = (struct gs_qstate *)malloc(sizeof(struct gs_qstate));
-    if (!s) gs_panic("out of memory creating a queue");
+K_API void k_qinit(k_queue *q) {
+    struct k_qstate *s = (struct k_qstate *)malloc(sizeof(struct k_qstate));
+    if (!s) k_panic("out of memory creating a queue");
     s->head = s->tail = NULL;
     s->count = 0;
     s->limit = INT64_MAX;
-    gs_mutex_init(&s->mutex);
+    k_mutex_init(&s->mutex);
     #if defined(_WIN32) || defined(__APPLE__)
-        gs_cond_init(&s->cond);
+        k_cond_init(&s->cond);
     #else
-        /* Deadlines are on the monotonic clock (gs_cond_wait_until). */
+        /* Deadlines are on the monotonic clock (k_cond_wait_until). */
         pthread_condattr_t attr;
         pthread_condattr_init(&attr);
         pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
@@ -386,73 +386,73 @@ GS_API void gs_qinit(gs_queue *q) {
 
 /* Allocates and copies before it takes the lock, so the lock is held only
    to check the limit and link the node. */
-GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size) {
-    struct gs_qstate *s = *q;
-    gs_qnode *n = (gs_qnode *)malloc(sizeof(gs_qnode) + (size_t)size);
-    if (!n) gs_panic("out of memory in qput");
+K_API uint8_t k_qput(k_queue *q, const void *data, int64_t size) {
+    struct k_qstate *s = *q;
+    k_qnode *n = (k_qnode *)malloc(sizeof(k_qnode) + (size_t)size);
+    if (!n) k_panic("out of memory in qput");
     n->next = NULL;
     n->size = size;
     memcpy(n + 1, data, (size_t)size);
-    gs_mutex_lock(&s->mutex);
+    k_mutex_lock(&s->mutex);
     if (s->count >= s->limit) {
-        gs_mutex_unlock(&s->mutex);
+        k_mutex_unlock(&s->mutex);
         free(n);
         return 0;
     }
     s->count++;
     if (s->tail) s->tail->next = n; else s->head = n;
     s->tail = n;
-    gs_mutex_unlock(&s->mutex);
-    gs_cond_signal(&s->cond);
+    k_mutex_unlock(&s->mutex);
+    k_cond_signal(&s->cond);
     return 1;
 }
 
 /* Unlinks the head, under the lock. */
-static gs_qnode *gs_qtake(struct gs_qstate *s) {
-    gs_qnode *n = s->head;
+static k_qnode *k_qtake(struct k_qstate *s) {
+    k_qnode *n = s->head;
     s->head = n->next;
     if (!s->head) s->tail = NULL;
     s->count--;
     return n;
 }
 
-GS_API gs_qnode *gs_qget(gs_queue *q) {
-    struct gs_qstate *s = *q;
-    gs_mutex_lock(&s->mutex);
-    while (!s->head) gs_cond_wait(&s->cond, &s->mutex);
-    gs_qnode *n = gs_qtake(s);
-    gs_mutex_unlock(&s->mutex);
+K_API k_qnode *k_qget(k_queue *q) {
+    struct k_qstate *s = *q;
+    k_mutex_lock(&s->mutex);
+    while (!s->head) k_cond_wait(&s->cond, &s->mutex);
+    k_qnode *n = k_qtake(s);
+    k_mutex_unlock(&s->mutex);
     return n;
 }
 
-GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
-    struct gs_qstate *s = *q;
+K_API k_qnode *k_qwait(k_queue *q, int64_t ms) {
+    struct k_qstate *s = *q;
     /* Caps ms so the deadline in nanoseconds can't overflow. */
     if (ms > INT64_MAX / 2000000) ms = INT64_MAX / 2000000;
-    int64_t deadline = ms > 0 ? gs_qclock_ns() + ms * 1000000 : 0;
-    gs_mutex_lock(&s->mutex);
+    int64_t deadline = ms > 0 ? k_qclock_ns() + ms * 1000000 : 0;
+    k_mutex_lock(&s->mutex);
     while (!s->head && ms > 0 &&
-           gs_cond_wait_until(&s->cond, &s->mutex, deadline)) {}
-    gs_qnode *n = s->head ? gs_qtake(s) : NULL;
-    gs_mutex_unlock(&s->mutex);
+           k_cond_wait_until(&s->cond, &s->mutex, deadline)) {}
+    k_qnode *n = s->head ? k_qtake(s) : NULL;
+    k_mutex_unlock(&s->mutex);
     return n;
 }
 
-GS_API gs_qnode *gs_qpoll(gs_queue *q) { return gs_qwait(q, 0); }
+K_API k_qnode *k_qpoll(k_queue *q) { return k_qwait(q, 0); }
 
-GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line) {
-    if (n <= 0) gs_abort(GS_E_QBOUND, file, line);
-    struct gs_qstate *s = *q;
-    gs_mutex_lock(&s->mutex);
+K_API void k_qlimit(k_queue *q, int64_t n, const char *file, int line) {
+    if (n <= 0) k_abort(K_E_QBOUND, file, line);
+    struct k_qstate *s = *q;
+    k_mutex_lock(&s->mutex);
     s->limit = n;
-    gs_mutex_unlock(&s->mutex);
+    k_mutex_unlock(&s->mutex);
 }
 
 /* No lock: nothing else can use the queue once no thread program runs. */
-GS_API void gs_qfree(gs_queue *q) {
-    struct gs_qstate *s = *q;
+K_API void k_qfree(k_queue *q) {
+    struct k_qstate *s = *q;
     if (!s) return;
-    while (s->head) free(gs_qtake(s));
+    while (s->head) free(k_qtake(s));
     #ifndef _WIN32
         pthread_mutex_destroy(&s->mutex);
         pthread_cond_destroy(&s->cond);
@@ -461,28 +461,28 @@ GS_API void gs_qfree(gs_queue *q) {
     *q = NULL;
 }
 
-#endif  /* GS_NEED_THREADS */
+#endif  /* K_NEED_THREADS */
 
 /* The records of the thread programs that aborted go with the program
    whose workers they were, so that a program started next in the process
    gets ids and thread_wait answers of its own; then main's part
-   (gs_rt_release). */
-GS_API void gs_rt_stop(void) {
-#if GS_NEED_THREADS
-    gs_mutex_lock(&gs_threads_mutex);
-    if (gs_threads) {
-        gs_mutex_unlock(&gs_threads_mutex);
-        gs_panic("klang_exit: a thread program is still running");
+   (k_rt_release). */
+K_API void k_rt_stop(void) {
+#if K_NEED_THREADS
+    k_mutex_lock(&k_threads_mutex);
+    if (k_threads) {
+        k_mutex_unlock(&k_threads_mutex);
+        k_panic("k_exit: a thread program is still running");
     }
-    for (int64_t i = 0; i < gs_naborted; i++) free(gs_aborted[i].msg);
-    free(gs_aborted);
-    gs_aborted = NULL;
-    gs_naborted = gs_abortedcap = 0;
-    free(gs_abortbits);
-    gs_abortbits = NULL;
-    gs_abortbytes = 0;
-    gs_numthreads = 0;
-    gs_mutex_unlock(&gs_threads_mutex);
+    for (int64_t i = 0; i < k_naborted; i++) free(k_aborted[i].msg);
+    free(k_aborted);
+    k_aborted = NULL;
+    k_naborted = k_abortedcap = 0;
+    free(k_abortbits);
+    k_abortbits = NULL;
+    k_abortbytes = 0;
+    k_numthreads = 0;
+    k_mutex_unlock(&k_threads_mutex);
 #endif
-    gs_rt_release();
+    k_rt_release();
 }

@@ -941,16 +941,16 @@ The order below is for the first case.
 ## References
 
 Spec and implementation sections referred to above:
-[§3.9 relative references](../klang_spec.md#39-relative-references),
-[§4.1 passing by size class](../klang_spec.md#41-everything-is-a-value-passing-by-size-class),
-[§5.1 grow-only](../klang_spec.md#51-grow-only-),
-[§5.2 grow-shrink](../klang_spec.md#52-grow-shrink-),
-[§5.4 reusable arrays](../klang_spec.md#54-reusable-arrays-safe-allocation-escape-hatch),
-[§6.6 `defer`](../klang_spec.md#66-defer),
-[§7.8 recursion](../klang_spec.md#78-recursion),
-[§7.9 `return … from`](../klang_spec.md#79-return--from-long-distance-return),
-[§9.4 type-safe reuse](../klang_spec.md#94-type-safe-reuse-and-stale-references),
-[§9.5 writability](../klang_spec.md#95-writability);
+[§3.9 relative references](../k_spec.md#39-relative-references),
+[§4.1 passing by size class](../k_spec.md#41-everything-is-a-value-passing-by-size-class),
+[§5.1 grow-only](../k_spec.md#51-grow-only-),
+[§5.2 grow-shrink](../k_spec.md#52-grow-shrink-),
+[§5.4 reusable arrays](../k_spec.md#54-reusable-arrays-safe-allocation-escape-hatch),
+[§6.6 `defer`](../k_spec.md#66-defer),
+[§7.8 recursion](../k_spec.md#78-recursion),
+[§7.9 `return … from`](../k_spec.md#79-return--from-long-distance-return),
+[§9.4 type-safe reuse](../k_spec.md#94-type-safe-reuse-and-stale-references),
+[§9.5 writability](../k_spec.md#95-writability);
 reference.md [§11 relative references](../reference.md#11-relative-references),
 [§12 lifetimes](../reference.md#12-lifetimes-roots-stores-and-writability),
 [§13 growing and shrinking](../reference.md#13-growing-shrinking-and-assigning-whole-arrays),

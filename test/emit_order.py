@@ -7,7 +7,7 @@ to the compiler: clang evaluates left to right, gcc and MSVC right to left.
 
 This check reads src/codegen*.h and reports every expression in which two
 different calls that emit to a common stream are arguments of one call or
-operands of one unsequenced operator (goose#122). Which members emit where is
+operands of one unsequenced operator (the evaluation-order regression). Which members emit where is
 computed, not listed: a member that appends to an output stream, numbers a
 temporary or registers a stack's top emits there, and so does every member
 that calls one. The branches of ?: and the operands of && and || are

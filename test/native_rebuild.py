@@ -1,5 +1,5 @@
 """When a native part is built again: a program's own C edited after a build
-is compiled again for both `klang build` and `klang run`, but not when the
+is compiled again for both `k build` and `k run`, but not when the
 program is named by another path, and an extern fn added to the program
 without touching its C rebuilds the JIT library, whose symbol table names
 every extern fn. Two C files of one name in different directories each have
@@ -32,7 +32,7 @@ def check_native_rebuild(exe, base, *, jit):
     with tempfile.TemporaryDirectory(prefix="rebuild-", dir=base) as tmp:
         root = Path(tmp)
         env = dict(os.environ)
-        env["KLANG_HOME"] = str(root / "home")
+        env["K_HOME"] = str(root / "home")
 
         def run(argv, cwd=root):
             r = subprocess.run([str(a) for a in argv], cwd=cwd, env=env, capture_output=True,
@@ -73,15 +73,15 @@ def check_native_rebuild(exe, base, *, jit):
         impl(1)
         source = root / "rebuild.k"
         app = root / ("rebuild" + tc.EXE_SUFFIX)
-        expect([exe, "build", "-o", app, source], None, "klang build")
+        expect([exe, "build", "-o", app, source], None, "k build")
         expect([app], ["1"], "the built program")
         # Named by a path relative to the working directory, it is the same
         # program, whose C is built.
         code, out, err = run([exe, "build", "-o", app, source.name])
         require(code == 0 and "building the package rebuild's C" not in out + err,
-                f"klang build by a relative path built the program's C again:\n{out}{err}")
+                f"k build by a relative path built the program's C again:\n{out}{err}")
         impl(11)
-        expect([exe, "build", "-o", app, source], None, "klang build after editing the C")
+        expect([exe, "build", "-o", app, source], None, "k build after editing the C")
         expect([app], ["11"], "the program built after editing the C")
 
         # Two C files of one name, in different directories.
@@ -96,11 +96,11 @@ def check_native_rebuild(exe, base, *, jit):
                       'fn main() { print(twin_src(), " ", twin_lib()); }\n')
         twinapp = root / ("twin_app" + tc.EXE_SUFFIX)
         expect([exe, "build", "-o", twinapp, twin / "twin.k"], None,
-               "klang build of two C files of one name")
+               "k build of two C files of one name")
         expect([twinapp], ["1", "2"], "the program built from two C files of one name")
         if jit:
             expect([exe, "run", twin / "twin.k"], ["1", "2"],
-                   "klang run of two C files of one name")
+                   "k run of two C files of one name")
 
         # --debug compiles the program's own C for a debugger, apart from its
         # release build, and leaves a package's C a release build.
@@ -122,7 +122,7 @@ def check_native_rebuild(exe, base, *, jit):
                             (["--debug"], {})):
             how = " ".join(flags) or "release"
             code, out, err = run([exe, "build", "-v", *flags, "-o", dbgapp, root / "dbg.k"])
-            require(code == 0, f"klang build {how}:\n{out}{err}")
+            require(code == 0, f"k build {how}:\n{out}{err}")
             expect([dbgapp], ["3", "4"], f"the program built {how}")
             # The C files the build compiled, each with whether it was for a
             # debugger, from the commands -v prints.
@@ -133,14 +133,14 @@ def check_native_rebuild(exe, base, *, jit):
                     for name in ("dbg_impl.c", "rel.c"):
                         if name in line:
                             got[name] = "-O0" in words or "/Od" in words
-            require(got == want, f"klang build {how} compiled {got} (true: for a debugger), "
+            require(got == want, f"k build {how} compiled {got} (true: for a debugger), "
                                  f"not {want}:\n{out}")
         if jit:
-            expect([exe, "run", source], ["11"], "klang run")
+            expect([exe, "run", source], ["11"], "k run")
             impl(111)
-            expect([exe, "run", source], ["111"], "klang run after editing the C")
+            expect([exe, "run", source], ["111"], "k run after editing the C")
             program("rebuild_a", "rebuild_b")
-            expect([exe, "run", source], ["111", "2"], "klang run after adding an extern fn")
+            expect([exe, "run", source], ["111", "2"], "k run after adding an extern fn")
 
             # A library whose example has C of its own, and a directory its
             # sidecar excludes: their extern fns are none of the library's.
@@ -161,13 +161,13 @@ def check_native_rebuild(exe, base, *, jit):
             user = root / "use_nest.k"
             tc.write_text(user, 'import std;\nimport nest from "./pkgs/nest";\n'
                                 "fn main() { print(nest::f(7)); }\n")
-            expect([exe, "run", user], ["49"], "klang run of a library with an example of its own")
+            expect([exe, "run", user], ["49"], "k run of a library with an example of its own")
 
         code, out, err = run([exe, "toolchain", "--json"])
         try:
             info = json.loads(out)
         except ValueError:
-            raise RuntimeError(f"native rebuild: klang toolchain --json:\n{out}{err}")
+            raise RuntimeError(f"native rebuild: k toolchain --json:\n{out}{err}")
         if not info.get("cmake"):
             return "no cmake"
 
@@ -198,15 +198,15 @@ def check_native_rebuild(exe, base, *, jit):
             "fn f(x: i64) -> i64 { cfg_scaled(x) }\n")
         tc.write_text(sidecar, 'cmake_target = "cfg";\n')
         expect_failure([exe, "build", "-o", app, user], "cfg needs CFG_SCALE",
-                       "klang build of a package missing a CMake option")
+                       "k build of a package missing a CMake option")
         for scale in (2, 3):
             tc.write_text(sidecar, f'cmake_target = "cfg";\ncmake_options = ["CFG_SCALE={scale}"];\n')
-            expect([exe, "build", "-o", app, user], None, f"klang build with CFG_SCALE={scale}")
+            expect([exe, "build", "-o", app, user], None, f"k build with CFG_SCALE={scale}")
             expect([app], [str(7 * scale)], f"the program built with CFG_SCALE={scale}")
         tc.write_text(sidecar, 'cmake_target = "nosuch";\ncmake_options = ["CFG_SCALE=3"];\n')
         expect_failure([exe, "build", "-o", app, user],
                        "names the CMake target nosuch, which",
-                       "klang build of a package naming a target its project does not define")
+                       "k build of a package naming a target its project does not define")
 
         # A C++ target publishing the standard it needs.
         sidecar, user, app = package(
@@ -220,10 +220,10 @@ def check_native_rebuild(exe, base, *, jit):
             "namespace cxx;\nextern fn cxx_twice(x: i64) -> i64;\n"
             "fn f(x: i64) -> i64 { cxx_twice(x) }\n")
         tc.write_text(sidecar, 'cmake_target = "cxx";\n')
-        expect([exe, "build", "-o", app, user], None, "klang build of a C++ package")
+        expect([exe, "build", "-o", app, user], None, "k build of a C++ package")
         expect([app], ["14"], "the program using a C++ package")
         if jit:
-            expect([exe, "run", user], ["14"], "klang run of a C++ package")
+            expect([exe, "run", user], ["14"], "k run of a C++ package")
 
         # Built again with nothing changed, the files the compiler generates
         # for CMake keep their times, so that its build relinks nothing.
@@ -232,18 +232,18 @@ def check_native_rebuild(exe, base, *, jit):
             return lists.read_text() if lists.is_file() else ""
 
         built = [d for d in (root / "home" / "build" / "pkg" / "local").glob("*/*")
-                 if "project(klang_pkg_cxx " in wrapper(d)]
+                 if "project(k_pkg_cxx " in wrapper(d)]
         require(len(built) == 1, f"the C++ package was built in {built}")
         generated = [built[0] / name for name in
-                     ("klang_symbols.c", "klang_linkprobe.c", "wrapper/CMakeLists.txt",
+                     ("k_symbols.c", "k_linkprobe.c", "wrapper/CMakeLists.txt",
                       "include/klang.h", f"link-{info['cc']['style']}.rsp")]
         if jit:
-            generated += list(built[0].glob("klang_jit_cxx.*"))
+            generated += list(built[0].glob("k_jit_cxx.*"))
         times = {f: f.stat().st_mtime_ns for f in generated}
         if jit:
-            expect([exe, "run", user], ["14"], "klang run of a C++ package again")
+            expect([exe, "run", user], ["14"], "k run of a C++ package again")
         else:
-            expect([exe, "build", "-o", app, user], None, "klang build of a C++ package again")
+            expect([exe, "build", "-o", app, user], None, "k build of a C++ package again")
         rewritten = [str(f.relative_to(built[0])) for f in generated
                      if f.stat().st_mtime_ns != times[f]]
         require(not rewritten, f"a build with nothing changed rewrote {rewritten}")
@@ -265,6 +265,6 @@ def check_native_rebuild(exe, base, *, jit):
                                ("own.k", own, "from its directory"),
                                (own / "own.k", root, "by its absolute path")):
             expect([exe, "build", "-o", ownapp, path], None,
-                   f"klang build of a program with a CMake target of its own {how}", cwd=cwd)
+                   f"k build of a program with a CMake target of its own {how}", cwd=cwd)
             expect([ownapp], ["9"], f"the program with a CMake target of its own, built {how}")
     return None

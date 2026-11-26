@@ -812,7 +812,7 @@ What changes in practice:
 - **A global incremented in a worker changes the worker's copy only.** Shared counters become messages.
 - **Parallel-for over a big array** means splitting it into chunks, sending each chunk (or its index range plus the data it needs) as a job, and merging results.
 - **Libraries with a main-thread rule** (`gfx`, `ui`, `audio`, `physics`) are rejected at compile time if reachable from a `thread_fn`.
-- Threads need a real C compiler build (`klang build` or `-o`); the in-process TinyCC runner can't place thread-local storage.
+- Threads need a real C compiler build (`k build` or `-o`); the in-process TinyCC runner can't place thread-local storage.
 
 ## Serialization: your data is already a file format
 
@@ -856,11 +856,11 @@ These trip people up in the first afternoon.
 | `printf("%d %s", …)` | `print("n=", n, " s=", s)`; `format_int` / `format_flt` for padding and precision |
 | Labelled `break 'outer` | No labels in v1. Use a `block`, a nested function with `return`, or a flag |
 | Recursion "just works" | Mark the cycle `recursive fn`, write full signatures, keep growable locals out of the recursive path |
-| Separate compilation, `.so` plugins | Whole-program compilation to C. K libraries come as source packages (`klang build`) |
+| Separate compilation, `.so` plugins | Whole-program compilation to C. K libraries come as source packages (`k build`) |
 
 ### Bounds checks and speed
 
-Every index is checked and the compiler removes the checks it can prove. Help it the way you'd help a vectorizer: one `assert` of the lengths at the top of a kernel lets it drop every check in the loop. `klang --bce-lines` shows which checks survived per line, and `checkfree fn` makes a surviving check a compile error. For `dist[adj[k]]`-style indirect indexing, index types (`u32 in nodes`) move the check to where the id is created.
+Every index is checked and the compiler removes the checks it can prove. Help it the way you'd help a vectorizer: one `assert` of the lengths at the top of a kernel lets it drop every check in the loop. `k --bce-lines` shows which checks survived per line, and `checkfree fn` makes a surviving check a compile error. For `dist[adj[k]]`-style indirect indexing, index types (`u32 in nodes`) move the check to where the id is created.
 
 ## What doesn't translate, and the nearest workaround
 

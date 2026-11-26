@@ -1,5 +1,5 @@
 // runtime-debug: parse_int reads every i64, including the most negative one, and refuses what is outside i64 instead of
-// wrapping; valid input must not trip GS_DEBUG's overflow check inside std.
+// wrapping; valid input must not trip K_DEBUG's overflow check inside std.
 import std;
 
 fn show(s: u8[:], base: i64 = 10) {

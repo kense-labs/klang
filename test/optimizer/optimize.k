@@ -860,7 +860,7 @@ fn heuristics_op() {
 // --- inline fn ------------------------------------------------------------------
 // An `inline fn` is inlined at every call whatever its size, where its twin
 // without the keyword stays a call. One returning two values stays a call
-// in K and is declared GS_INLINE in the C, for the C compiler to inline
+// in K and is declared K_INLINE in the C, for the C compiler to inline
 // (run_tests.py checks which bodies are left, and the C).
 
 inline fn il_big(x: i64) -> i64 {

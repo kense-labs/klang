@@ -6,13 +6,13 @@ namespace slice_pool_detail;
 struct node { n: i64, link: i64, data: i64[62] }
 struct tree { root: i64, height: i64, chain: i64 }
 
-// The runtime's span tree, reusable[]'s, in a copy (gs_spc_*) with tree as its
+// The runtime's span tree, reusable[]'s, in a copy (k_spc_*) with tree as its
 // header. It checks every node number and count it reads from nodes and tree,
 // which the program can write, and aborts on one that is wrong.
-extern fn place(nodes: node[>..]&, tree: tree&, length: i64, cnt: i64) -> i64 = "gs_slice_pool_place";
-extern fn release_run(nodes: node[>..]&, tree: tree&, idx: i64, cnt: i64) = "gs_slice_pool_free";
+extern fn place(nodes: node[>..]&, tree: tree&, length: i64, cnt: i64) -> i64 = "k_slice_pool_place";
+extern fn release_run(nodes: node[>..]&, tree: tree&, idx: i64, cnt: i64) = "k_slice_pool_free";
 extern fn regrow(nodes: node[>..]&, tree: tree&, length: i64, idx: i64, old: i64,
-                 cnt: i64) -> i64 = "gs_slice_pool_regrow";
+                 cnt: i64) -> i64 = "k_slice_pool_regrow";
 // Discards the complete pages inside every free span of items (elements of
 // elem bytes); false means an OS request failed.
-extern fn trim_pages(nodes: node[>..]&, tree: tree&, items: u8[:], elem: i64) -> bool = "gs_slice_pool_trim";
+extern fn trim_pages(nodes: node[>..]&, tree: tree&, items: u8[:], elem: i64) -> bool = "k_slice_pool_trim";

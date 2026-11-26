@@ -42,9 +42,9 @@ DLT int64_t dlt_sum(sl_i32 xs) {
     for (int64_t i = 0; i < xs.len; i++) s += xs.data[i];
     return s;
 }
-DLT void dlt_greet(gs_rref out, sl_u8 name) {
-    gs_bld_append(out, "hello, ", 7);
-    gs_bld_append(out, name.data, name.len);
+DLT void dlt_greet(k_rref out, sl_u8 name) {
+    k_bld_append(out, "hello, ", 7);
+    k_bld_append(out, name.data, name.len);
 }
 /* A handle: an object the library owns, crossing as a u64 (design §6). */
 DLT uint64_t dlt_new(int32_t v) { int32_t *p = malloc(sizeof *p); *p = v; return (uint64_t)(uintptr_t)p; }
@@ -129,8 +129,8 @@ def check_extern_dylib(exe, cc, base, *, jit, runtime, extra=()):
         return r.returncode, r.stdout, r.stderr
 
     def build(source, level=0):
-        """The C `klang -o` writes, compiled with the runtime object: the
-        executable, beside the source as `klang build` would put it, so
+        """The C `k -o` writes, compiled with the runtime object: the
+        executable, beside the source as `k build` would put it, so
         the two forms share the resource directory the library is under."""
         cfile = source.with_suffix(f".{level}.c")
         code, out, err = run([exe, f"-O{level}", "-o", cfile, source])
@@ -175,7 +175,7 @@ def check_extern_dylib(exe, cc, base, *, jit, runtime, extra=()):
     _, c2 = build(relative, 1)
     if c1 != c2:
         raise RuntimeError("the generated C differs between two compiles")
-    if "gs_dl_bind(gs_dllibs, 1, gs_dlbinds, 11);" not in c1 or "dlt_unused" in c1:
+    if "k_dl_bind(k_dllibs, 1, k_dlbinds, 11);" not in c1 or "dlt_unused" in c1:
         raise RuntimeError(f"the generated C binds other than the 11 called members:\n{c1}")
     # A bare name is the loader's to find, by its platform spelling.
     bare = base / "bare.k"
@@ -185,7 +185,7 @@ def check_extern_dylib(exe, cc, base, *, jit, runtime, extra=()):
     # The feature's point: a JIT run binds the library with no C toolchain
     # in sight, where a native part would need one.
     if jit:
-        code, out, err = run([exe, "--jit", relative], env={"KLANG_CC": str(base / "no-cc")})
+        code, out, err = run([exe, "--jit", relative], env={"K_CC": str(base / "no-cc")})
         if code != 0 or out.split("\n")[:-1] != EXPECTED:
             raise RuntimeError(f"relative.k (jit, no toolchain) exit {code}:\n{out}{err}")
     # A library that is not there, or a symbol the library lacks, is a
@@ -295,17 +295,17 @@ def check_extern_dylib(exe, cc, base, *, jit, runtime, extra=()):
         shutil.rmtree(home, ignore_errors=True)  # An earlier run's builds.
         dyn = base / "mixed_dyn.k"
         tc.write_text(dyn, 'import mixed from "./pkgs/mixed";\nfn main() { print(mixed::add(2, 3)); }\n')
-        code, out, err = run([exe, "run", dyn], env={"KLANG_HOME": str(home),
-                                                     "KLANG_CC": str(base / "no-cc")})
+        code, out, err = run([exe, "run", dyn], env={"K_HOME": str(home),
+                                                     "K_CC": str(base / "no-cc")})
         if code != 0 or out.strip() != "5":
-            raise RuntimeError(f"mixed_dyn.k (klang run) exit {code}:\n{out}{err}")
+            raise RuntimeError(f"mixed_dyn.k (k run) exit {code}:\n{out}{err}")
         if list(home.glob("build/pkg/**/*.c*")) + list(home.glob("build/pkg/**/*.o*")):
             raise RuntimeError("a program calling only a dynamic extern built the native part")
         if tc.IS_WINDOWS and cc.style != "msvc":
-            return  # klang run builds the part with the toolchain it finds, not this one.
+            return  # k run builds the part with the toolchain it finds, not this one.
         full = base / "mixed_both.k"
         tc.write_text(full, 'import mixed from "./pkgs/mixed";\n'
                             'fn main() { print(mixed::add(2, 3)); print(mixed::twice(4)); }\n')
-        code, out, err = run([exe, "run", full], env={"KLANG_HOME": str(home)})
+        code, out, err = run([exe, "run", full], env={"K_HOME": str(home)})
         if code != 0 or out.split() != ["5", "8"]:
-            raise RuntimeError(f"mixed_both.k (klang run) exit {code}:\n{out}{err}")
+            raise RuntimeError(f"mixed_both.k (k run) exit {code}:\n{out}{err}")

@@ -196,9 +196,9 @@ inline void CodeGen::FindRefAliases(FnSpec *sp) {
 //    that is its function's named result lives at that function's
 //    destination, where a `return ... from` to it builds its value, so
 //    there must be no such return here either;
-//  * its return destinations (`gs_dst<i>`), which a caller may hand over as
+//  * its return destinations (`k_dst<i>`), which a caller may hand over as
 //    a global's stack, a parameter's, or one a captured variable is on:
-//    none of those may be named, and nothing returns to a gs_fdst_ channel;
+//    none of those may be named, and nothing returns to a k_fdst_ channel;
 //  * its reference parameters' stacks, where RefTopsOk clears it.
 // Own stacks never meet another class: a caller's expressions cannot name
 // them. Of the rest, no two classes that could share a stack are cached
@@ -225,7 +225,7 @@ inline void CodeGen::PlanTopClasses(FnSpec *sp) {
         else if (fv->type && (IsResz(fv->type) || IsRoot(fv->type))) capresz = true;
     }
     // A return exiting this function or an inlined body stays here; any
-    // other target constructs into a gs_fdst_ channel (§7.9).
+    // other target constructs into a k_fdst_ channel (§7.9).
     set<SFunction *> localexits { sp->sf };
     auto farreturn = false;
     function<void(Node *)> ibs = [&](Node *n) {
@@ -436,8 +436,8 @@ inline string CodeGen::EnsureEr(FnSpec *sp) {
 // The members of C type ct in order, where a brace initializer of the
 // generated code gives them all; none for any other type.
 inline vector<string> CodeGen::BraceFields(const string &ct) {
-    if (ct == "gs_rref") return { "hdr", "stk" };
-    if (ct == "gs_rhdr") return { "base", "len" };
+    if (ct == "k_rref") return { "hdr", "stk" };
+    if (ct == "k_rhdr") return { "base", "len" };
     if (slicects.count(ct)) return { "data", "len" };
     return {};
 }
@@ -559,7 +559,7 @@ inline string CodeGen::HoistAggregateDecls(string &b) {
 
 // A simd function (§7.12): its body once per instruction-set level above
 // the baseline, each under that level's target attribute and compiled where
-// the C compiler supports the level (GS_SIMD, runtime.h), then the baseline
+// the C compiler supports the level (K_SIMD, runtime.h), then the baseline
 // under the function's own name, which starts by calling the highest
 // version the CPU supports. Callers, prototypes and function values see one
 // function. Every version computes what the baseline does: the C is the
@@ -589,15 +589,15 @@ inline void CodeGen::EmitSimdVersions(FnSpec *sp, const string &name, const stri
     for (int lv = SIMD_LEVELS; lv >= 1; lv--) {
         versions[lv] = Unique(cat(name, "_simd", lv));
         names.push_back(versions[lv]);
-        Append(code, "#if GS_SIMD >= ", lv,
-               "\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
+        Append(code, "#if K_SIMD >= ", lv,
+               "\n#undef K_MUL_ADD_MODE\n#define K_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
                " static ", ret, " ", versions[lv], "(", params, ") {\n", fnbody,
-               "}\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE GS_MUL_ADD_BASE\n#endif\n");
+               "}\n#undef K_MUL_ADD_MODE\n#define K_MUL_ADD_MODE K_MUL_ADD_BASE\n#endif\n");
     }
     Append(code, "static ", ret, " ", name, "(", params, ") {\n",
-           "#if GS_SIMD >= 1\n    switch (gs_simd_level()) {\n");
+           "#if K_SIMD >= 1\n    switch (k_simd_level()) {\n");
     for (int lv = SIMD_LEVELS; lv >= 1; lv--) {
-        if (lv > 1) Append(code, "#if GS_SIMD >= ", lv, "\n");
+        if (lv > 1) Append(code, "#if K_SIMD >= ", lv, "\n");
         auto call = cat(versions[lv], "(", args, ")");
         if (ret == "void") Append(code, "    case ", lv, ": ", call, "; return;\n");
         else Append(code, "    case ", lv, ": return ", call, ";\n");
@@ -611,7 +611,7 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
     curinfo = &sinfo[sp];
     emiter = er;
     ResetFnState();
-    spexpr = curinfo->needssp ? "gs_sp" : "0";
+    spexpr = curinfo->needssp ? "k_sp" : "0";
     FindRefAliases(sp);
     PlanTopClasses(sp);
     markers = true;
@@ -650,17 +650,17 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
         auto tid = fromids[sp];
         for (size_t i = 0; i < sp->rets.size(); i++) {
             if (NeedsResultLocation(sp->rets[i])) {
-                auto sav = T(), chan = cat("gs_lret_", tid, "_", i);
+                auto sav = T(), chan = cat("k_lret_", tid, "_", i);
                 L(CT(sp->rets[i]), " *", sav, " = ", chan, ";");
-                L(chan, " = gs_r", i, ";");
+                L(chan, " = k_r", i, ";");
                 fdstsaves.push_back(cat(chan, " = ", sav, ";"));
                 continue;
             }
             if (!IsBytesT(sp->rets[i])) continue;
             auto sav = T();
-            L("gs_stack *", sav, " = gs_fdst_", tid, "_", i, ";");
-            L("gs_fdst_", tid, "_", i, " = gs_dst", i, ";");
-            fdstsaves.push_back(cat("gs_fdst_", tid, "_", i, " = ", sav, ";"));
+            L("k_stack *", sav, " = k_fdst_", tid, "_", i, ";");
+            L("k_fdst_", tid, "_", i, " = k_dst", i, ";");
+            fdstsaves.push_back(cat("k_fdst_", tid, "_", i, " = ", sav, ";"));
         }
     }
     for (auto st : sp->body->stmts) GenStmt(st);
@@ -676,7 +676,7 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
     }
     if (!termjump) {
         if (curinfo->cret >= 0) {
-            L("GS_UNREACHABLE(", LocArgs(sp->sf->line), ");");
+            L("K_UNREACHABLE(", LocArgs(sp->sf->line), ");");
             auto d = T();
             L(CT(sp->rets[curinfo->cret]), " ", d, " = {0};");
             L("return ", d, ";");
@@ -687,7 +687,7 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
     cscopes.clear();
     // Stacks counted from 0 are the outermost callers' (CollectSpecs).
     if (stkmax > 0 && !curinfo->needssp)
-        Fail(sp->sf->line, cat("internal: ", curinfo->cname, " uses data stacks without gs_sp"));
+        Fail(sp->sf->line, cat("internal: ", curinfo->cname, " uses data stacks without k_sp"));
     // The element-run twin is the same body: the larger count of the two.
     stackown[sp] = std::max(stackown[sp], stkmax);
     // The regions and the markers resolve now that every stack this body
@@ -703,7 +703,7 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
         if (!plan.fnlocals[i].empty())
             Append(fnbody, "    uint8_t *", plan.fnlocals[i], " = ", toporder[i], "->top;\n");
     fnbody += plan.fnlens;
-    // Every global pool's stack is reserved by gs_init_globals, which
+    // Every global pool's stack is reserved by k_init_globals, which
     // main runs before anything else, so these are final on entry.
     for (auto &p : poolbases)
         Append(fnbody, "    uint8_t *", p.second, " = ", gnames[p.first], ".base;\n");
@@ -730,7 +730,7 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
 
 // A C initializer for a compile-time constant of fixed, flat type. Fails
 // for everything with a runtime component -- references, slices, ADTs,
-// relative references -- leaving the value to gs_init_globals. A global
+// relative references -- leaving the value to k_init_globals. A global
 // that is static data itself stands for its initializer, spelled out
 // again, since a C initializer cannot read another object.
 inline bool CodeGen::StaticInitX(Node *n, TypeExpr *t, string &out) {
@@ -820,47 +820,47 @@ inline void CodeGen::EmitGlobalDecls() {
             auto name = Unique(Sanitize(g->ns, d->name));
             // Registered as they are created; see CacheableStk.
             auto reg = [&](const string &s) { gstkexprs.insert(s); };
-            // A member of the instance block (gs_globals_t), and its
+            // A member of the instance block (k_globals_t), and its
             // dedicated stack where it has one.
             auto member = [&](const string &decl) { Append(gblock, "    ", decl, ";\n"); };
-            gnames[d] = cat("GS_GL->", name);
+            gnames[d] = cat("K_GL->", name);
             if (IsRoot(d->type)) {
                 member(cat(CT(d->type), " ", name));
                 for (auto c : d->components) {
                     if (!c) continue;
-                    auto cn = Unique(cat("gs_component_", name, "_", c->componentfield));
-                    gnames[c] = cat("GS_GL->", cn);
+                    auto cn = Unique(cat("k_component_", name, "_", c->componentfield));
+                    gnames[c] = cat("K_GL->", cn);
                     auto ct = c->type;
-                    member(cat(IsResz(ct) && !IsFrameObj(ct) ? string("gs_rhdr")
+                    member(cat(IsResz(ct) && !IsFrameObj(ct) ? string("k_rhdr")
                                : IsBytesT(ct) && !IsFrameObj(ct) ? string("uint8_t *")
                                : CT(ct), " ", cn));
                     if (IsBytesT(ct)) {
-                        auto stk = Unique(cat("gs_gstk_", cn));
-                        member(cat("gs_stack ", stk));
-                        gstks[c] = cat("(&GS_GL->", stk, ")");
+                        auto stk = Unique(cat("k_gstk_", cn));
+                        member(cat("k_stack ", stk));
+                        gstks[c] = cat("(&K_GL->", stk, ")");
                         reg(gstks[c]);
                     }
                 }
             } else if (IsResz(d->type)) {
                 EmitCoreTypes();
-                auto stk = Unique(cat("gs_gstk_", name));
+                auto stk = Unique(cat("k_gstk_", name));
                 member(cat(RzCT(d->type), " ", name));
-                member(cat("gs_stack ", stk));
-                gstks[d] = cat("(&GS_GL->", stk, ")");
+                member(cat("k_stack ", stk));
+                gstks[d] = cat("(&K_GL->", stk, ")");
                 reg(gstks[d]);
                 if (d->reusable) {
                     auto fln = Unique(cat(name, "_fl"));
-                    auto flstk = Unique(cat("gs_gstk_", fln));
-                    member(cat("gs_rhdr ", fln));
-                    member(cat("gs_stack ", flstk));
-                    gpools[d] = { cat("GS_GL->", fln), cat("(&GS_GL->", flstk, ")") };
+                    auto flstk = Unique(cat("k_gstk_", fln));
+                    member(cat("k_rhdr ", fln));
+                    member(cat("k_stack ", flstk));
+                    gpools[d] = { cat("K_GL->", fln), cat("(&K_GL->", flstk, ")") };
                     reg(gpools[d].second);
                 }
             } else if (IsBytesT(d->type)) {
-                auto stk = Unique(cat("gs_gstk_", name));
+                auto stk = Unique(cat("k_gstk_", name));
                 member(cat("uint8_t *", name));
-                member(cat("gs_stack ", stk));
-                gstks[d] = cat("(&GS_GL->", stk, ")");
+                member(cat("k_stack ", stk));
+                gstks[d] = cat("(&K_GL->", stk, ")");
                 reg(gstks[d]);
             } else {
                 string init;
@@ -877,7 +877,7 @@ inline void CodeGen::EmitGlobalDecls() {
                     gstatic[d] = g->inits[di];
                     gnames[d] = cat("(*(", VarCT(d), " *)&", name, ")");
                 } else if (!d->isvar && d->type->cq && !PrefVar(d) && IsFlatFixed(d->type)) {
-                    // Written once, by gs_init_globals before any worker
+                    // Written once, by k_init_globals before any worker
                     // exists (a long fill, say), then read in place by every
                     // instance: a static all the same, if not a const one.
                     Append(data, "static ", VarCT(d), " ", name, ";\n");
@@ -944,7 +944,7 @@ inline void CodeGen::EmitGlobalInit() {
     cscopes.clear();
     stackown[nullptr] = std::max(stackown[nullptr], stkmax);
     auto decls = HoistAggregateDecls(body);
-    Append(code, "static void gs_init_globals(void) {\n");
+    Append(code, "static void k_init_globals(void) {\n");
     code += decls;
     code += body;
     code += "}\n\n";
@@ -954,8 +954,8 @@ inline void CodeGen::EmitGlobalInit() {
 // (at most, for a bound) the length of the array t names (§3.11).
 inline string CodeGen::IndexTypeCheck(const string &x, TypeExpr *t, Line ln) {
     auto n = GlobalLenLv(t->ix->arr);
-    if (!t->ix->upto) return cat("GS_IDX(", x, ", ", n, ", ", LocArgs(ln), ")");
-    return cat("((uint64_t)(", x, ") <= (uint64_t)(", n, ") ? (", x, ") : (gs_idxfail((int64_t)(",
+    if (!t->ix->upto) return cat("K_IDX(", x, ", ", n, ", ", LocArgs(ln), ")");
+    return cat("((uint64_t)(", x, ") <= (uint64_t)(", n, ") ? (", x, ") : (k_idxfail((int64_t)(",
                x, "), (", n, "), ", LocArgs(ln), "), (int64_t)0))");
 }
 
@@ -966,7 +966,7 @@ inline string CodeGen::GlobalLenLv(VarDef *d) { return RzLenLv(d->type, gnames[d
 inline void CodeGen::InitGlobalStack(VarDef *d) {
     auto stk = gstks[d];
     globalregions++;
-    L("gs_stack_init(", stk, ");");
+    L("k_stack_init(", stk, ");");
     if (IsResz(d->type) && IsFrameObj(d->type)) {
         // The tail header is set when the value is constructed.
     } else if (IsResz(d->type)) {
@@ -978,20 +978,20 @@ inline void CodeGen::InitGlobalStack(VarDef *d) {
     if (d->reusable) {
         auto &p = gpools[d];
         globalregions++;
-        L("gs_stack_init(", p.second, ");");
+        L("k_stack_init(", p.second, ");");
         L(p.first, ".base = ", Top(p.second), ";");
         L(p.first, ".len = 0;");
     }
 }
 
 inline void CodeGen::EmitProgramInit() {
-    Append(data, "static int gs_program_initialized;\n");
+    Append(data, "static int k_program_initialized;\n");
     // What an export's wrapper admits a call on (§7.11): 0 on a thread other
     // than the one the program started on, 1 there while no K code runs,
     // 2 while K code runs on the thread. Only 1 does: the export enters
-    // at gs_sp 0, over stacks whose tops running K code may hold in
+    // at k_sp 0, over stacks whose tops running K code may hold in
     // locals, and on a worker's block it may not even have its stacks.
-    Append(data, "static GS_TLS int gs_entry_state;\n");
+    Append(data, "static K_TLS int k_entry_state;\n");
     // Every function is emitted by now, so the counts are final: the main
     // program's stacks, and the most regions it and any one worker hold.
     // The worker thunks follow, each opening its program's block.
@@ -1006,9 +1006,9 @@ inline void CodeGen::EmitProgramInit() {
         EmitThreadThunk(sp, stacks);
         workerregions = std::max(workerregions, stacks + thunkregions[sp]);
     }
-    Append(code, "static void gs_program_init(int argc, char **argv) {\n"
-                 "    if (gs_program_initialized) return;\n"
-                 "    gs_rt_init(argc, argv, ", mainstacks, ", ", mainstacks + globalregions,
+    Append(code, "static void k_program_init(int argc, char **argv) {\n"
+                 "    if (k_program_initialized) return;\n"
+                 "    k_rt_init(argc, argv, ", mainstacks, ", ", mainstacks + globalregions,
            ", ", workerregions, ");\n");
     // The shared libraries' functions, before a global's initializer could
     // call one: on the main thread, before any worker exists, so the
@@ -1018,37 +1018,37 @@ inline void CodeGen::EmitProgramInit() {
     auto dllibs = DlLibs();
     for (auto sp : usedexterns) dlbinds += !sp->sf->dylib.empty();
     if (!dllibs.empty())
-        Append(code, "    gs_dl_bind(gs_dllibs, ", dllibs.size(), ", gs_dlbinds, ", dlbinds,
+        Append(code, "    k_dl_bind(k_dllibs, ", dllibs.size(), ", k_dlbinds, ", dlbinds,
                ");\n");
     // The queues, before anything that could use one runs.
     vector<string> qnames;
     for (auto &[m, q] : queues) qnames.push_back(q);
     sort(qnames.begin(), qnames.end());
-    for (auto &q : qnames) Append(code, "    gs_qinit(&", q, ");\n");
-    Append(code, "    gs_entry_state = 2;\n    gs_gl = &gs_globals_main;\n    gs_init_globals();\n");
-    Append(code, "    gs_program_initialized = 1;\n}\n\n");
+    for (auto &q : qnames) Append(code, "    k_qinit(&", q, ");\n");
+    Append(code, "    k_entry_state = 2;\n    k_gl = &k_globals_main;\n    k_init_globals();\n");
+    Append(code, "    k_program_initialized = 1;\n}\n\n");
     // A C host starts the program here: its globals, then fn main() if there
     // is one, which may call the exports and can hold the host's own setup.
-    // It ends the program with klang_exit, which gives back what the start
+    // It ends the program with k_exit, which gives back what the start
     // took (the data stack regions, the queues, the runtime's handling of
-    // faults), so that klang_init can start a program in the process again:
+    // faults), so that k_init can start a program in the process again:
     // this one, or another build of it that a host reloads.
     if (library) {
         auto hostexport = sharedlibrary
             ? "#ifdef _WIN32\n__declspec(dllexport)\n#endif\n" : "";
-        Append(code, hostexport, "void klang_init(int argc, char **argv) {\n"
-                     "    if (gs_program_initialized) return;\n"
-                     "    gs_program_init(argc, argv);\n",
-                     MainCall(), "    gs_entry_state = 1;\n}\n\n");
-        Append(code, hostexport, "void klang_exit(void) {\n"
-                     "    if (!gs_program_initialized) return;\n"
-                     "    gs_entry_state = 0;\n"
-                     "    gs_rt_stop();\n"
-                     "    free(gs_stks);\n"
-                     "    gs_stks = NULL;\n"
-                     "    gs_nstks = 0;\n");
-        for (auto &q : qnames) Append(code, "    gs_qfree(&", q, ");\n");
-        Append(code, "    gs_program_initialized = 0;\n}\n\n");
+        Append(code, hostexport, "void k_init(int argc, char **argv) {\n"
+                     "    if (k_program_initialized) return;\n"
+                     "    k_program_init(argc, argv);\n",
+                     MainCall(), "    k_entry_state = 1;\n}\n\n");
+        Append(code, hostexport, "void k_exit(void) {\n"
+                     "    if (!k_program_initialized) return;\n"
+                     "    k_entry_state = 0;\n"
+                     "    k_rt_stop();\n"
+                     "    free(k_stks);\n"
+                     "    k_stks = NULL;\n"
+                     "    k_nstks = 0;\n");
+        for (auto &q : qnames) Append(code, "    k_qfree(&", q, ");\n");
+        Append(code, "    k_program_initialized = 0;\n}\n\n");
     }
 }
 
@@ -1074,7 +1074,7 @@ inline void CodeGen::EmitExports() {
         string params, args;
         vector<string> argv;
         for (size_t i = 0; i < sp->argtypes.size(); i++) {
-            auto arg = Unique(cat("gs_export_arg", i));
+            auto arg = Unique(cat("k_export_arg", i));
             Append(params, params.empty() ? "" : ", ", CT(sp->argtypes[i]), " ", arg);
             // The host passes by C value; a parameter the callee takes by
             // pointer gets the wrapper's own copy (PtrAbi).
@@ -1084,11 +1084,11 @@ inline void CodeGen::EmitExports() {
         // A result the callee writes through an out-pointer lands in a local
         // the wrapper returns by C value.
         auto outres = !sp->rets.empty() && !returnslice && si.cret != 0
-                      ? Unique("gs_export_result") : string();
+                      ? Unique("k_export_result") : string();
         if (!outres.empty()) argv.push_back(cat("&", outres));
         for (auto &a : argv) Append(args, args.empty() ? "" : ", ", a);
-        auto outlen = Unique("gs_export_len");
-        if (returnslice) Append(params, params.empty() ? "" : ", ", "gs_i64 *", outlen);
+        auto outlen = Unique("k_export_len");
+        if (returnslice) Append(params, params.empty() ? "" : ", ", "k_i64 *", outlen);
         if (params.empty()) params = "void";
         if (!args.empty() && si.needssp) args += ", ";
         if (si.needssp) args += "0";
@@ -1097,41 +1097,41 @@ inline void CodeGen::EmitExports() {
         Append(exportprotos, ret, " ", sf->cname, "(", params, ");\n");
         if (!refusal) {
             refusal = true;
-            Append(code, "static GS_NORETURN void gs_export_refused(const char *reentered) {\n"
-                         "    if (!gs_program_initialized)\n"
-                         "        gs_panic(\"klang_init must be called before exported functions\");\n"
-                         "    if (!gs_entry_state)\n"
-                         "        gs_panic(\"exported functions must be called on the thread the "
-                         "program started on (klang_init's)\");\n"
-                         "    gs_panic(reentered);\n"
+            Append(code, "static K_NORETURN void k_export_refused(const char *reentered) {\n"
+                         "    if (!k_program_initialized)\n"
+                         "        k_panic(\"k_init must be called before exported functions\");\n"
+                         "    if (!k_entry_state)\n"
+                         "        k_panic(\"exported functions must be called on the thread the "
+                         "program started on (k_init's)\");\n"
+                         "    k_panic(reentered);\n"
                          "}\n\n");
         }
         Append(code, hostexport, ret, " ", sf->cname, "(", params, ") {\n"
-                     "    if (gs_entry_state != 1)\n"
-                     "        gs_export_refused(\"export fn ", sf->name, " was called by C that "
+                     "    if (k_entry_state != 1)\n"
+                     "        k_export_refused(\"export fn ", sf->name, " was called by C that "
                      "K code called, before it returned; only a C host may call an export, "
                      "between its calls into K\");\n"
-                     "    gs_entry_state = 2;\n");
+                     "    k_entry_state = 2;\n");
         if (returnslice) {
-            auto value = Unique("gs_export_result");
+            auto value = Unique("k_export_result");
             Append(code, "    if (!", outlen,
-                   ") gs_panic(\"exported slice length pointer is null\");\n");
+                   ") k_panic(\"exported slice length pointer is null\");\n");
             Append(code, "    ", CT(sp->rets[0]), " ", value, " = ", si.cname, "(", args,
                    ");\n"
-                   "    gs_entry_state = 1;\n"
+                   "    k_entry_state = 1;\n"
                    "    *", outlen, " = ", value, ".len;\n"
                    "    return (const uint8_t *)", value, ".data;\n");
         } else if (sp->rets.empty()) {
-            Append(code, "    ", si.cname, "(", args, ");\n    gs_entry_state = 1;\n");
+            Append(code, "    ", si.cname, "(", args, ");\n    k_entry_state = 1;\n");
         } else if (!outres.empty()) {
             Append(code, "    ", CT(sp->rets[0]), " ", outres, ";\n",
                    "    ", si.cname, "(", args, ");\n",
-                   "    gs_entry_state = 1;\n"
+                   "    k_entry_state = 1;\n"
                    "    return ", outres, ";\n");
         } else {
-            auto value = Unique("gs_export_result");
+            auto value = Unique("k_export_result");
             Append(code, "    ", CT(sp->rets[0]), " ", value, " = ", si.cname, "(", args, ");\n",
-                   "    gs_entry_state = 1;\n"
+                   "    k_entry_state = 1;\n"
                    "    return ", value, ";\n");
         }
         Append(code, "}\n\n");
@@ -1144,31 +1144,31 @@ inline string CodeGen::ExportHeader() {
     // a host's unit that has them already may repeat them.
     string header = "#pragma once\n#include <stdint.h>\n"
                     "#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)\n"
-                    "#define GS_ALIGN1 __attribute__((aligned(1)))\n"
-                    "#else\n#define GS_ALIGN1\n#endif\n"
-                    "typedef int16_t gs_i16 GS_ALIGN1;\n"
-                    "typedef int32_t gs_i32 GS_ALIGN1;\n"
-                    "typedef int64_t gs_i64 GS_ALIGN1;\n"
-                    "typedef uint16_t gs_u16 GS_ALIGN1;\n"
-                    "typedef uint32_t gs_u32 GS_ALIGN1;\n"
-                    "typedef uint64_t gs_u64 GS_ALIGN1;\n"
-                    "typedef float gs_f32 GS_ALIGN1;\n"
-                    "typedef double gs_f64 GS_ALIGN1;\n"
-                    "typedef struct gs_stack gs_stack;\n"
+                    "#define K_ALIGN1 __attribute__((aligned(1)))\n"
+                    "#else\n#define K_ALIGN1\n#endif\n"
+                    "typedef int16_t k_i16 K_ALIGN1;\n"
+                    "typedef int32_t k_i32 K_ALIGN1;\n"
+                    "typedef int64_t k_i64 K_ALIGN1;\n"
+                    "typedef uint16_t k_u16 K_ALIGN1;\n"
+                    "typedef uint32_t k_u32 K_ALIGN1;\n"
+                    "typedef uint64_t k_u64 K_ALIGN1;\n"
+                    "typedef float k_f32 K_ALIGN1;\n"
+                    "typedef double k_f64 K_ALIGN1;\n"
+                    "typedef struct k_stack k_stack;\n"
                     "#pragma pack(push, 1)\n";
     header += tdecls;
     header += "#pragma pack(pop)\n\n";
     header += "#ifdef __cplusplus\nextern \"C\" {\n#endif\n"
-              "void klang_init(int argc, char **argv);\n"
-              "void klang_exit(void);\n";
+              "void k_init(int argc, char **argv);\n"
+              "void k_exit(void);\n";
     header += exportprotos;
     header += "#ifdef __cplusplus\n}\n#endif\n";
     return header;
 }
 
 inline void CodeGen::EmitMain() {
-    Append(code, "int main(int argc, char **argv) {\n    gs_program_init(argc, argv);\n",
-           MainCall(), "    gs_rt_stats();\n    return 0;\n}\n");
+    Append(code, "int main(int argc, char **argv) {\n    k_program_init(argc, argv);\n",
+           MainCall(), "    k_rt_stats();\n    return 0;\n}\n");
 }
 
 }  // namespace klang

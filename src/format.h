@@ -1,4 +1,4 @@
-// K compiler — `klang format`: rewrites a K file in the standard
+// K compiler — `k format`: rewrites a K file in the standard
 // layout. The author's line breaks stay; indentation, the spaces between
 // tokens, blank lines, trailing whitespace and the final newline are
 // normalized, a list whose closing bracket starts a line gets a trailing
@@ -933,7 +933,7 @@ inline bool WriteFormatted(const string &path, const string &text) {
     return ok;
 }
 
-// The files `klang format dir` formats: the .k files under it, sorted,
+// The files `k format dir` formats: the .k files under it, sorted,
 // leaving out directories whose names start with a dot and build trees (a
 // directory holding a CMakeCache.txt), whose files are copies.
 inline bool FormatFilesUnder(const string &dir, vector<string> &files) {
@@ -959,7 +959,7 @@ inline bool FormatFilesUnder(const string &dir, vector<string> &files) {
     return true;
 }
 
-// `klang format [--check] [path...]`, or `klang format [-]` for standard
+// `k format [--check] [path...]`, or `k format [-]` for standard
 // input. Exits with 0 where every file is formatted (or now is), 1 where
 // --check found one that is not, and 2 on any error, which wins.
 inline int RunFormat(const vector<string> &args) {
@@ -970,7 +970,7 @@ inline int RunFormat(const vector<string> &args) {
         else if (a == "--verify") verify = true;
         else if (a == "-") usestdin = true;
         else if (a.size() > 1 && a[0] == '-') {
-            fprintf(stderr, "klang format takes --check, files and directories, or - for standard "
+            fprintf(stderr, "k format takes --check, files and directories, or - for standard "
                             "input, not %s\n", a.c_str());
             return 2;
         } else {
@@ -978,11 +978,11 @@ inline int RunFormat(const vector<string> &args) {
         }
     }
     if (usestdin && !paths.empty()) {
-        fprintf(stderr, "klang format -: standard input is the only input, with no files\n");
+        fprintf(stderr, "k format -: standard input is the only input, with no files\n");
         return 2;
     }
     if (check && verify) {
-        fprintf(stderr, "klang format takes --check or --verify, not both\n");
+        fprintf(stderr, "k format takes --check or --verify, not both\n");
         return 2;
     }
     auto report = [](const string &name, const FormatResult &res) {
@@ -1062,7 +1062,7 @@ inline int RunFormat(const vector<string> &args) {
             code = 2;
         }
     }
-    if (verify) printf("klang format --verify: %d file(s) verified, %d skipped\n", verified, skipped);
+    if (verify) printf("k format --verify: %d file(s) verified, %d skipped\n", verified, skipped);
     return code;
 }
 

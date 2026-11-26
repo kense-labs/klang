@@ -2996,7 +2996,7 @@ inline bool TypeCheck::InitOrderSafe(Node *n, set<FnSpec *> &visiting, FnSpec *c
         if (b->op == T_ANDAND || b->op == T_OROR || b->op == T_EQ || b->op == T_NEQ ||
             b->op == T_DOTEQ || b->op == T_DOTNEQ) return safe(b->left) && safe(b->right);
         if (!IsIntT(t) && t->kind != TY_FLT && t->kind != TY_BOOL) return false;
-        // Signed arithmetic can fail in GS_DEBUG, division in all builds.
+        // Signed arithmetic can fail in K_DEBUG, division in all builds.
         if (IsIntT(t) && (b->op == T_DIV || b->op == T_MOD ||
             (!IsUnsigned(t->intstorage) &&
              (b->op == T_PLUS || b->op == T_MINUS || b->op == T_MUL)))) return false;

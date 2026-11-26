@@ -1,4 +1,4 @@
-// K compiler — build files: the compiler's settings file (KLANG_HOME/
+// K compiler — build files: the compiler's settings file (K_HOME/
 // config) and, later, the sidecar beside a program or a package's entry
 // (docs/design/packages.md §4.7). Read with the K lexer, so they look
 // like K: `//` comments, `key = value;`, strings, integers, true and

@@ -562,7 +562,7 @@ its own, and the cost depends on the variant.
 A `Json..[>..]` is sequential. `for child in a.children` reaches each child
 by adding the previous child's size to a cursor, and that is how the
 backend does it today: the loop's increment calls the generated size walker
-(`gs_size_<T>` in `src/codegen_types.h`), and that walker, for a nested
+(`k_size_<T>` in `src/codegen_types.h`), and that walker, for a nested
 array, loops over the array's elements adding up their sizes. For a `u8[][]`
 that is one read per string. For a recursive element type it is a walk of
 the child's whole subtree, since the only way to find where an `Arr` ends

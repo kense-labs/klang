@@ -47,7 +47,7 @@ public:
 };
 
 // Loads the shared library at `path`, a package's JIT library, and reads
-// the table its klang_symbols function hands out (native.h): the names of
+// the table its k_symbols function hands out (native.h): the names of
 // the package's C functions and their addresses, appended to `out`. False,
 // with `err` saying why, when it cannot be loaded or has no such table.
 bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &out, string &err);

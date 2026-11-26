@@ -5,8 +5,8 @@ import std;
 import slice_pool;
 import os;
 
-extern fn notify_start(variant: const u8[:]) = "klang_notify_start";
-extern fn notify_stop() = "klang_notify_stop";
+extern fn notify_start(variant: const u8[:]) = "k_notify_start";
+extern fn notify_stop() = "k_notify_stop";
 
 // A matrix is an array of rows. An array cannot hold growable arrays, so the
 // rows are runs of one pool, which the caller owns, laid end to end.

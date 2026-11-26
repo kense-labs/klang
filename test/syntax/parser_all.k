@@ -88,7 +88,7 @@ type DeepArray = Pair_pa<i64>[4][:];
 
 let gconst = 42;
 var gcounter_pa: i64 = 0;
-let gname_pa: u8[] = "goose";
+let gname_pa: u8[] = "stone";
 var gpool_pa: Shape..[>..] = [];
 reusable var gslots: Slot2[>..] = [];
 reusable[] var gspans: Slot2[>..] = [];

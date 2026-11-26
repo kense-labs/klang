@@ -1,7 +1,7 @@
-// K compiler — `klang build` (docs/design/packages.md §6): the C the
+// K compiler — `k build` (docs/design/packages.md §6): the C the
 // compiler wrote, the runtime object and the native modules' response files,
 // compiled and linked into an executable by the toolchain of toolchain.h.
-// Intermediates live under KLANG_HOME; the executable lands beside the root
+// Intermediates live under K_HOME; the executable lands beside the root
 // source unless -o says otherwise.
 #pragma once
 
@@ -13,7 +13,7 @@ string RuntimeObjectSource();
 string DirOf(const string &path);
 
 struct BuildOptions {
-    bool debug = false;       // --debug: GS_DEBUG=1, debug information, no C optimization
+    bool debug = false;       // --debug: K_DEBUG=1, debug information, no C optimization
     bool verbose = false;     // -v: print every command and what it prints
     bool dryrun = false;      // --dry-run: print the commands and run nothing
     bool standalone = false;  // --standalone: no runtime object
@@ -27,7 +27,7 @@ inline string AbsolutePath(const string &path) {
     return ec ? path : abs.lexically_normal().string();
 }
 
-// KLANG_HOME/build/prog/<stem>-<hash of the root's absolute path>/: where a
+// K_HOME/build/prog/<stem>-<hash of the root's absolute path>/: where a
 // program's C, objects and logs go.
 inline string ProgramBuildDir(const string &rootfile) {
     auto abs = AbsolutePath(rootfile);
@@ -185,15 +185,15 @@ struct Builder {
 };
 
 // The runtime object for this toolchain and configuration, compiled from
-// `klang --emit-runtime`'s C on first use: KLANG_HOME/build/runtime/<runtime
-// hash>/<toolchain id>-<config>/klang_runtime.o. "" when it could not be
+// `k --emit-runtime`'s C on first use: K_HOME/build/runtime/<runtime
+// hash>/<toolchain id>-<config>/k_runtime.o. "" when it could not be
 // built, after the builder said why.
 inline string RuntimeObject(const Builder &b) {
     auto dir = cat(KlangHome(), "/build/runtime/", RuntimeVersion(), "/", b.tc.id, "-",
                    b.opts.debug ? "debug" : "release");
-    auto obj = cat(dir, "/klang_runtime.", b.tc.style == "msvc" ? "obj" : "o");
+    auto obj = cat(dir, "/k_runtime.", b.tc.style == "msvc" ? "obj" : "o");
     if (PathExists(obj) && !b.opts.dryrun) return obj;
-    auto src = cat(dir, "/klang_runtime.c");
+    auto src = cat(dir, "/k_runtime.c");
     auto log = cat(dir, "/cc.log");
     if (b.opts.dryrun) {
         b.CompileObject(src, obj, "compiling the runtime", log);
@@ -211,7 +211,7 @@ inline string RuntimeObject(const Builder &b) {
         throw CompileError { cat("cannot write ", src) };
     // A failed or interrupted compiler may leave a partial object. Only a
     // successful compile publishes the name readers use, by atomic rename.
-    auto tmp = cat(dir, "/klang_runtime.tmp.", b.tc.style == "msvc" ? "obj" : "o");
+    auto tmp = cat(dir, "/k_runtime.tmp.", b.tc.style == "msvc" ? "obj" : "o");
     filesystem::remove(filesystem::path(tmp), ec);
     if (ec) throw CompileError { cat("cannot remove ", tmp, ": ", ec.message()) };
     if (!b.CompileObject(src, tmp, "compiling the runtime", log)) return "";
@@ -220,7 +220,7 @@ inline string RuntimeObject(const Builder &b) {
     return obj;
 }
 
-// What `klang build` does once the compiler has written the program's C to
+// What `k build` does once the compiler has written the program's C to
 // `cfile` in `builddir`: finds the runtime object for the toolchain `tc`,
 // which built the native parts whose response files are `nativersps`
 // (native.h and builtin.h, found by the caller) in link order, a package's

@@ -24,7 +24,7 @@
 
 </details>
 
-These notes explain how the compiler in `src/` implements `klang_spec.md`.
+These notes explain how the compiler in `src/` implements `k_spec.md`.
 They cover each pass, with particular attention to reference roots and
 provenance, writability, shrinking, recursion, optimization, bounds-check
 elimination, and C representations. There are two intended audiences:
@@ -43,7 +43,7 @@ supported subset in section 10. Section 11 records correctness defects;
 their behavior is not a compatibility requirement.
 
 **What an equivalent implementation must preserve.** Read these notes with
-`klang_spec.md`: the specification defines the language, and these notes
+`k_spec.md`: the specification defines the language, and these notes
 make its implementation choices and current limits explicit. Equivalence
 means the same type and lifetime decisions within that supported subset,
 the same evaluation, mutation, results and required runtime failures, and
@@ -110,30 +110,30 @@ which nothing in the executable sets.
 
 **Verbs** (`Main` in `main.cpp`):
 
-* `klang run file.k [options] [-- args]` compiles the program in this
+* `k run file.k [options] [-- args]` compiles the program in this
   process and runs it (`--jit`).
-* `klang build file.k` writes the C to the program's build directory
-  under `KLANG_HOME`, and compiles and links it into an executable beside
+* `k build file.k` writes the C to the program's build directory
+  under `K_HOME`, and compiles and links it into an executable beside
   the source (`build.h`: the runtime object compiled once per toolchain and
   configuration, the native modules' response files, `-o`, `--debug`,
   `--standalone`, `-v`, `--dry-run`; `-O2` by default).
-* `klang check file.k` typechecks it (`--check`).
-* `klang fetch file.k` fetches the packages the root declares and stops
+* `k check file.k` typechecks it (`--check`).
+* `k fetch file.k` fetches the packages the root declares and stops
   (`--parse`; `--update` fetches tags and branches again).
-* `klang toolchain` prints the C compiler, cmake and git a build would use
-  (`toolchain.h`: `--cc`, `KLANG_CC`, `cc` in `KLANG_HOME/config`, else
+* `k toolchain` prints the C compiler, cmake and git a build would use
+  (`toolchain.h`: `--cc`, `K_CC`, `cc` in `K_HOME/config`, else
   discovery; `--json` for scripts, which also lists the modules whose
   packages are compiled in).
-* `klang version` (or `klang --version`) prints the compiler's version and
+* `k version` (or `k --version`) prints the compiler's version and
   the runtime hash. The version comes from `version.cpp`, which includes the
   header that `cmake/version.cmake` writes at each build: `git describe`, or
-  the `KLANG_VERSION` that a release configures with.
-* `klang lsp` serves an editor over the Language Server Protocol (§12).
-* `klang completion` prints a shell's completion script, made from the
+  the `K_VERSION` that a release configures with.
+* `k lsp` serves an editor over the Language Server Protocol (§12).
+* `k completion` prints a shell's completion script, made from the
   help's text.
-* `klang help --man` prints the help as a man page, made from the help's
+* `k help --man` prints the help as a man page, made from the help's
   text.
-* `klang format` rewrites files in the standard layout (below).
+* `k format` rewrites files in the standard layout (below).
 
 `run` and `build` both build the native part that a program's sidecar
 `foo.build` names (`packages.h`: `LoadSidecar`; `native.h`: the C compiled
@@ -143,7 +143,7 @@ also build the native parts of the packages whose extern fns the program
 calls (`NativePackagesUsed`, from codegen's `usedexterns`). An extern bound
 from a shared library at run time is skipped, since it comes from no
 package's C. Each package comes before the ones it requires, and is built
-under `KLANG_HOME/build/pkg`. A package with a `cmake_target` is built
+under `K_HOME/build/pkg`. A package with a `cmake_target` is built
 through a generated wrapper project (`BuildCMakePart`). The wrapper has the
 JIT library as a shared target linked to the package's own target, and a
 probe executable whose link line, read from CMake's file API reply
@@ -154,7 +154,7 @@ and the response file and the stamp are each replaced as a whole
 (`BuildNativePart`).
 
 A first argument that is not a verb is read as the flags below, so
-`klang file.k` is `klang run file.k`. The verbs are the documented
+`k file.k` is `k run file.k`. The verbs are the documented
 command line; the flags are the lower-level options the verbs are built on
 (`docs/design/packages.md`). Other processes (the C compiler, cmake, git)
 are started through `process.h`, a translation unit of its own over
@@ -207,11 +207,11 @@ their whitespace) and parses both (the same `Ast::Dump` and `DumpDocs`).
 | `--dump-file f.k` | also write the dump to a file, and go on |
 | `--check` | stop after typecheck, optimization and BCE; no C is written |
 | `--diagnostics json` | print the compile's errors and warnings as JSON on stdout (`DiagnosticsJson`): one object each with its severity, message, file, line, column, end and related lines, and the text the terminal would have shown; the progress lines go to stderr. This is the format an editor reads (§2, `docs/design/language_server.md`) |
-| `--offline` | fetch nothing (`package_nofetch`, `packages.h`): a declared package whose checkout is not in the cache is an error at its import, which `klang fetch` resolves |
+| `--offline` | fetch nothing (`package_nofetch`, `packages.h`): a declared package whose checkout is not in the cache is an error at its import, which `k fetch` resolves |
 | `-O0`, `-O1`, `-O2` (default) | inlining thresholds (§4); folding and propagation run at every level; base-case inlining, tail-recursion elimination and min/max regrouping need `-O1` or above |
 | `--specs` | print every live specialization's optimized body |
 | `--stacks` | print the data stack count of the main program and of each worker, the number of regions these add up to, the thread cap that determines `hardware_threads()`, and every function's share (`codegen_stacks.h`); with `--check` it runs the backend for the counts and writes nothing |
-| `--stack-reserve size` | the address space reserved per data stack, written as `-DGS_STACK_RESERVE` (K/M/G/T suffixes; at least 64 KB, at most 2^48) |
+| `--stack-reserve size` | the address space reserved per data stack, written as `-DK_STACK_RESERVE` (K/M/G/T suffixes; at least 64 KB, at most 2^48) |
 | `--no-bce` | skip bounds-check elimination (this also loses the loop-view hoist, §6.10, and the restated array loops that need BCE's facts, §6.12) |
 | `--bce-test` | verify `// bce:elide` / `// bce:keep` annotations in the sources |
 | `--bce-lines` | print elided/kept counts per source line |
@@ -219,11 +219,11 @@ their whitespace) and parses both (the same `Ast::Dump` and `DumpDocs`).
 | `--no-copy-elision` | give every PtrAbi argument and result a copy of its own: no fresh destinations, hand-overs or lending (`CodeGen::noelide`), the reference `test/copy_elision.py` compares against |
 | `-o out.c`, `--jit`, `--header`, `-D`, `--include`, `--stdlib`, `--` | output file, in-process run, a C API header for the exports (which builds the C without a `main`, for a C host), a define written into the generated C, a user header, the stdlib directory, program arguments |
 | `--<name>-link msvc\|cc` | print the response file of link inputs that a program needs when it uses the blessed package imported as `name` (`gfx`, `audio`, `ui`, `physics`), if that package is compiled into this compiler (`builtin.h`, `BuiltinLinkFile`) |
-| `--multi-test a.k b.k ...` | compile each file in turn with the other flags, as a separate process compiling that file would (each file gets its own `Ast` and compile thread, which is all the state a compile has). Each file's output on both streams ends in a line `==== klang --multi-test: exit <code> <file>`. With `-o`, a `%` in the output name stands for each file's name. It runs no programs and writes no dump files. The test runner uses it to batch compiler runs (`docs/testing.md`) |
+| `--multi-test a.k b.k ...` | compile each file in turn with the other flags, as a separate process compiling that file would (each file gets its own `Ast` and compile thread, which is all the state a compile has). Each file's output on both streams ends in a line `==== k --multi-test: exit <code> <file>`. With `-o`, a `%` in the output name stands for each file's name. It runs no programs and writes no dump files. The test runner uses it to batch compiler runs (`docs/testing.md`) |
 | `--compile-shader f [--shader-source msl\|hlsl]` | hidden: what a shader compiles to, without a program around it |
 
-The debug build of the *generated* C is `-DGS_DEBUG=1` on the C compiler (or
-`-DGS_DEBUG=1` to `klang`, which writes it into the file): it enables the
+The debug build of the *generated* C is `-DK_DEBUG=1` on the C compiler (or
+`-DK_DEBUG=1` to `k`, which writes it into the file): it enables the
 overflow, `as` range and ADT tag checks of §9.3. The K compiler's own
 build configuration is unrelated.
 
@@ -392,7 +392,7 @@ written, and also when that happens in its own initializer or through a
 called function (`RequireAssigned`, which `Ident::Check` calls for every
 variable, and `CheckLValue` for a global before reading its type). The
 standard-library search order in `StdlibDirs` is `--stdlib`,
-`KLANG_STDLIB`, `stdlib/` beside the executable and up to three
+`K_STDLIB`, `stdlib/` beside the executable and up to three
 ancestors, then `stdlib/` in the working directory. The candidate relative
 to the root file is tried before all of these; after it, the first
 candidate that exists is used.
@@ -614,7 +614,7 @@ took (`builtinfallback`). As a result, the only diagnostics that one error
 loses are those of what its root reached after the error (the rest of that
 body and of its callers' bodies), and those of the roots whose calls would
 reuse the specializations the error cut short, or that use the instances
-it cut short. `klang check` prints every error in root order, and stops
+it cut short. `k check` prints every error in root order, and stops
 before the optimizer if there were any.
 
 A fixup continues past an error item by item (`CheckItem`); an item opens
@@ -628,7 +628,7 @@ what the driver asked for (no `main`, a header without an export) still
 throws.
 
 **Exemplars.** For the language server (`Ast::exemplars`, never set by
-`klang check`), `CheckExemplars` runs after the fixups: each top-level
+`k check`), `CheckExemplars` runs after the fixups: each top-level
 function with type parameters or untyped parameters that no root
 specialized is checked once more, as an exemplar
 (`docs/design/language_server.md` §11). `CheckExemplar` binds each type
@@ -3730,7 +3730,7 @@ Codegen erases the type. The C type is the storage's type. `Mangle`
 numbers the array into the name, so that per-type artifacts such as a
 `from_bytes` verifier stay apart, and the verifier checks each value
 against the array's current length. A conversion wraps its operand in
-`IndexTypeCheck` (`GS_IDX`, or `<= len` for a bound) unless the
+`IndexTypeCheck` (`K_IDX`, or `<= len` for a bound) unless the
 bounds-check pass set `AsCast::nobc`. The optimizer folds no such
 conversion, and `DivisorKey` and `Speculatable` treat one as the check it
 is.
@@ -4001,7 +4001,7 @@ A pool's kind is carried with its provenance as bits: `RU_SLOTS` for
 `reusable` and `RU_SLICES` for `reusable[]` (`Prov::reusable`,
 `RootArg::reusable`). Merging two branches keeps only what both allow (a
 construct choosing among pools of one kind is a pool reference, whose
-`gs_pref` each branch builds, §6.1), and the table's
+`k_pref` each branch builds, §6.1), and the table's
 `BF_REUSABLE`/`BF_SLICEPOOL` flags each require their bit. Only a binding
 whose type can carry the freelist, a plain reference to a grow-only array
 (`CarriesPool`), keeps the bits. `BindProv` drops them for any other
@@ -4124,9 +4124,9 @@ specialization with a `return … from` site or on a propagation path
 (`FnSpec::needs`), one that catches one, or one that calls either, which is
 one flag per specialization computed as a fixpoint over the call graph; the
 error names the chain of calls. A body runs in the epilogue of a frame a
-long-distance return passes through, while `gs_rf` and the target's
+long-distance return passes through, while `k_rf` and the target's
 channels hold the return in flight (§6.6 below), and a contained throw and
-catch in a callee would clear `gs_rf` on its way out, so the rule covers
+catch in a callee would clear `k_rf` on its way out, so the rule covers
 the catch too. And the body may not name the local a function returns by
 name (`NamedResultOf`, for a non-fixed result): that local is built at the
 result destination, and the return records its count before the body runs.
@@ -4222,7 +4222,7 @@ including the temporary that receives a function value's call's value and
 the global an initializer sets. A standard library body copied into the
 program's own code has its library nodes anchored at the call
 (`Inliner::AtCallSite`), so a check in the copy fails at the line that called
-the library, as a check in a call left standing does (§6.4, `gs_at`).
+the library, as a check in a call left standing does (§6.4, `k_at`).
 
 At each call site of a callee K, K is inlined if it is used once, or its
 post-optimization node count is below NC, or count times uses is below NCU
@@ -4238,7 +4238,7 @@ applies in a cold branch (`colddepth`): the else of a guard (an
 run of its function or loop, mostly on an error path. A callee used only
 there, and too big for the size rules, would grow the hot path of its
 caller to save at most one call. So it stays out of line, and is declared
-`GS_NOINLINE` in C (`FnSpec::outofline`), since the C compiler otherwise
+`K_NOINLINE` in C (`FnSpec::outofline`), since the C compiler otherwise
 inlines a static function with one caller whatever its size. A branch that
 a constant condition decides is folded away first and is not cold.
 
@@ -4265,7 +4265,7 @@ saves nothing.
 * a `simd` function (its callers would run the baseline only, §6.13);
 * a function returning more than one value. Where that is the only reason
   (`InlineInfo::c_inlinable`) and the thresholds pass at a call site, the
-  function is declared `GS_INLINE` in C instead (`FnSpec::cinline`), so
+  function is declared `K_INLINE` in C instead (`FnSpec::cinline`), so
   the C compiler inlines it: always_inline under gcc and clang,
   `__forceinline` under MSVC;
 * a body that a *separate* live tree still references in a way a copy
@@ -5115,7 +5115,7 @@ Layout details needed for byte/C compatibility (`FixedSize`, `LayoutFields`,
   references and slices; 1 for composite fields). It adds nothing in a
   variable layout or without a following field. There is no implicit
   aggregate tail padding. A struct with no bytes of its own (no fields, and
-  no `pad n`: `EmptyLayout`) occupies one byte, the `gs_empty` byte that C
+  no `pad n`: `EmptyLayout`) occupies one byte, the `k_empty` byte that C
   gives it. A variant with no bytes of its own occupies none behind its
   ADT's tag and has no member in a fixed-mode ADT's union. Its own C struct
   still has that byte, which is why spec §3.4 keeps its type out of fields
@@ -5136,16 +5136,16 @@ Layout details needed for byte/C compatibility (`FixedSize`, `LayoutFields`,
   `data` is null where the slice was zero-filled (`default<T>()`, a default
   element). C leaves `memcpy` and `memcmp` undefined on a null pointer even
   for zero bytes, so element-run copies and compares go through the
-  runtime's `gs_memcpy`, `gs_memmove` and `gs_memeq` (`CopyFn`,
-  `GenRangeEq`). `gs_memeq` compares runs of up to 16 bytes inline, as two
+  runtime's `k_memcpy`, `k_memmove` and `k_memeq` (`CopyFn`,
+  `GenRangeEq`). `k_memeq` compares runs of up to 16 bytes inline, as two
   overlapping word loads per side. It compares runs of up to 256 bytes 16
   bytes at a time, with the last 16 overlapping, and calls `memcmp` only for
   longer runs. Keys and names are mostly that short, and a call, with
   `memcmp`'s own dispatch on the length, costs more than the compare itself
   (a fifth of the time, on lookups of strings of about 60 bytes). The longer
-  compares are in a separate function (`gs_memeq_long`). Inside `gs_memeq`
+  compares are in a separate function (`k_memeq_long`). Inside `k_memeq`
   itself, they made it too large for the C compiler to inline at compares
-  of a known short length, such as a key against a literal. `gs_memcpy`
+  of a known short length, such as a key against a literal. `k_memcpy`
   copies the same way: inline up to 256 bytes, and with `memcpy` beyond
   that. String building that appends many runs of a few dozen bytes ran up
   to a fifth faster without the library call. `CT` emits typedefs on first
@@ -5160,8 +5160,8 @@ Layout details needed for byte/C compatibility (`FixedSize`, `LayoutFields`,
   enum; the enum's union holds the variant's struct by value, and so emits
   the struct first. Every program name carries the `_g` suffix
   (`Sanitize`), and a namespaced name also carries the namespace's length.
-  A type's mangle names its C type, its per-type functions (`gs_eq_<T>`,
-  `gs_size_<T>`, ...) and its queue. The mangle writes the type's parts in
+  A type's mangle names its C type, its per-type functions (`k_eq_<T>`,
+  `k_size_<T>`, ...) and its queue. The mangle writes the type's parts in
   a row, so some pairs of types come out the same (`E<F..>` and `E<F>..`,
   `E<G.B>` and `E<G>.B`, `A<B>` and a struct `A_g_B`). The first type to
   produce a given mangle keeps it, and a later type with other parts gets a
@@ -5171,8 +5171,8 @@ Layout details needed for byte/C compatibility (`FixedSize`, `LayoutFields`,
 * **Bytes values** (variable class) are self-describing byte images held as
   a `uint8_t *` to the value's start; a field behind a variable-size field
   is reached by a cursor that walks the intervening sizes (`FieldPtr`,
-  `SizeX`, with a generated `gs_size_<T>` walker per dynamic type).
-* **Resizable values** are a header in the owning frame (`gs_rhdr { base,
+  `SizeX`, with a generated `k_size_<T>` walker per dynamic type).
+* **Resizable values** are a header in the owning frame (`k_rhdr { base,
   len }`) with the elements on a data stack. A frame object is instead the C
   struct of the fixed fields, with the tail's header (or nested frame
   object) as its last member (`EmitCFields`). Growth bumps the stack
@@ -5188,15 +5188,15 @@ Layout details needed for byte/C compatibility (`FixedSize`, `LayoutFields`,
   (`IndexLoc`), which keeps the scale in the address. With a byte offset,
   clang folds `(j >> 5) * 4` into `(j >> 3) & -4` and loses the scaled
   addressing mode (nsieve's bit array: 150 against 138 ms).
-* **Fat references** (`gs_rref { hdr, stk }`) are references to
+* **Fat references** (`k_rref { hdr, stk }`) are references to
   resizable-class values: the header address plus the stack, so a callee can
   push through them. A reference with `reusable`-pool provenance is a
-  `gs_pref`, which adds the freelist's header and stack. Whether a parameter
+  `k_pref`, which adds the freelist's header and stack. Whether a parameter
   is fat or pool-shaped comes from the specialization's types and
   `RootArg::reusable`, not from surface syntax. A variable is pool-shaped
   (`PrefVar`) by its binding's bits, which its rebinds keep (§3.14). Each
-  binding and rebind stores a whole `gs_pref` (`GenPrefVal`). An `if`,
-  `match` or block that chooses among pools builds a `gs_pref` in each
+  binding and rebind stores a whole `k_pref` (`GenPrefVal`). An `if`,
+  `match` or block that chooses among pools builds a `k_pref` in each
   branch, into a temporary; the construct is generated with that temporary
   as its destination, asking for the pool form (`Dst::pool`).
 * String literals are `static const` byte arrays (`StrRaw`), sliced as
@@ -5206,12 +5206,12 @@ Layout details needed for byte/C compatibility (`FixedSize`, `LayoutFields`,
 ### 6.2 Stack assignment
 
 Stack assignment uses the hidden-argument strategy that §10.3 permits.
-Every function that uses data stacks takes `int64_t gs_sp`, and addresses
-its own nonfixed locals and temporaries as `GS(gs_sp + k)` with a
+Every function that uses data stacks takes `int64_t k_sp`, and addresses
+its own nonfixed locals and temporaries as `K_STACK(k_sp + k)` with a
 per-function constant `k` (`AllocStk`). It calls callees with
-`gs_sp + <indices in use>` (`SpTop`), and asks the runtime once at entry to
+`k_sp + <indices in use>` (`SpTop`), and asks the runtime once at entry to
 have that many stacks. (The thread program reserves all of them as it
-starts, `gs_stack_block`, using the compiler's count.) Globals own
+starts, `k_stack_block`, using the compiler's count.) Globals own
 dedicated stacks outside the indexed block. Scopes mirror C braces
 (`CScope`): every nonfixed local's base pointer doubles as the watermark
 restored at scope exit. Every exit path (fallthrough, `break`, `continue`,
@@ -5246,11 +5246,11 @@ them (section 6.10).
 ### 6.3 Globals and program instances
 
 Every global that is not a static (below) is a member of one
-`gs_globals_t` struct per program instance, which also holds the dedicated
+`k_globals_t` struct per program instance, which also holds the dedicated
 stacks of the resizable globals. Main's struct is a static; a worker's is
 allocated by its entry thunk and filled from the spawn image (§6.8). Access
-is `GS_GL->name`, where `GS_GL` is `(&gs_globals_main)` in a program
-without workers, and the thread-local `gs_gl` in a program with them. A
+is `K_GL->name`, where `K_GL` is `(&k_globals_main)` in a program
+without workers, and the thread-local `k_gl` in a program with them. A
 `let` (or `const`) global of a `const` flat fixed type with a compile-time
 initializer (`StaticInitX`, up to 256 array elements) is a C `static const`
 shared by every instance, which the C compiler folds into the code reading
@@ -5260,33 +5260,33 @@ named global's own initializer is written out in its place (`gstatic`
 keeps them). One whose initializer has no static spelling, a fill or a
 string past 256 elements (`MAXSTATICELEMS`) or a name the static form
 cannot spell, is a plain C static all the same (`gshared`):
-`gs_init_globals` fills it once, before any worker exists, and every
+`k_init_globals` fills it once, before any worker exists, and every
 instance reads it in place, so a worker never copies it (`ThreadGlobals`
 leaves both kinds out). A `var` of such a type can be assigned as a whole
 and is a member like any other. Everything but the `static const`s is
-initialized by `gs_init_globals` in declaration order.
+initialized by `k_init_globals` in declaration order.
 
 ### 6.4 The calling convention (C.3)
 
 `SigParams` lists, in order:
 
-* the declared parameters (a by-value resizable adds its `gs_stack *`; a
-  pool parameter is a `gs_pref`; a bytes value is a `uint8_t *`);
+* the declared parameters (a by-value resizable adds its `k_stack *`; a
+  pool parameter is a `k_pref`; a bytes value is a `uint8_t *`);
 * the free variables of a nested function or function value (fixed ones by
-  pointer, resizables as header pointer plus stack, pools as `gs_pref`);
+  pointer, resizables as header pointer plus stack, pools as `k_pref`);
 * result channels in source result order (out-pointers for fixed results
   other than the first fixed result; per nonfixed result, a destination
-  `gs_stack *` and, for a resizable, the count out-parameter or frame
+  `k_stack *` and, for a resizable, the count out-parameter or frame
   object out-parameter);
-* `gs_sp`, when the function touches stacks;
-* `const gs_loc *gs_at`, for a standard library function
+* `k_sp`, when the function touches stacks;
+* `const k_loc *k_at`, for a standard library function
   (`SpecInfo::located`).
 
-`gs_at` is where the program called the library: each check and `abort` in
+`k_at` is where the program called the library: each check and `abort` in
 the function's own lines reports it (`LocArgs`), and a call to another
 library function passes it on, so a failure names the line of the program's
 code that the chain of library calls started from. A call from the program's
-code passes a static `gs_loc` of its own line (`CallerLoc`); a worker's thunk
+code passes a static `k_loc` of its own line (`CallerLoc`); a worker's thunk
 passes its function's line. The program's function values that a library
 function runs have the program's own lines, and report those. The pointer is
 read only on a failing path. A runtime entry point
@@ -5300,7 +5300,7 @@ uses a typed output pointer. Returns, forwarding and case dispatch pass
 that pointer through; a stack receiver claims the fixed slot and supplies
 its address (`ConstructCall`). A block gets the same lvalue destination.
 
-Slices, fat references, and a pool's `gs_pref` are passed member by member
+Slices, fat references, and a pool's `k_pref` are passed member by member
 (`ParamFields`), whether declared as parameters or passed as captured pools.
 Each member becomes its own C parameter: `data` (as `void *`) and `len` for a
 slice; `hdr` and `stk` for a fat reference; and `hdr`, `stk`, `fl`, and
@@ -5333,9 +5333,9 @@ result that the checker adapted (`GenForward`, §6.5).
 
 `CollectSpecs` computes, per specialization and to a fixpoint over the call
 graph, the free variables it or its callees need, the stack-owning globals
-it can reach, and whether it needs `gs_sp` at all. A body without `gs_sp`
+it can reach, and whether it needs `k_sp` at all. A body without `k_sp`
 counts its stack indices from 0, which are the outermost callers' stacks.
-So a body needs `gs_sp` wherever it builds anything on a stack. That
+So a body needs `k_sp` wherever it builds anything on a stack. That
 includes a node of a nonfixed type, and these cases, which no node's type
 shows:
 
@@ -5348,10 +5348,10 @@ shows:
   a fixed-mode ADT;
 * anything rendered structurally into a limited array.
 
-`EmitSpec` rejects a body that allocates a stack without `gs_sp` as an
+`EmitSpec` rejects a body that allocates a stack without `k_sp` as an
 internal error. A global initializer's locals belong to no specialization.
 They are free variables of every function that names them, and
-`gs_init_globals` passes them as a function passes its own.
+`k_init_globals` passes them as a function passes its own.
 
 ### 6.5 Destinations and in-place construction
 
@@ -5583,18 +5583,18 @@ variable the body names.
 An `extern fn` is a direct C call, with prototypes emitted for called
 symbols that the runtime does not define. A member of an
 `extern "lib" { ... }` block (`SFunction::dylib`, spec §7.10) is a call
-through a static function pointer `gs_dl<N>_<symbol>`, where N is its place
+through a static function pointer `k_dl<N>_<symbol>`, where N is its place
 among the used externs; the pointer is declared in the prototypes' place.
 After the prototypes come two tables:
 
-* `gs_dllibs[]`: the libraries that the used members bind from, in the
+* `k_dllibs[]`: the libraries that the used members bind from, in the
   order of their first declaration, each with the sidecars' three platform
   names (`DlSpelling`: per platform, the program's name takes precedence
   over the package's, and 0 means the runtime derives one);
-* `gs_dlbinds[]`: a row per used member.
+* `k_dlbinds[]`: a row per used member.
 
-`gs_program_init` hands both tables to `gs_dl_bind` right after
-`gs_rt_init`, before the queues and globals. Nothing is emitted for a
+`k_program_init` hands both tables to `k_dl_bind` right after
+`k_rt_init`, before the queues and globals. Nothing is emitted for a
 program with no such member. Codegen emits the types of every checked
 extern signature, including unused ones and the complete pointee types of
 plain references, before user headers. A reusable `--include` adapter can
@@ -5607,29 +5607,29 @@ of static capacity. Parameters additionally admit plain non-optional
 references and slices of those values, and builders (`T[>..]&`) of them.
 Results are at most one by-value scalar or flat fixed-size value:
 references, slices and builders cannot be returned by an extern. A builder
-argument uses `gs_rref { hdr, stk }`, whatever its elements; C may write
-its elements and append whole ones at the stack top (`gs_bld_append` for
+argument uses `k_rref { hdr, stk }`, whatever its elements; C may write
+its elements and append whole ones at the stack top (`k_bld_append` for
 bytes) but may not shrink it, retain borrowed arguments beyond the call, or
 invalidate K's types, roots or lengths. These are obligations on C, not
 proofs the K compiler performs. Effect analysis assumes C may write
 passed storage and append to passed builders, but does not mutate unrelated
 K globals. The builtin runtime shims obey the same boundary.
 
-`return ... from` uses one thread-local `int32_t gs_rf` (zero except between
+`return ... from` uses one thread-local `int32_t k_rf` (zero except between
 a long-distance return and its catch), plus per-target thread-local
-channels: channels for in-flight fixed values (`gs_lret_<id>_<i>`), and
-destination stacks for nonfixed ones (`gs_fdst_<id>_<i>`, recorded at the
+channels: channels for in-flight fixed values (`k_lret_<id>_<i>`), and
+destination stacks for nonfixed ones (`k_fdst_<id>_<i>`, recorded at the
 target's entry and restored at its exit). A propagating function's ordinary
 exit writes nothing. A call on a propagation path costs one load and a
 never-taken branch, and an intermediate frame returns a dummy value after
 restoring its watermarks and running its `defer` bodies (§6.6), which the
 checker keeps free of this machinery (§3.16). `--unsafe-no-rf-check` omits
 the checks, for measurement only.
-A fixed relative aggregate's `gs_lret` channel is a pointer to the target's
+A fixed relative aggregate's `k_lret` channel is a pointer to the target's
 receiving storage, saved and restored at target entry/exit. The nonlocal
 return constructs through it, and the catch has no value to copy.
 A nonfixed value is built at its channel's top, which the return records
-first (`gs_fval_<id>_<i>`). The calls it unwinds may have built things
+first (`k_fval_<id>_<i>`). The calls it unwinds may have built things
 there, in the destination that the target handed them: a named result, part
 of a value, or a length prefix claimed for a callee's elements. So the
 target's catch moves the value down to its destination's top on entry, as
@@ -5669,8 +5669,8 @@ does. A call's value is plain too, since `default<T>()` of a relative
 reference is the null pointer. So where `default<Rel[N]>()` fills its
 temporary's elements with that null pointer, the lvalue store encodes it
 (`Call::CgAny`). The store's range check is emitted only where a root can
-exceed the width: for `in pool` under `#if GS_STACK_RESERVE >= 2^bits`, and
-for self-relative under `#if GS_STACK_RESERVE > 2^(bits-1)` when no
+exceed the width: for `in pool` under `#if K_STACK_RESERVE >= 2^bits`, and
+for self-relative under `#if K_STACK_RESERVE > 2^(bits-1)` when no
 fixed-size root in the program is wider than the width (`relrootmax`). So a
 `u32` link on the default 2 GB reservation is stored unchecked. A pool's
 base is loaded once per function into a local (`PoolBase`), and element
@@ -5689,17 +5689,17 @@ is negative or too large to hold). They turn a non-empty slice back into an
 index. Where the checker placed the slice in the pool, this is an exact
 divide. Otherwise (`Call::poolcheck`), the operation first tests that the
 slice lies inside the element region on an element boundary, and aborts
-with `GS_E_POOLSLICE` if it does not. The test uses `uintptr_t` arithmetic,
+with `K_E_POOLSLICE` if it does not. The test uses `uintptr_t` arithmetic,
 so that a slice of other storage compares without undefined pointer
 arithmetic. An empty slice takes index 0. The freelist is the runtime's
-(§7): its base, count and top are passed to the `gs_spans_*` call by
+(§7): its base, count and top are passed to the `k_spans_*` call by
 address, so a cached top works unchanged. A slice that ends the element
 region grows without a call. Growth of the element region is emitted here
 (`EmitSliceExtend`: count and top, as for a push), and so are the default
 values (`EmitDefaultElems`: one `memset`, or the checked default
 construction per element for a type with field defaults). A move is one
 `memmove`. A pool's freelist counts 8-byte slot indices for a slot pool and
-`GS_SPAN_NODE`-byte tree nodes for a slice pool (`FlEntrySize`); this is
+`K_SPAN_NODE`-byte tree nodes for a slice pool (`FlEntrySize`); this is
 what the thread-spawn image copies.
 
 A fixed struct or array literal that holds relative references is built at
@@ -5711,7 +5711,7 @@ MSVC miscompilations described in Appendix E. A zero-length array's literal
 is zero-initialized too (`HasUninitSlots`): nothing writes the one slot its
 C struct has, and copying a C object that nothing wrote is undefined. For
 the same reason, a struct or variant literal without fields zeroes its C
-object (`StructLitAt`): its `gs_empty` byte or its pads.
+object (`StructLitAt`): its `k_empty` byte or its pads.
 
 A string literal read as a `u8[]` value, of any length storage, is an image
 in static data (`GenStrBytes`). A string literal read as a runtime-capacity
@@ -5725,20 +5725,20 @@ followed by the worker program's globals as `[size][image]` records (a
 resizable's image is its count, its fixed fields and its tail's elements;
 a pool's image also carries its freelist). It then hands the packet to the
 runtime. The generated thunk (`EnsureThreadThunk`) unpacks the arguments
-onto fresh stacks, allocates the worker's `gs_globals_t`, fills it from the
+onto fresh stacks, allocates the worker's `k_globals_t`, fills it from the
 image, and runs the body. The runtime frees the instance
-(`gs_thread_release`). `thread_spawn_contained` is the same spawn with the
+(`k_thread_release`). `thread_spawn_contained` is the same spawn with the
 runtime's contained flag set (§7). `thread_wait` is emitted into a
 temporary, so a discarded answer still waits. `thread_wait(id, msg)`
 appends the message the runtime hands over to `msg`, as `to_bytes(a, out)`
-appends its image (`AppendBytes`), and then frees it (`gs_free_msg`).
-Queues are one `gs_queue` per element type, carrying one contiguous image
-per value; `main` creates them (`gs_qinit`) before anything else runs. A
+appends its image (`AppendBytes`), and then frees it (`k_free_msg`).
+Queues are one `k_queue` per element type, carrying one contiguous image
+per value; `main` creates them (`k_qinit`) before anything else runs. A
 missed `qpoll` yields the all-zero image (`MinBytes`). A queue is a linked
 list of `malloc`'d nodes under a mutex, with a condition variable for its
-receivers, and a count of its messages. `gs_qput` allocates and copies
+receivers, and a count of its messages. `k_qput` allocates and copies
 before it takes the lock, and checks the queue's limit under the lock; a
-refusal frees the node. A timed `qget` (`gs_qwait`) waits for a deadline on
+refusal frees the node. A timed `qget` (`k_qwait`) waits for a deadline on
 a monotonic clock, and a miss yields the zero image, as a missed `qpoll`
 does. On POSIX the condition variable's clock is set to `CLOCK_MONOTONIC`,
 on macOS the wait is for a relative time
@@ -5751,13 +5751,13 @@ gives it rather than reading past the image.
 
 Codegen generates these per type, on demand:
 
-* `gs_size_<T>`: the byte size of a dynamic value.
-* `gs_eq_<T>`: structural equality. It is a `memcmp` for gap-free fixed
+* `k_size_<T>`: the byte size of a dynamic value.
+* `k_eq_<T>`: structural equality. It is a `memcmp` for gap-free fixed
   types of more than four scalars, and for canonical-encoding bytes values
   that hold no floats, pads or runtime-capacity limited arrays. Otherwise
   it is a cursor walk, which steps over pads and over a limited array's
   slots past its length. A fixed value of at most four integer or bool
-  scalars compares field by field, through its `gs_eq_<T>`, which the C
+  scalars compares field by field, through its `k_eq_<T>`, which the C
   compiler inlines. Through `memcmp`, an operand just built in registers
   would be stored field by field and read back in one wider load, which
   store forwarding cannot serve. A static-capacity limited array of such
@@ -5767,20 +5767,20 @@ Codegen generates these per type, on demand:
   last word that would end past the slots ends at the value's end instead,
   reaching back into slots already compared or into the length, which are
   equal on both sides by then.
-* `gs_verify_<T>`: the `from_bytes` verifier of
+* `k_verify_<T>`: the `from_bytes` verifier of
   `docs/design/serialization.md`. It is one framing pass for fixed
   elements, and for variable elements a framing pass that sets an
   element-start bitmap, followed by a link pass.
 * The tag enums.
 
-Text rendering (`codegen_render.h`) formats scalars through `gs_fmt_*`,
+Text rendering (`codegen_render.h`) formats scalars through `k_fmt_*`,
 copies `u8` bytes, and renders everything else structurally into a
 `u8[>..]` builder or through the user `format` specialization recorded on
 the call. `print` renders the whole line into a temporary builder before
 writing it, so lines from different threads never interleave. A struct,
 variant or ADT that is met again inside its own rendering (a type that
 reaches itself through references or slices) is rendered from there by
-`gs_render_<T>`, one function per type (`RenderFn`). This function takes
+`k_render_<T>`, one function per type (`RenderFn`). This function takes
 the builder and a reference to the value, as an overload taking the value
 by reference does. It calls itself, or the functions of the other types of
 a mutual recursion, for each level below. No overload renders a part of
@@ -5791,7 +5791,7 @@ hands no stack on. So the overloads a rendering runs are all called by the
 function that prints, above its live stacks (`EmitUserFormat`). Some
 overload parameters are keyed to a reusable pool by the overload's
 specialization (`IsPoolParam`), such as the value rendered or the builder a
-`format` writes into. Such a parameter is handed the pool's `gs_pref`
+`format` writes into. Such a parameter is handed the pool's `k_pref`
 (`PrefArg`), as a call's argument for such a parameter is (`EmitArg`). A
 resizable tail with no header of its own is rendered in place one level
 more, up to the reference to the next.
@@ -5855,10 +5855,10 @@ over the rendering of strings and every other value, its own body's
 included. Reference rendering follows pointees and has no cycle
 detection: a cyclic value recurses through its render functions until the
 native stack runs out (§7, **Native stacks**). An integer's text comes
-from the runtime's digit loop (`gs_fmt_i64`, `gs_fmt_u64`): the digit
+from the runtime's digit loop (`k_fmt_i64`, `k_fmt_u64`): the digit
 count, then the digits from the right, two per division by 100. printf's
 format parsing and locale handling take several times as long as this
-conversion. Finite float formatting (`gs_fmt_f64`, `gs_fmt_f32`) writes the
+conversion. Finite float formatting (`k_fmt_f64`, `k_fmt_f32`) writes the
 fewest significant decimal digits that read back as the same value of the
 float's own type. Of those, it writes the ones nearest the value, with a
 tie going to the even digit. This is what Python's `repr` and Ryu give for
@@ -5880,16 +5880,16 @@ which C float literals and dumps use, is the same text, with its digits
 from `std::to_chars`. Infinities and NaNs are written by the runtime
 (`inf`, `-inf`, `nan`) rather than by the C library, which differs between
 backends: msvcrt writes `1.#INF` and `-1.#IND`, and others print a NaN's
-sign. The same digits, without the layout, are what `gs_f64_digits` hands
+sign. The same digits, without the layout, are what `k_f64_digits` hands
 `std`'s `float_text::shortest_digits`: `json::format_number` finds the
 digits of doubles from about 1e-10 to 2^51 with ryu's loop on exact 128-bit
 values in K, and takes the runtime's for the rest.
 
 **Output.** `print` renders its whole line, including the newline, into a
-statement-stack builder and hands it to one `fwrite` (`gs_out_bytes`) on an
+statement-stack builder and hands it to one `fwrite` (`k_out_bytes`) on an
 unbuffered stdout. So nothing printed is lost to an abort, and no other
 thread's line ends up inside it. On Windows the runtime puts stdin, stdout
-and stderr in binary mode as it starts (`gs_rt_start`). A newline is then
+and stderr in binary mode as it starts (`k_rt_start`). A newline is then
 written as the one byte it is everywhere else, not as the `\r\n` that the
 CRT's text mode writes a byte at a time. And `read_stdin` gets the bytes
 that came in; text mode would hand them over with each `\r\n` turned into
@@ -5942,7 +5942,7 @@ the body may also name directly. So which stacks are cached is decided
 class by class (`PlanTopClasses`). Each class is cached only where nothing
 the body holds can be a second name for one of its stacks:
 
-* the function's own indexed stacks, `GS(gs_sp + k)`, which no caller
+* the function's own indexed stacks, `K_STACK(k_sp + k)`, which no caller
   expression can name. They are not cached if the body holds a fat
   reference that could be rooted at one of its own locals: one in a local
   variable that is not an alias (below), one read out of a field or an
@@ -5957,9 +5957,9 @@ the body holds can be a second name for one of its stacks:
   in the body: a captured variable may be its function's named result,
   built at that function's destination, which is where such a return builds
   its value;
-* the return destinations, `gs_dst<i>`, which a caller may hand over as a
+* the return destinations, `k_dst<i>`, which a caller may hand over as a
   global's stack, a parameter's or a captured variable's. These are cached
-  only where the body names none of those, returns to no gs_fdst channel,
+  only where the body names none of those, returns to no k_fdst channel,
   and is not a `return from` target;
 * the reference parameters' `.stk`, in the **reference-parameter mode**
   (`RefTopsOk`). This mode requires that every fat reference in the body is
@@ -5985,7 +5985,7 @@ reference variable that cannot be rebound and is bound to one of:
   function value's reference parameter).
 
 Every use of an alias reads what it stands for, its pointee being that
-location (`VarLoc`, `DerefLoc`), and a use as a value makes the `gs_rref`
+location (`VarLoc`, `DerefLoc`), and a use as a value makes the `k_rref`
 on the spot. So the stack and the header are still named in only one way,
 and a local's header does not escape through a pointer that nothing needs.
 An inlined `push_n` or heap operation on a local is therefore cached as a
@@ -6060,13 +6060,13 @@ A `let` is as writable through a reference as a `var` (§4.4), so being a
 variable of global initialization code qualify only as an integer `let`
 that no writable reference is bound to (`VarDef::refwrite`).
 
-Ahead of the outermost loop that the divisor is fixed for, `gs_divu_gen`
+Ahead of the outermost loop that the divisor is fixed for, `k_divu_gen`
 computes libdivide's magic number and shift for it once (one 128-by-64-bit
 division). Each division is then the high half of a product, adjusted and
-shifted (`gs_divu_q`); a remainder is the dividend minus the quotient times
+shifted (`k_divu_q`); a remainder is the dividend minus the quotient times
 the divisor. Operands of 32 bits or fewer (`NarrowDivision`) use a 32-bit
-magic number instead (`gs_divu32_gen`, one 64-by-32-bit division, and
-`gs_divu32_q`). They get their own magic number even where a 64-bit
+magic number instead (`k_divu32_gen`, one 64-by-32-bit division, and
+`k_divu32_q`). They get their own magic number even where a 64-bit
 division by the same divisor shares the loop (`DivisionKey`). Each such
 division is then the high half of a 32-by-32-bit product, which a C
 compiler vectorizes; x86-64 has the 64-by-64-bit product only as a scalar
@@ -6074,15 +6074,15 @@ instruction. A loop summing `u32` remainders runs about seven times as fast
 with AVX-512, and a loop reducing a million `u32`s in place by `x %= m`
 runs 4.3 times as fast at x86-64's baseline (clang-cl 22).
 
-A zero divisor gets `GS_DIVU_NONE`, under which every division uses the
+A zero divisor gets `K_DIVU_NONE`, under which every division uses the
 plain operator and its zero check, so the abort happens where and when a
-division by zero runs. `GS_DIVU_NONE` is also used for a divisor whose
+division by zero runs. `K_DIVU_NONE` is also used for a divisor whose
 conversion would fail (the divisor is computed ahead of the loop without
 the conversion's check, `DivisorValue`), and for a 64-bit magic number
 under a C compiler without 128-bit products (TinyCC). Where a zero divisor
 is the only case that can be left without a 32-bit magic number
 (`DivMagic::zeronone`: no conversion is checked), the division instead
-fails outright under `GS_DIVU_NONE`. gcc copies that test of a
+fails outright under `K_DIVU_NONE`. gcc copies that test of a
 loop-invariant value out of the loop. The plain division's own zero test
 would leave a loop exit, after which the loop's stores might not run, and
 gcc holds such stores in registers, as vectorizing needs, only where they
@@ -6265,24 +6265,24 @@ up-counting induction variable is the form clang compiles best.
 A `simd fn` (spec §7.12) is emitted by `EmitSimdVersions` from the finished
 body text of each of its specializations, including its element-run twin.
 It emits one copy per level above the baseline, named `<cname>_simd<level>`
-and marked `GS_SIMD_TARGET<level>`, and then the baseline under the
-function's own name. The baseline starts by switching on `gs_simd_level()`
+and marked `K_SIMD_TARGET<level>`, and then the baseline under the
+function's own name. The baseline starts by switching on `k_simd_level()`
 to the highest version that was built and is supported, forwarding its
 parameters (the names of `SigParams`' declarations). Every caller,
 prototype, function value, export wrapper and thread thunk names the
 baseline, so nothing else changes. The versions are under
-`#if GS_SIMD >= <level>` and the switch is under `#if GS_SIMD >= 1`. The
-runtime (`runtime.h`) sets `GS_SIMD` to 2 under clang on x86-64 and to 0
+`#if K_SIMD >= <level>` and the switch is under `#if K_SIMD >= 1`. The
+runtime (`runtime.h`) sets `K_SIMD` to 2 under clang on x86-64 and to 0
 everywhere else, where the C compiler sees one ordinary function, so MSVC,
 TinyCC and other targets get no overhead from it. A build can lower it with
-`-DGS_SIMD=1` (no AVX-512 version) or `0`.
+`-DK_SIMD=1` (no AVX-512 version) or `0`.
 
 * **Levels.** 1 is AVX2 with FMA, BMI1, BMI2, LZCNT and POPCNT; 2 adds
   AVX-512 F, BW, CD, DQ and VL (x86-64-v4). Clang inlines a
   baseline callee into a version (a callee whose target features are a
   subset of the caller's), so a small helper the loop calls is vectorized
   with it; it never inlines a version into the baseline.
-* **Detection** (`gs_simd_detect`) is the compiler's own: `cpuid` for the
+* **Detection** (`k_simd_detect`) is the compiler's own: `cpuid` for the
   feature bits and `xgetbv` for the register state the operating system
   saves (XCR0's YMM bits for level 1, its opmask and ZMM bits for level 2),
   in inline assembly. An operating system that enables a register state
@@ -6307,14 +6307,14 @@ TinyCC and other targets get no overhead from it. A build can lower it with
   the dot product's dependency chain.
 * **`mul_add`.** `math`'s `mul_add` is the program saying where to fuse,
   and the one result a version may give differently from its baseline
-  (spec §7.12). It is an extern bound to `gs_mul_add` (`gs_mul_addf`).
+  (spec §7.12). It is an extern bound to `k_mul_add` (`k_mul_addf`).
   `runtime_ext.h` defines that name twice: as a function, and then as a
   macro of the same name, which every call in the generated code names. The
-  macro pastes `GS_MUL_ADD_MODE` into `gs_mul_add_fused` (`__builtin_fma`,
+  macro pastes `K_MUL_ADD_MODE` into `k_mul_add_fused` (`__builtin_fma`,
   always inlined so that it is built with its caller's FMA) or
-  `gs_mul_add_separate` (`x * y + z`, two roundings under the contraction
+  `k_mul_add_separate` (`x * y + z`, two roundings under the contraction
   pragma), so a call gets the mode in force where it is emitted.
-  `runtime.h` sets the mode to `GS_MUL_ADD_BASE`: fused where the whole
+  `runtime.h` sets the mode to `K_MUL_ADD_BASE`: fused where the whole
   translation unit has FMA (`__FMA__`, arm64), and separate elsewhere,
   under TinyCC and under MSVC, whose `fma()` is a call into the C library
   even with `/arch:AVX2` (a matrix multiply ran 2.7x slower fused). `EmitSimdVersions` sets it to fused
@@ -6366,7 +6366,7 @@ AVX2 version had 208 two-lane operations next to 175 four-lane ones, and
 spilled. So where the C compiler has GCC's vector extensions, a `+`, `-`,
 `*`, `/` or negation of a value whose leaves are all floats of one width,
 2, 4, 8 or 16 of them in 16, 32 or 64 bytes with nothing else in it, is one
-operation on a vector type of the same size (`gs_vf64_4` and the others in
+operation on a vector type of the same size (`k_vf64_4` and the others in
 `runtime.h`). `VecShape` decides which values qualify: structs, nested
 structs and fixed arrays alike. It rejects a type over 64 bytes before
 looking at its leaves, and stops at the seventeenth, so a large nested array
@@ -6381,7 +6381,7 @@ costs nothing to check.
   copied to temps of the struct's own type, so a destination that is one of
   them, or whose member a scalar operand reads, works as it does member by
   member. The temps are read and the destination written through the vector
-  type (`GS_VLD`, `GS_VST`), which is `aligned(1)`, since a struct of
+  type (`K_VLD`, `K_VST`), which is `aligned(1)`, since a struct of
   floats may sit anywhere (structs are packed), and `may_alias`, since it
   reads memory written as floats.
 * **Only in expressions.** The vector code uses the vector types only
@@ -6391,10 +6391,10 @@ costs nothing to check.
   functions: inside a `simd fn`'s AVX2 version that passed a 32-byte vector
   between code built for AVX and code that wasn't, which the x86-64 ABI
   forbids, and clang rejected it for Linux and macOS (Windows accepted it).
-* **Where.** The vector form is under `#if GS_VEC`, temps included, with
+* **Where.** The vector form is under `#if K_VEC`, temps included, with
   the member-by-member form under `#else`, so TinyCC pays nothing for it.
-  `runtime.h` sets `GS_VEC` under clang and gcc, not MSVC or TinyCC, which
-  have no vector extensions; `-DGS_VEC=0` turns it off.
+  `runtime.h` sets `K_VEC` under clang and gcc, not MSVC or TinyCC, which
+  have no vector extensions; `-DK_VEC=0` turns it off.
 * **Effect.** In klang-fft the radix-8 pass's AVX2 version came to 12
   two-lane operations next to 261 four-lane ones, a third fewer spills and
   no shuffles, and transforms of 16 to 16,384 points ran 1.25-1.6x faster
@@ -6405,7 +6405,7 @@ costs nothing to check.
   lane.
 * **Tests.** `test/codegen/vec_elemwise.k` covers each vector type, in
   plain functions and in a `simd fn`, and shapes that don't qualify. The
-  runner's `clang_vec` builds it with `GS_VEC` on and off. The `simd fn`
+  runner's `clang_vec` builds it with `K_VEC` on and off. The `simd fn`
   cases are the ones that failed on x86-64 Linux and macOS (above), whose CI
   runs that task.
 
@@ -6426,8 +6426,8 @@ written is.
   references are read from its text: a name that a `SpecText` defines, which
   `Unique` keeps apart from every local, type and global name, and which is
   no reference after `.` or `->`, where it would be a member; and a
-  long-distance return's number, in the channels `gs_lret_K_J`,
-  `gs_fdst_K_J` and `gs_fval_K_J` (`FromChannels`) and as what `gs_rf` is
+  long-distance return's number, in the channels `k_lret_K_J`,
+  `k_fdst_K_J` and `k_fval_K_J` (`FromChannels`) and as what `k_rf` is
   compared with or set to (`EmitRfCheck`, `PropagateReturn`). A number
   stands for its target's function, the one that catches it. Literals and
   comments hold no references.
@@ -6445,7 +6445,7 @@ written is.
   never merge two copies of a recursion, each calling itself or its own
   copy of the other function. A target stands only with targets.
 * **Output.** The first function of a group is kept. In it, and in the rest
-  of the C (calls, thunks, exports, `gs_init_globals`), a reference to any
+  of the C (calls, thunks, exports, `k_init_globals`), a reference to any
   function of a group names the kept one, and a target's number becomes the
   number of the kept copy of the target. The prototypes of the others go,
   and so do the channels of a target that is not kept; a merged target's
@@ -6454,7 +6454,7 @@ written is.
 * **Renumbering.** Merging changes no control flow: each frame runs the
   kept copy of what it ran, which is the same C up to references into the
   same groups. What can change is where a long-distance return to `t`
-  stops. A frame it passes compares `gs_rf` with that frame's own number
+  stops. A frame it passes compares `k_rf` with that frame's own number
   where the frame is a target too (§6.6), and a frame of another target of
   `t`'s group would now catch it. There is none: `t`'s group holds only
   specializations of `t`'s function, and a return to `t` passes none but
@@ -6470,7 +6470,7 @@ written is.
   shares `t`'s group.
 * **What stays apart.** Copies whose C differs in anything else: a loop
   that BCE bounds in one copy and not the other (§6.12), say, or a
-  `GS_INLINE` on one (`FnSpec::cinline`, §4).
+  `K_INLINE` on one (`FnSpec::cinline`, §4).
 * **Effect.** `samples/18_json.k` is a recursive descent parser whose
   nested functions report an error with `return ... from parse`. `parse`
   and the functions nested in it had two copies each, the target included;
@@ -6488,11 +6488,11 @@ freelists, byte search, and the C behind `stdlib/os.k`. It comes in two
 halves. The first half is what a program's own translation unit needs.
 `src/runtime/runtime.h` holds configuration, macros, the helpers that must
 inline (integer operations, checks, varints), the data stack state the
-emitted code reads (`gs_stks`, `gs_gl`) with the few functions that touch
+emitted code reads (`k_stks`, `k_gl`) with the few functions that touch
 it, and declarations of everything else. `runtime_ext.h` is spliced in after
 the generated types, because it is written against them. It adds the extern
-support an `--include` header may use (`gs_bld_append`), declares the
-`gs_os_*` functions and defines math's `sqrt` (`gs_sqrt`, `gs_sqrtf`). C's
+support an `--include` header may use (`k_bld_append`), declares the
+`k_os_*` functions and defines math's `sqrt` (`k_sqrt`, `k_sqrtf`). C's
 `sqrt` sets errno for a negative argument, so clang and gcc guard each call
 with a test and a library call, and will not vectorize a loop around it.
 Where the C compiler has a square root without errno
@@ -6503,19 +6503,19 @@ or call around it. Elsewhere it is C's. The other half, `runtime_impl.h`,
 declares, and is the only part that includes the platform's headers.
 
 How the halves meet is the driver's choice (`main.cpp`). The C that `-o`
-writes defines `GS_SEPARATE_RUNTIME` and holds only the first half, with the
-functions it declares left extern. `klang --emit-runtime` writes the second
-half as a C file of its own (`GS_RUNTIME_OBJECT`), with the first half
+writes defines `K_SEPARATE_RUNTIME` and holds only the first half, with the
+functions it declares left extern. `k --emit-runtime` writes the second
+half as a C file of its own (`K_RUNTIME_OBJECT`), with the first half
 included for its declarations. This file is compiled once and linked with
 every program. The resulting object serves every program the compiler
 writes, whatever its configuration. It always supports workers
-(`GS_NEED_THREADS`, which otherwise only the program's own state follows),
+(`K_NEED_THREADS`, which otherwise only the program's own state follows),
 it holds the failure paths of both debug and release builds, and it takes
 the data stack sizes and counts from the program as the program starts
-(`gs_rt_start`, called by the program's `gs_rt_init`) rather than from
+(`k_rt_start`, called by the program's `k_rt_init`) rather than from
 macros. A program and its runtime object do have to agree on the runtime
-itself. Both define `GS_RUNTIME_VERSION`, a hash of the runtime's text,
-which is appended to the name of `gs_rt_start`, so a program written by
+itself. Both define `K_RUNTIME_VERSION`, a hash of the runtime's text,
+which is appended to the name of `k_rt_start`, so a program written by
 another version of the compiler fails to link. `--standalone` writes
 everything into one unit, with everything the runtime defines made static. A
 JIT run compiles this form, because TinyCC builds one unit in memory and
@@ -6529,9 +6529,9 @@ paths, printing, the OS layer and region reservation, none of which is on a
 hot path. Every function a failing check calls is declared not to return,
 which is what the C compiler needs to keep a check's path short.
 
-**Data stacks.** Each stack is one reserved region of `GS_STACK_RESERVE`
+**Data stacks.** Each stack is one reserved region of `K_STACK_RESERVE`
 bytes (default 2 GB, capped at 2^48 by §10.4) plus an unmapped tail of
-`GS_STACK_GAP` bytes. The program's configuration sets both sizes and hands
+`K_STACK_GAP` bytes. The program's configuration sets both sizes and hands
 them to the runtime as the program starts. The runtime rounds the
 reservation down to whole pages: the gap has to start on a page boundary to
 be protected, and on Windows a stack would otherwise grow unnoticed through
@@ -6544,15 +6544,15 @@ reached), the handler reports it as out of memory. macOS and Linux map the
 usable region read/write and protect only the gap; the kernel supplies
 physical pages on demand, without calling the runtime's signal handler.
 To support Windows, runtime C writes to a stack only in user mode (`memcpy`,
-`gs_bld_append`) and never through a system call, because a system call
+`k_bld_append`) and never through a system call, because a system call
 would fail on an uncommitted page instead of faulting.
 
 If the platform refuses a region (because its address
 space, an address-space limit or strict overcommit accounting is exhausted),
 the runtime retries at half the size, in whole pages, down to 1 MB, and
 every region reserved after that starts out that much smaller
-(`gs_reserve_region`). A smaller region is always safe: the checks the
-compiler leaves out assume no more than `GS_STACK_RESERVE` bytes in a stack,
+(`k_reserve_region`). A smaller region is always safe: the checks the
+compiler leaves out assume no more than `K_STACK_RESERVE` bytes in a stack,
 and the guard gap behind a smaller region only aborts growth sooner. Each
 region therefore carries its own sizes for the fault handler. An overrun
 ends the program with a message that names the thread program, the region's
@@ -6560,9 +6560,9 @@ size and the flag that raises that size. The message is written without
 stdio, since a signal handler may not call stdio.
 
 A thread program's stacks
-are kept in a block reached through the thread-local `gs_stks`. Since the
+are kept in a block reached through the thread-local `k_stks`. Since the
 compiler knows how many there are, all of them are reserved as the thread
-program starts (`gs_stack_block`, called from `gs_rt_init` for main and from
+program starts (`k_stack_block`, called from `k_rt_init` for main and from
 its entry thunk for a worker). A worker's stacks are released when it exits.
 Every region owned by the current thread program is registered
 thread-locally, so that the fault handler never touches another worker's
@@ -6570,10 +6570,10 @@ state. The registry is sized to the program's region count; the runtime
 allocates it as the thread program starts and frees it together with the
 thread program's regions.
 
-**Trimming.** `os.trim_memory` (`gs_trim_memory`) walks the calling thread
+**Trimming.** `os.trim_memory` (`k_trim_memory`) walks the calling thread
 program's registry and gives back each region's complete pages above its
 stack's top. Windows decommits them, stopping at the highest page the fault
-handler has committed (`gs_region::committed`). Linux drops them with
+handler has committed (`k_region::committed`). Linux drops them with
 `MADV_DONTNEED`. macOS replaces the unused suffix of the reservation with
 a fresh read/write anonymous mapping using `MAP_FIXED`. XNU replaces the
 mapping atomically, so another thread cannot claim the addresses during
@@ -6588,7 +6588,7 @@ marks every function that may reach the extern, and the callers of those
 functions also write back all their cached tops around the call
 (`SyncReach`).
 
-**Stack counts and the thread cap.** Every function's stacks are `gs_sp + k`
+**Stack counts and the thread cap.** Every function's stacks are `k_sp + k`
 for constants below its own count. A callee's stacks start above the ones
 the caller has in use at the call, and no call into a recursive cycle is
 made with a stack in use (§7.8, `NoStackAcrossCycleCall`). The number of
@@ -6596,60 +6596,60 @@ stacks a program can have in use at once is therefore a compile-time
 constant, which the compiler computes over its call graph (`BoundStacks`,
 `codegen_stacks.h`). A function's count is the larger of its own count and,
 over its calls, the index handed on plus the callee's count, and the members
-of a cycle share one count. A count above `GS_MAX_STACKS` (set by the
+of a cycle share one count. A count above `K_MAX_STACKS` (set by the
 program's configuration; 1024 by default) is a compile error that names the
 program (`CheckStackLimit`); the runtime never checks it. The generated
-`gs_program_init` hands `gs_rt_init` the main program's count, and the most
+`k_program_init` hands `k_rt_init` the main program's count, and the most
 regions the main program and any one worker hold (the count plus the
 dedicated stacks of the globals and of the worker's arguments). From these,
 the runtime caps `hardware_threads()` at the number of workers that
-`GS_STACK_BUDGET` (32 TB by default) has room for beside the main program,
+`K_STACK_BUDGET` (32 TB by default) has room for beside the main program,
 but at least one. A pool sized by `hardware_threads()` therefore never runs
 the program out of address space. The budget plans for this; it is not
 enforced. Workers that hold no regions leave `hardware_threads()` uncapped.
 `--stacks` prints the counts, the cap and each function's share. A program
-built with `-DGS_STACK_STATS=1` reports each thread program's stacks and
+built with `-DK_STACK_STATS=1` reports each thread program's stacks and
 regions on stderr as that thread program ends.
 
-**Ending a program.** A library build (`--header`) ends with `klang_exit`,
-which gives back what `klang_init` took, so that a host can start a program
+**Ending a program.** A library build (`--header`) ends with `k_exit`,
+which gives back what `k_init` took, so that a host can start a program
 in the process again (one it has rebuilt and reloaded, say): main's stack
-block; then `gs_rt_stop`, which refuses while a worker still runs, drops
+block; then `k_rt_stop`, which refuses while a worker still runs, drops
 the records of the workers that aborted, releases main's regions and
-registry as a worker's end does (`gs_release_regions`) and puts back the
-fault handling the runtime found (`gs_fault_uninstall`); then the queues
-(`gs_qfree`). The JIT host does the same after each run (`gs_rt_release`),
+registry as a worker's end does (`k_release_regions`) and puts back the
+fault handling the runtime found (`k_fault_uninstall`); then the queues
+(`k_qfree`). The JIT host does the same after each run (`k_rt_release`),
 without the worker check: a program it runs may return from `main` with
 workers running, which the process ends. Where programs share a runtime
-object, `gs_rt_start` refuses to start one while another's regions are
+object, `k_rt_start` refuses to start one while another's regions are
 live, rather than forget them.
 
 **Entering through an export.** An export's wrapper calls its function at
-`gs_sp` 0, which reads the tops of the thread's stacks from memory. K
+`k_sp` 0, which reads the tops of the thread's stacks from memory. K
 code that is running may still hold those tops in locals (§6.10), so the
 export is only entered while no K code runs on the thread. A per-thread
-`gs_entry_state` says where the thread stands: 0 on a thread other than the
-one the program started on (and before `klang_init`, or after
-`klang_exit`), 1 there while no K code runs, and 2 while it does.
-`gs_program_init` sets 2 before the globals' initializers run, `klang_init`
-sets 1 once `main` returns, `klang_exit` sets 0, and a worker's thunk sets 2
+`k_entry_state` says where the thread stands: 0 on a thread other than the
+one the program started on (and before `k_init`, or after
+`k_exit`), 1 there while no K code runs, and 2 while it does.
+`k_program_init` sets 2 before the globals' initializers run, `k_init`
+sets 1 once `main` returns, `k_exit` sets 0, and a worker's thunk sets 2
 on its own thread. The wrapper requires 1, holds 2 around the call, and
-otherwise reports why through `gs_export_refused`, which is all an export
+otherwise reports why through `k_export_refused`, which is all an export
 call costs beyond the call itself. Where the program uses no threads,
-`GS_TLS` is empty and the state is one for the process, so a call from
+`K_TLS` is empty and the state is one for the process, so a call from
 another thread is not told apart. An `extern fn` that names an export's own
 C symbol, which would make the same call from K code, is refused by the
 checker (`CheckExport`).
 
 **Native stacks.** Recursion consumes only the native call stack (spec
 §7.8), whose size is set when its thread starts. A worker reserves
-`GS_THREAD_STACK` (8 MB) where the system's default is less, as on macOS
+`K_THREAD_STACK` (8 MB) where the system's default is less, as on macOS
 (512 KB) and Windows (1 MB), so that a worker has the stack a main thread
 has; it is address space, committed as the stack grows. Running out of it ends the
 program with `klang runtime error: native call stack overflow` and exit
 status 1, as a data stack overrun does. The thread of every thread program
-prepares for this as it starts (`gs_native_stack_init`, called from
-`gs_rt_start` and `gs_thread_main`). On Windows the vectored handler handles
+prepares for this as it starts (`k_native_stack_init`, called from
+`k_rt_start` and `k_thread_main`). On Windows the vectored handler handles
 `EXCEPTION_STACK_OVERFLOW`, and `SetThreadStackGuarantee` keeps 64 KB of
 each such stack for the handler: without that guarantee, the stack an
 overflow leaves only just holds the report and `ExitProcess`. A program
@@ -6668,37 +6668,37 @@ or a sanitizer's report. A JIT program runs on the compiler's main thread
 (§1), and installs all this there.
 
 **Contained workers** (spec §11.2). A worker started with
-`thread_spawn_contained` runs its thread program under `gs_run_contained`,
-which points the thread-local `gs_contain` at a `gs_contained` on its stack
+`thread_spawn_contained` runs its thread program under `k_run_contained`,
+which points the thread-local `k_contain` at a `k_contained` on its stack
 (a `jmp_buf` and the message). Every failed check and `abort(msg)` ends in
-`gs_fail`, which formats the message. In a contained worker, `gs_fail`
+`k_fail`, which formats the message. In a contained worker, `k_fail`
 stores the message in a `malloc`ed buffer and jumps; anywhere else it prints
-the message and calls `gs_end`. After the jump, the worker releases what a
-return would: its globals instance and stack block (`gs_thread_release`),
+the message and calls `k_end`. After the jump, the worker releases what a
+return would: its globals instance and stack block (`k_thread_release`),
 its copied arguments, and its regions. Its id is recorded in a bit set with
 one bit per id, which `thread_wait` reads to answer `false`. Its message
-goes into `gs_aborted` and stays there until the first wait that asks for it
+goes into `k_aborted` and stays there until the first wait that asks for it
 takes it out, so that list holds only the messages no wait has taken. The
-bit is never cleared. `gs_panic`, `gs_exit`, and the fault handlers still
+bit is never cleared. `k_panic`, `k_runtime_exit`, and the fault handlers still
 end the process.
 
 **Integer semantics** (§6.2): every operation runs at its type through
-`gs_add_i32`-style helpers. Under `GS_DEBUG` these are functions that check
+`k_add_i32`-style helpers. Under `K_DEBUG` these are functions that check
 the wide result; otherwise they are macros equal to the release expression
 (when they were functions, they measured 13--37% of runtime under a
 non-inlining backend). Division and modulo are always functions, check for
 zero, and use Euclidean `%`. One table (`CodeGen::ArithX`) writes out the
 scalar operators in C wherever one is applied: a binary operator, a compound
 assignment (its plain operator), `++` and `--`, and each member of an
-elementwise operation. `as` goes through `GS_RANGE`/`GS_F2I`/... macros that
+elementwise operation. `as` goes through `K_RANGE`/`K_F2I`/... macros that
 check in debug builds and cast in release builds. Two kinds of `as` are
 plain C casts in every build: a cast to a float, and a cast from an integer
 type whose every value the target type holds. `as!` and release float-to-int
-casts use the defined wrap of `gs_f2iwrap`. It tests the value itself
+casts use the defined wrap of `k_f2iwrap`. It tests the value itself
 against the i64 range (a value lies in that range exactly when its
 truncation does), and inside the range converts with the C cast, a single
 hardware instruction that truncates by itself. NaN and the values outside
-the range go to the out-of-line `gs_f2iwrap_slow`, which is the only place
+the range go to the out-of-line `k_f2iwrap_slow`, which is the only place
 that calls libm's `trunc` and `fmod` (these are calls on baseline x86-64,
 which has no rounding instruction). The add, sub, mul and neg helpers of a
 signed type, and every checked cast, also take the file and line of the
@@ -6707,27 +6707,27 @@ operation. A debug check that fails prints them together with the operands
 evaluating them, so release builds compile to the same code as they would
 without them. The arguments add about 1% to the generated C, and no
 measurable TinyCC compile time. Bounds checks are one unsigned compare
-(`GS_IDX`).
+(`K_IDX`).
 
-**Slice pools** (§5.4): the `gs_spans_*` functions (`runtime_impl.h`) keep a
+**Slice pools** (§5.4): the `k_spans_*` functions (`runtime_impl.h`) keep a
 `reusable[]` pool's freelist on a stack of its own. They are handed the
 freelist's base, node count and stack top (the address of a cached top works
 as well as the memory form). The free spans are stored in the leaves of a B+
-tree ordered by index. Its nodes are `GS_SPAN_NODE` (512) bytes each and are
+tree ordered by index. Its nodes are `K_SPAN_NODE` (512) bytes each and are
 numbered from the base. Node 0 is a header (root, height, the chain of
 emptied nodes), a leaf holds up to 31 spans, and an inner node holds up to
 20 children, each with the first index and the largest count under it.
 
-Placing a run (`gs_spans_alloc`, used by `alloc_slice` and when
+Placing a run (`k_spans_alloc`, used by `alloc_slice` and when
 `realloc_slice` moves a slice) follows those largest counts down to the
 first span that can hold the run. If no span can, it falls back to the last
 span, and the run starts there if that span reaches the end of the array.
-Freeing (`gs_spans_free`) descends by index to the last span before the run.
+Freeing (`k_spans_free`) descends by index to the last span before the run.
 The span after the run is that span's neighbor in the leaf, or the first
 span of the next leaf. The first index of the next leaf is the key of the
 entry that leads to it, so a path to that leaf is only made when its first
 span touches the run. Growing a slice that does not end the array
-(`gs_spans_regrow`) takes the same descent from the slice's start. The span
+(`k_spans_regrow`) takes the same descent from the slice's start. The span
 after the slice is the one it grows into. If it cannot grow into that span,
 the span before and the span after are what the slice's elements merge with
 before the slice is placed again. Each of these operations takes one descent
@@ -6754,8 +6754,8 @@ default values.
 
 std's `slice_pool` (docs/stdlib.md) keeps the same tree in its `nodes` field,
 with the header in its `tree` field and node 0 left zero, and calls a copy of
-these functions: its externs `gs_slice_pool_*` and their `gs_spc_*` helpers,
-in `runtime_os.h`, where `gs_rref` is defined. Those fields are the
+these functions: its externs `k_slice_pool_*` and their `k_spc_*` helpers,
+in `runtime_os.h`, where `k_rref` is defined. Those fields are the
 program's to write, so the copy checks
 what it reads before it uses it: a node number must be one of the nodes past
 node 0, an entry count must fit the node it is read from as a leaf or inner
@@ -6764,9 +6764,9 @@ must be one the node has room for or holds. A node reached at two levels of
 a path, or one the chain hands out while it is still in the tree, keeps
 every access inside the nodes: each count the copy writes fits a leaf, and
 the counts that index an inner node's children are checked where they are
-read. A check that fails aborts with `GS_E_SPANTREE` at the `gs_loc` the
+read. A check that fails aborts with `K_E_SPANTREE` at the `k_loc` the
 extern was passed (`SFunction::takesloc`), the program's call into
-`slice_pool`, which `gs_spcpath` carries. A wrong tree that passes them hands
+`slice_pool`, which `k_spcpath` carries. A wrong tree that passes them hands
 out wrong spans, which `slice_pool`'s own check against its length catches
 where they start past it. Sums of stored indices and counts wrap rather than
 overflow, and new nodes past the last are zeroed, as a pushed `node { .. }`
@@ -6782,8 +6782,8 @@ native C over SDL3 and Nuklear in the gfx package, and over Box3D in the
 physics package. That C is compiled once into static libraries, which a
 program links when it is built from the generated C, and which are compiled
 into the compiler itself for JIT runs when the compiler is configured with
-them. The generated C only declares the `gs_gfx_*`, `gs_audio_*`, `gs_ui_*`
-and `gs_phys_*` functions it calls. A JIT run hands their addresses to
+them. The generated C only declares the `k_gfx_*`, `k_audio_*`, `k_ui_*`
+and `k_phys_*` functions it calls. A JIT run hands their addresses to
 TinyCC with `tcc_add_symbol`. It takes them from the symbol table compiled
 in with the package (`builtin.h`), or, for a package that is not compiled
 in, from the library the compiler builds for it (`native.h`). The packages'
@@ -6791,10 +6791,10 @@ own `docs/gfx.md`, `docs/audio.md`, `docs/ui.md` and `docs/physics.md`
 describe the layers.
 
 **Byte search** (std's `find_any` and `find_pair`, `docs/stdlib.md`) is done
-by `gs_scan_any` and `gs_scan_pair` in `runtime_impl.h`. std's `extern`
-declarations reach them through the slice adapters `gs_find_any` and
-`gs_find_pair` in `runtime_ext.h`. A set is std's `ByteSet`, whose layout
-`gs_byteset` repeats; `byte_set` has already worked out how to test it. On
+by `k_scan_any` and `k_scan_pair` in `runtime_impl.h`. std's `extern`
+declarations reach them through the slice adapters `k_find_any` and
+`k_find_pair` in `runtime_ext.h`. A set is std's `ByteSet`, whose layout
+`k_byteset` repeats; `byte_set` has already worked out how to test it. On
 x86-64 the search tests 16 bytes at a time:
 
 * with SSE2 compares for a set of up to three bytes or one range, or the
@@ -6802,7 +6802,7 @@ x86-64 the search tests 16 bytes at a time:
   pair of kinds (force-inlined loops that take the kinds as constants, since
   a switch inside the loop compiled to two indirect jumps per block);
 * with SSSE3 `pshufb` nibble tables for any other set, when the CPUID check
-  that `gs_rt_start` makes finds SSSE3.
+  that `k_rt_start` makes finds SSSE3.
 
 On AArch64 (little-endian, clang or gcc) the same loops run on NEON, which
 every such CPU has, so there is no check. The compares are NEON's, and the
@@ -6812,7 +6812,7 @@ from 128 up, and the byte xor 0x80, masked the same way, indexes the high
 one. NEON has no `movemask`. A block's 0x00/0xff result is narrowed by
 `shrn` (each 16-bit lane shifted right by 4, keeping 8 bits) to one 64-bit
 word holding a nibble per byte, so the first match is its trailing zero
-count divided by 4. `GS_BMASK`, `GS_BMASK_DROP` and `GS_BMASK_FIRST` stand
+count divided by 4. `K_BMASK`, `K_BMASK_DROP` and `K_BMASK_FIRST` stand
 for these steps, and the loops are written once for both targets. On an
 Apple M3 Max the search runs at 1.8-4x the byte loop's speed for the
 compare kinds and the tables (SSH.log); a long search for a single rare
@@ -6826,9 +6826,9 @@ out of the result. That way no load reads past the range, which may end
 where a data stack's unmapped gap begins.
 
 **Varints**: ULEB128 read/write/size, zigzag for signed positions, the
-one-byte fast path macros `GS_ULEB_READ`/`GS_ULEB_SIZE` for length prefixes
+one-byte fast path macros `K_ULEB_READ`/`K_ULEB_SIZE` for length prefixes
 (a value field keeps the inline loop, which measured faster), and the bounded
-`gs_uleb_check`/`gs_zig_check` the verifier uses.
+`k_uleb_check`/`k_zig_check` the verifier uses.
 
 ---
 
@@ -7526,7 +7526,7 @@ failures.
    shrink/growth effects. BCE invalidates facts between hook executions.
 
 5. **The byte verifier admits noncanonical values.** `NeedsVerifyWalk`
-   treats booleans as opaque bytes, and `gs_uleb_check` accepts redundant
+   treats booleans as opaque bytes, and `k_uleb_check` accepts redundant
    high zero groups. `from_bytes<bool[>..]>([1, 2])` succeeds and produces
    a value that renders as `true` but compares unequal to `true`. For
    `struct V { x: varint }`, loading `[2, 128, 0]` succeeds with `x == 0`
@@ -7561,11 +7561,11 @@ failures.
    field values once and encode links at each destination; `self` denotes
    each new element. Variable-size operands also evaluate once.
 
-8. **Float text was not always shortest.** `gs_fmt_f64` printed
+8. **Float text was not always shortest.** `k_fmt_f64` printed
    `1.000000000000001` as `1.0000000000000011`, even though the shorter
    text reads back to the same value. It kept the first correctly rounded
    `printf` output that `strtod` read back, trying 15 and then 17
-   significant digits, and `gs_fmt_f32` did the same from 6 to 9 digits.
+   significant digits, and `k_fmt_f32` did the same from 6 to 9 digits.
    Trying 16 digits as well still missed powers of two. Below a power of
    two, the gap to the next float is half the gap above it, so the shortest
    text can lie above the value while the correctly rounded text of that
@@ -7599,10 +7599,10 @@ failures.
 
 ## 12. The language server
 
-`klang lsp` (`lsp.h`) serves an editor over the Language Server Protocol
+`k lsp` (`lsp.h`) serves an editor over the Language Server Protocol
 on stdin and stdout, as `docs/design/language_server.md` describes. The
 compiler is the server, and a whole program is analyzed again each time
-one of its files changes. `klang lsp --probe` prints the protocol version
+one of its files changes. `k lsp --probe` prints the protocol version
 it serves and exits; a client runs it to tell a compiler that has the verb
 from one that does not. `--stdio`, which clients such as
 `vscode-languageclient` pass, names the only transport there is.
@@ -7633,7 +7633,7 @@ one file's path share; it is lower case on Windows.
 **Workspace** (`lsp_workspace.h`). The open documents' texts are served to
 the compiler through `ParseProgram`'s `SourceProvider`, ahead of the files
 on disk. A root is a program that is analyzed: either an entry file the
-editor configured (`initializationOptions.entryFiles`, or the `klang`
+editor configured (`initializationOptions.entryFiles`, or the `k`
 section of its settings), or an open file that no root reaches. A change to
 a file marks every root that reaches it dirty; each such root is due after
 a debounce (`DEBOUNCE_MS`). An open file that no root reaches becomes
@@ -7645,7 +7645,7 @@ change to the roots).
 
 The worker analyzes a due root whenever no message is waiting
 (`Workspace::Analyze`, run on the compile thread's stack through
-`RunOnCompilerStack`). Like `klang check`, it parses, resolves, checks with
+`RunOnCompilerStack`). Like `k check`, it parses, resolves, checks with
 `nomain`, optimizes and runs bounds-check elimination. It sets
 `package_nofetch` so that nothing is fetched, and `Ast::exemplars` so that
 the generic functions nothing instantiated are checked as exemplars (§3.1).
@@ -7884,7 +7884,7 @@ published, with the queries answered from what was checked, and
 `exemplar.k` tests hover, definition, signature help and completion
 inside generic functions nothing calls. In
 `errors_tc/recovery/exemplar_unchecked.k`, whose generic functions no
-binding could make right, the server gives no diagnostic, as `klang check`
+binding could make right, the server gives no diagnostic, as `k check`
 gives none for them. The script's client declares the VS Code extension's
 commands and the three refreshes, checks that each refresh comes after an
 analysis, and answers the server's requests.

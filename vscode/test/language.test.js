@@ -78,13 +78,13 @@ test('compiler arguments are separate, check cannot accidentally run or emit C',
     assert.deepEqual(argumentsFor('build', config), ['build', '--stdlib', config.stdlib, config.file]);
     assert.throws(() => argumentsFor('unknown', config));
     assert.equal(compilerPath('custom-klang', process.cwd()), 'custom-klang');
-    assert.equal(compilerPath('${workspaceFolder}/a b/klang', process.cwd()), path.join(process.cwd(), 'a b', 'klang'));
+    assert.equal(compilerPath('${workspaceFolder}/a b/k', process.cwd()), path.join(process.cwd(), 'a b', 'k'));
 });
 
 test('stdlib search preserves compiler precedence', () => {
     const cwd = path.resolve('project');
-    const config = { cwd, compiler: path.join(cwd, 'build', 'Release', 'klang'), stdlib: path.join(cwd, 'custom') };
-    assert.deepEqual(stdlibDirectories(config, { KLANG_STDLIB: 'env-lib' }).slice(0, 5), [
+    const config = { cwd, compiler: path.join(cwd, 'build', 'Release', 'k'), stdlib: path.join(cwd, 'custom') };
+    assert.deepEqual(stdlibDirectories(config, { K_STDLIB: 'env-lib' }).slice(0, 5), [
         path.join(cwd, 'custom'), path.join(cwd, 'env-lib'),
         path.join(cwd, 'build', 'Release', 'stdlib'), path.join(cwd, 'build', 'stdlib'), path.join(cwd, 'stdlib')
     ]);

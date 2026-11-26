@@ -956,11 +956,11 @@ struct Parser {
                 if (sf->cname.empty()) sf->cname = string(sf->name);
                 // The runtime entry points that read every stack top through
                 // the registry rather than through their arguments.
-                sf->readsalltops = sf->cname == "gs_trim_memory";
-                sf->takesloc = sf->cname == "gs_slice_pool_place" ||
-                               sf->cname == "gs_slice_pool_free" ||
-                               sf->cname == "gs_slice_pool_regrow" ||
-                               sf->cname == "gs_slice_pool_trim";
+                sf->readsalltops = sf->cname == "k_trim_memory";
+                sf->takesloc = sf->cname == "k_slice_pool_place" ||
+                               sf->cname == "k_slice_pool_free" ||
+                               sf->cname == "k_slice_pool_regrow" ||
+                               sf->cname == "k_slice_pool_trim";
                 Expect(T_SEMI, "extern declaration");
             } else if (lex.tok == T_ASSIGN) {
                 Error("only an extern fn takes a symbol after its signature: = \"symbol\" (§7.10)");

@@ -13,15 +13,15 @@ int main(int argc, char **argv) {
     /* The runtime makes stdout unbuffered as it starts; this host's lines
        are to order with the program's from the first. */
     setvbuf(stdout, NULL, _IONBF, 0);
-    klang_exit();   /* nothing is started yet: it does nothing */
+    k_exit();   /* nothing is started yet: it does nothing */
     for (int round = 0; round < 3; round++) {
-        klang_init(argc, argv);
-        klang_init(argc, argv);   /* a second call does nothing */
+        k_init(argc, argv);
+        k_init(argc, argv);   /* a second call does nothing */
         long long a = (long long)bump();
         long long b = (long long)bump();
         printf("round %d: %lld %lld\n", round, a, b);
         if (live && round == 2) park();
-        klang_exit();
+        k_exit();
     }
     puts("host done");
     return 0;

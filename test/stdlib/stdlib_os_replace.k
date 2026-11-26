@@ -36,7 +36,7 @@ fn contents(path: const u8[:]) -> u8[>..] {
 }
 
 fn main() {
-    let dir = "gs_os_replace_tmp";
+    let dir = "k_os_replace_tmp";
     clear(dir);
     print(make_dir(dir), " ", make_dir(at(dir, "sub")));                      // true true
     let a = at(dir, "a.txt");
@@ -82,7 +82,7 @@ fn main() {
     format(nul, b);
     nul.push(0);
     format(nul, "x");
-    print(nul.len, " ", contents(nul), " ", file_exists(nul), " ", is_dir(nul));      // 25 missing false false
+    print(nul.len, " ", contents(nul), " ", file_exists(nul), " ", is_dir(nul));      // 24 missing false false
     print(write_file(nul, "!"), " ", append_file(nul, "!"), " ",
           write_file_atomic(nul, "!"), " ", rename_file(nul, c), " ",
           rename_file(b, nul), " ", delete_file(nul), " ", make_dir(nul), " ",

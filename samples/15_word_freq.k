@@ -5,7 +5,7 @@
 // final report point into it.
 //
 // Build and run (from this directory):
-//   klang -o word_freq.c 15_word_freq.k && cl word_freq.c && word_freq [file]
+//   k -o word_freq.c 15_word_freq.k && cl word_freq.c && word_freq [file]
 
 import std;
 import dictionary;

@@ -6,7 +6,7 @@
 // grow-shrink array of node indices heap-ordered by weight.
 //
 // Build and run (from this directory):
-//   klang -o huffman.c 12_huffman.k && cl huffman.c && huffman
+//   k -o huffman.c 12_huffman.k && cl huffman.c && huffman
 
 import std;
 

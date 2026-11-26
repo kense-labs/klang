@@ -1,7 +1,7 @@
 """Documentation comments (Lexer::doc): the run of // comment lines standing
 on lines of their own, each directly below the one before, that ends on the
 line above a declaration, a field or a variant is its documentation, which
-`klang --dump-docs` prints with its indentation removed. A blank line, a block
+`k --dump-docs` prints with its indentation removed. A blank line, a block
 comment or any token ends a run; a comment after code on its line starts
 none; a banner followed by a blank line belongs to nothing."""
 import tempfile
@@ -48,7 +48,7 @@ SOURCE = (
     "fn gap() {}\n"
     "\n"
     "// A square root, through the extern's string.\n"
-    "extern fn root(x: f64) -> f64 = \"gs_sqrt\";\n"
+    "extern fn root(x: f64) -> f64 = \"k_sqrt\";\n"
     "\n"
     "// Not the block's: a block is no declaration.\n"
     "extern \"m\" {\n"

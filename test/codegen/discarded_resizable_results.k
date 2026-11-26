@@ -1,4 +1,4 @@
-// runtime-define: GS_STACK_RESERVE=4194304
+// runtime-define: K_STACK_RESERVE=4194304
 // Resizable values evaluated only for their effects: call statements whose
 // result is a `T[>..]`, a `T[>..<]`, a struct with a resizable tail or a
 // variable-mode ADT with a resizable payload (§7.1) -- method-style,

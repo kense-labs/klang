@@ -28,7 +28,7 @@ DEFAULT_NAMES = ["graph", "graph_csr", "words", "strlist", "sexp", "records_var"
 
 # Match run_bench.py's explicit 2 GB reservation: the largest that keeps u32
 # relative references storable without a range check.
-STACK_RESERVE = "GS_STACK_RESERVE=2147483648ull"
+STACK_RESERVE = "K_STACK_RESERVE=2147483648ull"
 
 
 def measure(exe, reps):

@@ -5,5 +5,5 @@ RUN git clone https://github.com/kense-labs/klang /opt/klang \
     && cd /opt/klang \
     && git checkout "$version" \
     && cmake -B build -DCMAKE_BUILD_TYPE=Release \
-    && cmake --build build --target klang -j \
-    && ln -s /opt/klang/build/klang /usr/local/bin/klang
+    && cmake --build build --target k -j \
+    && ln -s /opt/klang/build/k /usr/local/bin/k

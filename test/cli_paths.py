@@ -1,5 +1,5 @@
 """Paths on the command line and in imports: -o into a directory that does not
-exist yet, for the C and for `klang build`'s executable; a package source of
+exist yet, for the C and for `k build`'s executable; a package source of
 "." or ".."; an --include path rooted by a leading separator kept as it is
 when -o names a file in the working directory; an import that resolves
 nowhere, which names the module and where it was looked for, or says that no
@@ -23,7 +23,7 @@ def check_cli_paths(exe, cc, base):
     base.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="cli-paths-", dir=base) as tmp:
         root = Path(tmp)
-        env = {k: v for k, v in os.environ.items() if k not in ("KLANG_STDLIB", "KLANG_RUNTIME")}
+        env = {k: v for k, v in os.environ.items() if k not in ("K_STDLIB", "K_RUNTIME")}
 
         def run(argv, cwd=root):
             code, out, err = tc.run_capture(argv, cwd=cwd, env=env, timeout=300)
@@ -42,7 +42,7 @@ def check_cli_paths(exe, cc, base):
         if cc:
             built = root / "new" / "bin" / ("probe" + tc.EXE_SUFFIX)
             code, text = run([exe, "build", "-o", built, probe])
-            require(code == 0 and built.is_file(), "klang build -o into a new directory", text)
+            require(code == 0 and built.is_file(), "k build -o into a new directory", text)
 
         # A package whose root is the program's directory, and its parent.
         (root / "dots" / "app").mkdir(parents=True)

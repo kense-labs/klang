@@ -1,6 +1,6 @@
 // runtime-debug: std's bit helpers -- rotations, byte swaps, is_pow2, ilog2,
 // isqrt, gcd and lcm -- at the edges of their domains. Valid input trips
-// none of GS_DEBUG's checks inside std.
+// none of K_DEBUG's checks inside std.
 import std;
 
 fn rotations() {

@@ -11,7 +11,7 @@ def check_jit_runtime(exe, base):
     base = Path(base).resolve()
     base.mkdir(parents=True, exist_ok=True)
     # Build-tree and release layouts both keep tcclib at one of these levels.
-    candidates = [Path(os.environ["KLANG_TCCLIB"])] if "KLANG_TCCLIB" in os.environ else []
+    candidates = [Path(os.environ["K_TCCLIB"])] if "K_TCCLIB" in os.environ else []
     candidates += [p / "tcclib" for p in (exe.parent, exe.parent.parent)]
     stage = next((p for p in candidates if (p / "include/tccdefs.h").is_file()), None)
     if stage is None:
@@ -24,7 +24,7 @@ def check_jit_runtime(exe, base):
         lib = Path("lib/libtcc1.a") if os.name == "nt" else Path("libtcc1.a")
         (minimal / lib).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(stage / lib, minimal / lib)
-        env = dict(os.environ, KLANG_TCCLIB=str(minimal))
+        env = dict(os.environ, K_TCCLIB=str(minimal))
         programs = []
         for name, body in (
             ("exit", 'fn main() { print("leaving"); exit(7); }'),

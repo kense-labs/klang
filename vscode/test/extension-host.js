@@ -27,7 +27,7 @@ async function run() {
     }));
     const root = path.resolve(__dirname, '../..');
     const config = vscode.workspace.getConfiguration('klang', folder.uri);
-    await config.update('compilerPath', process.env.KLANG_TEST_COMPILER || compilerPath('', root), vscode.ConfigurationTarget.WorkspaceFolder);
+    await config.update('compilerPath', process.env.K_TEST_COMPILER || compilerPath('', root), vscode.ConfigurationTarget.WorkspaceFolder);
     await config.update('entryFile', 'main.k', vscode.ConfigurationTarget.WorkspaceFolder);
     await config.update('checkOnSave', false, vscode.ConfigurationTarget.WorkspaceFolder);
     // The checks of saved files first; the language server at the end.
@@ -97,7 +97,7 @@ async function run() {
 
     // Run the real compiler, both through commands and the native Run picker.
     // Start with an unsaved fix: Run must save the module before launching main.
-    await replace('fn helper() { print("KLANG_JIT_TEST"); }\n');
+    await replace('fn helper() { print("K_JIT_TEST"); }\n');
     const runTask = async (trigger, expectedFile = main.fsPath) => {
         let finished;
         const listener = vscode.tasks.onDidEndTaskProcess(event => {

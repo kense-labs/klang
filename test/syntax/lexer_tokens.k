@@ -1,4 +1,4 @@
-// Token soup for `klang --tokens`; not a parseable program.
+// Token soup for `k --tokens`; not a parseable program.
 // Identifiers and keywords:
 foo _bar baz123 _ import namespace struct enum type fn thread_fn recursive simd let var const extern pad reusable
 if else while for in loop block guard match return from break continue as

@@ -1,6 +1,6 @@
 // Run adjacent requests through the real handler, without a reader thread or
 // background analysis between them. Keep the compiler's normal include order.
-#define main klang_original_main
+#define main k_original_main
 #include "../src/main.cpp"
 #undef main
 
@@ -86,7 +86,7 @@ static bool Graph(Server &server, const string &caller, const string &a, const s
 
 int main(int argc, char **argv) {
     try {
-        Require(argc == 3, "usage: klang_lsp_test STDLIB FIXTURE");
+        Require(argc == 3, "usage: k_lsp_test STDLIB FIXTURE");
         package_nofetch = true;
         const auto uri = UriOfPath(CanonicalPath(argv[2]));
         const string before = "fn a() -> i64 { 1 }\nfn b() -> i64 { 2 }\nfn caller() -> i64 { a() }\n";

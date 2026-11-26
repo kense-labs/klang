@@ -7,7 +7,7 @@
 // insertion and removal is the same four stores, with no special cases.
 //
 // Build and run (from this directory):
-//   klang -o linked_list.c 13_linked_list.k && cl linked_list.c && linked_list
+//   k -o linked_list.c 13_linked_list.k && cl linked_list.c && linked_list
 
 import slot_pool;
 import std;

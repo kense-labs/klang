@@ -45,7 +45,7 @@ sidecar, and in JIT mode without a C toolchain. Written against the tree at
   (`LoadLibrary`/`GetProcAddress`). Each call is one indirect call, the same
   as a call to a dynamically linked symbol through the PLT. The link line
   never mentions the library, so no import library or `-dev` package is
-  needed. The same generated C serves the JIT run and the `klang build`
+  needed. The same generated C serves the JIT run and the `k build`
   executable, as the backend design requires (`jit_backend.md`).
 * **Eager, and only what is called.** The libraries and symbols of the
   dynamic externs that codegen reached (`usedexterns`) are resolved before
@@ -74,7 +74,7 @@ sidecar, and in JIT mode without a C toolchain. Written against the tree at
 
 An `extern fn` has one of three implementations (spec §7.10, implementation §6):
 
-* The runtime (`gs_os_*`, `gs_sqrt`), with prototypes declared in
+* The runtime (`k_os_*`, `k_sqrt`), with prototypes declared in
   `runtime_ext.h`.
 
 * A header supplied with `--include`, written against the generated typedefs.
@@ -83,7 +83,7 @@ An `extern fn` has one of three implementations (spec §7.10, implementation §6
   built once per toolchain and linked statically.
 
 For a JIT run, the native part is built again as a shared library exporting one
-table, `klang_symbols`. The compiler loads that table (`process.cpp`,
+table, `k_symbols`. The compiler loads that table (`process.cpp`,
 `LoadSharedSymbols`) and passes its symbols to TinyCC one by one
 (`tcc_add_symbol`, `jit.h`). Codegen emits a prototype for every used extern
 that the runtime does not declare, and calls the symbol directly
@@ -94,8 +94,8 @@ linked.
 To bind an installed C library this way, a package needs a native part
 whose only content is the link line: a sidecar with `c_libs = ["SDL2"]`,
 and a C file, possibly empty, so that the compiler has something to build.
-The JIT run then needs a C toolchain to produce the `klang_symbols` library,
-even though the program has no C code of its own to compile. `klang build`
+The JIT run then needs a C toolchain to produce the `k_symbols` library,
+even though the program has no C code of its own to compile. `k build`
 needs the import library (`SDL2.lib`) or the unversioned `libSDL2.so`
 symlink, which on Linux comes from the `-dev` package. A library that ships
 as a DLL with no `.lib` cannot be used without writing a loader in C.
@@ -193,30 +193,30 @@ that includes the platform's headers and is therefore part of the runtime
 object and the `--standalone` unit:
 
 ```c
-typedef struct gs_dllib  { const char *name, *win, *mac, *linux; } gs_dllib;
-typedef struct gs_dlbind { int32_t lib; const char *sym; void **slot; } gs_dlbind;
-GS_API void gs_dl_bind(const gs_dllib *libs, int64_t nlibs,
-                       const gs_dlbind *binds, int64_t nbinds);
+typedef struct k_dllib  { const char *name, *win, *mac, *linux; } k_dllib;
+typedef struct k_dlbind { int32_t lib; const char *sym; void **slot; } k_dlbind;
+K_API void k_dl_bind(const k_dllib *libs, int64_t nlibs,
+                       const k_dlbind *binds, int64_t nbinds);
 ```
 
-`gs_dl_bind` opens each library once (with `dlopen(RTLD_NOW | RTLD_LOCAL)`,
+`k_dl_bind` opens each library once (with `dlopen(RTLD_NOW | RTLD_LOCAL)`,
 or with `LoadLibraryW` on the UTF-8 spelling, widened the same way
-`gs_os_*` widens paths), never closes it, and stores each symbol's address
+`k_os_*` widens paths), never closes it, and stores each symbol's address
 in its slot. A library entry carries the bare name and the sidecar's three
 spellings, with `NULL` where the default applies. The runtime derives the
 default for the platform it is compiled on, so the generated C stays as
 portable across platforms as the rest of it. A failure is a runtime error
-through `gs_panic`, with the text the loader gave:
+through `k_panic`, with the text the loader gave:
 
 ```
 cannot load SDL2 (libSDL2.so): libSDL2.so: cannot open shared object file: No such file or directory
 SDL2 (libSDL2.so) has no symbol SDL_Foo
 ```
 
-The program's `gs_program_init` calls `gs_dl_bind` right after
-`gs_rt_init` and before `gs_init_globals` (`codegen_emit.h`). A global's
+The program's `k_program_init` calls `k_dl_bind` right after
+`k_rt_init` and before `k_init_globals` (`codegen_emit.h`). A global's
 initializer may therefore call a dynamic extern, and so may `fn main()` of
-a `--header` library, since `klang_init` runs the same initializer. Binding
+a `--header` library, since `k_init` runs the same initializer. Binding
 happens on the main thread before any worker exists. The slots are written
 once and only read after that, so `thread_fn`s read them without
 synchronization, as they read the globals' initialized state. A library
@@ -238,7 +238,7 @@ runtime with TinyCC, which links libc but not libdl. `RunJit` therefore
 adds `tcc_add_library(s, "dl")` on Linux and ignores its failure, since a
 system without the archive has the function in its libc. TinyCC does the
 same for its own bounds checker (`tccelf.c`). The runtime's source text
-changes, so `GS_RUNTIME_VERSION` changes and the runtime object is rebuilt,
+changes, so `K_RUNTIME_VERSION` changes and the runtime object is rebuilt,
 as for any runtime change.
 
 ## 5. The generated C
@@ -247,27 +247,27 @@ For the block of §3, with every member called:
 
 ```c
 /* ---- extern prototypes ---- */
-static int32_t (*gs_dl0_SDL_Init)(uint32_t);
-static void (*gs_dl1_SDL_Quit)(void);
-static uint64_t (*gs_dl2_SDL_GetTicks64)(void);
-static void (*gs_dl3_SDL_Delay)(uint32_t);
-static const gs_dllib gs_dllibs[] = {
+static int32_t (*k_dl0_SDL_Init)(uint32_t);
+static void (*k_dl1_SDL_Quit)(void);
+static uint64_t (*k_dl2_SDL_GetTicks64)(void);
+static void (*k_dl3_SDL_Delay)(uint32_t);
+static const k_dllib k_dllibs[] = {
     { "SDL2", 0, 0, "libSDL2-2.0.so.0" },
 };
-static const gs_dlbind gs_dlbinds[] = {
-    { 0, "SDL_Init", (void **)&gs_dl0_SDL_Init },
-    { 0, "SDL_Quit", (void **)&gs_dl1_SDL_Quit },
-    { 0, "SDL_GetTicks64", (void **)&gs_dl2_SDL_GetTicks64 },
-    { 0, "SDL_Delay", (void **)&gs_dl3_SDL_Delay },
+static const k_dlbind k_dlbinds[] = {
+    { 0, "SDL_Init", (void **)&k_dl0_SDL_Init },
+    { 0, "SDL_Quit", (void **)&k_dl1_SDL_Quit },
+    { 0, "SDL_GetTicks64", (void **)&k_dl2_SDL_GetTicks64 },
+    { 0, "SDL_Delay", (void **)&k_dl3_SDL_Delay },
 };
 ```
 
-and in `gs_program_init`, `gs_dl_bind(gs_dllibs, 1, gs_dlbinds, 4);`. A
-call site is `gs_dl0_SDL_Init(flags)` where the prototype form writes
+and in `k_program_init`, `k_dl_bind(k_dllibs, 1, k_dlbinds, 4);`. A
+call site is `k_dl0_SDL_Init(flags)` where the prototype form writes
 `SDL_Init(flags)`. The argument snapshots and the builder write-back around
 the call (`EmitExternCall`) are unchanged. The pointer's name is made from
 the spec's position in `usedexterns` and the symbol, which makes it
-deterministic and distinct per declaration. The `gs_` prefix keeps it from
+deterministic and distinct per declaration. The `k_` prefix keeps it from
 clashing with anything an `--include` header declares, so a header may
 `#include "SDL.h"` for its own purposes without the prototype conflict the
 direct form would have. Storing `dlsym`'s `void *` into a function pointer
@@ -358,8 +358,8 @@ These calls show exactly what crosses the boundary, but are awkward to write. A
 
   ```klang
   // stdlib/ffi.k, proposed, after the feature lands
-  extern fn cstr(p: u64, out: u8[>..]&) = "gs_ffi_cstr";             // bytes at p up to a NUL
-  extern fn bytes(p: u64, n: i64, out: u8[>..]&) = "gs_ffi_bytes";   // n bytes at p
+  extern fn cstr(p: u64, out: u8[>..]&) = "k_ffi_cstr";             // bytes at p up to a NUL
+  extern fn bytes(p: u64, n: i64, out: u8[>..]&) = "k_ffi_bytes";   // n bytes at p
   ```
 
   They copy into K storage, so foreign memory never becomes a K
@@ -393,7 +393,7 @@ These calls show exactly what crosses the boundary, but are awkward to write. A
   A package whose externs are all dynamic therefore has no native part, and
   a package with both kinds does not have its native part pulled in by a
   dynamic call. `ExternNamesIn`, the lexer-level scan that lists the
-  symbols a package's `klang_symbols` table must export, skips from
+  symbols a package's `k_symbols` table must export, skips from
   `extern strlit {` to the matching `}`, because those symbols do not
   belong to the native part.
 * **Driver** (`main.cpp`, `build.h`, `jit.h`). `-ldl` is added to the link
@@ -411,7 +411,7 @@ These calls show exactly what crosses the boundary, but are awkward to write. A
   `extern` qualifier at the function declaration rule) and the VS Code
   grammar accept the block; the language server only sees ordinary
   functions and needs no change. The K-in-K parser of the
-  self-hosting tests (`test/klang_in_klang/parser.k`) parses the block
+  self-hosting tests (`test/k_in_k/parser.k`) parses the block
   too, since it parses the stdlib and samples.
 * **Wasm.** Wasm is not a target of this work; `wasm.md` §3 lists externs
   as a decoded-pointer boundary. It is noted in §12 because the
@@ -462,7 +462,7 @@ These calls show exactly what crosses the boundary, but are awkward to write. A
   The program binds the library with a bare name and the sidecar's spelling
   (`dylibs_linux = ["dltest=./libdltest.so"]` and its siblings, which
   exercise the override and the relative path). It runs both ways, JIT and
-  `klang build`, and the outputs are compared.
+  `k build`, and the outputs are compared.
 * **The failure paths**, in the same file. A block naming a library that
   does not exist, with one member called, exits with the runtime error
   naming the spelling tried. A member whose symbol the library lacks
@@ -504,7 +504,7 @@ These calls show exactly what crosses the boundary, but are awkward to write. A
 
 One working commit each, tests green at every step:
 
-1. **Runtime**: `gs_dllib`, `gs_dlbind`, `gs_dl_bind`, the error texts,
+1. **Runtime**: `k_dllib`, `k_dlbind`, `k_dl_bind`, the error texts,
    `-ldl` in `SystemLibs()`, `tcc_add_library("dl")` in `RunJit`. Nothing
    uses these yet; the runtime version changes.
 2. **Parser and AST**: the block, `dylib` on `SFunction`, the errors, the

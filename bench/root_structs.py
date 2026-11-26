@@ -1,8 +1,8 @@
 """Compare equivalent direct-array and root-owner builders at a real call boundary.
 
-python bench/root_structs.py --exe build-root/Release/klang.exe
+python bench/root_structs.py --exe build-root/Release/k.exe
 Generated sources, executables and JSON results go under build/root-bench.
-The fill helper is marked GS_NOINLINE in both C programs; all other native
+The fill helper is marked K_NOINLINE in both C programs; all other native
 optimizations remain enabled. This measures descriptor borrowing, not K
 inlining, and verifies identical checksums before reporting timings.
 """
@@ -51,7 +51,7 @@ def main():
             if built.returncode:
                 raise RuntimeError(report)
             c = cfile.read_text()
-            c, count = re.subn(r"\bstatic void (fill_g\w*\()", r"static GS_NOINLINE void \1", c)
+            c, count = re.subn(r"\bstatic void (fill_g\w*\()", r"static K_NOINLINE void \1", c)
             if count < 2:
                 raise RuntimeError("fill helper was unexpectedly removed or inlined")
             cfile.write_text(c)
@@ -73,7 +73,7 @@ def main():
                         raise RuntimeError(f"Checksum mismatch: {name}, {compiler.name}")
                     if run:
                         timings.append(elapsed)
-                row = dict(program=name, klang_level=level, compiler=compiler.desc,
+                row = dict(program=name, k_level=level, compiler=compiler.desc,
                            median_seconds=statistics.median(timings), seconds=timings,
                            c_bytes=cfile.stat().st_size, exe_bytes=binary.stat().st_size,
                            stacks=[s for s in report.splitlines() if s.startswith("main program:")])

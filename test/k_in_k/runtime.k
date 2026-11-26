@@ -2,7 +2,7 @@
 // neither includes nor extracts the bootstrap compiler's runtime.
 fn runtime_source() -> const u8[:] {
     return """
-    /* K-in-K experimental C backend. Generated from test/klang_in_klang/. */
+    /* K-in-K experimental C backend. Generated from test/k_in_k/. */
     #include <stdint.h>
     #include <stddef.h>
     #include <stdio.h>
@@ -107,19 +107,19 @@ fn runtime_source() -> const u8[:] {
         char *s=malloc((size_t)path.len+1); if(!s)gg_fail("out of memory in file shim");
         if(path.len)memcpy(s,path.data,(size_t)path.len);s[path.len]=0;return s;
     }
-    static uint8_t gs_os_read_file(gg_slice path,gg_reference out) {
+    static uint8_t k_os_read_file(gg_slice path,gg_reference out) {
         char *p=gg_cstring(path);FILE *f=fopen(p,"rb");unsigned char b[16384];size_t n;int ok;free(p);
         if(!f)return 0;while((n=fread(b,1,sizeof b,f))!=0)gg_append(out,b,(int64_t)n,1);ok=!ferror(f);fclose(f);return (uint8_t)ok;
     }
-    static uint8_t gs_os_write_file(gg_slice path,gg_slice data) {
+    static uint8_t k_os_write_file(gg_slice path,gg_slice data) {
         char *p=gg_cstring(path);FILE *f=fopen(p,"wb");int ok;free(p);if(!f)return 0;
         ok=!data.len || fwrite(data.data,1,(size_t)data.len,f)==(size_t)data.len;if(fclose(f))ok=0;return (uint8_t)ok;
     }
-    static uint8_t gs_os_file_exists(gg_slice path) { char*p=gg_cstring(path);FILE*f=fopen(p,"rb");free(p);if(!f)return 0;fclose(f);return 1; }
-    static void gs_os_write_stdout(gg_slice s) { gg_write(stdout,s); }
-    static void gs_os_write_stderr(gg_slice s) { gg_write(stderr,s); }
-    static void gs_os_flush_stdout(void) { fflush(stdout); }
-    static int64_t gs_os_arg_count(void) { return gg_argc; }
-    static void gs_os_arg(int64_t i,gg_reference out) { if(i>=0 && i<gg_argc)gg_append(out,gg_argv[i],(int64_t)strlen(gg_argv[i]),1); }
+    static uint8_t k_os_file_exists(gg_slice path) { char*p=gg_cstring(path);FILE*f=fopen(p,"rb");free(p);if(!f)return 0;fclose(f);return 1; }
+    static void k_os_write_stdout(gg_slice s) { gg_write(stdout,s); }
+    static void k_os_write_stderr(gg_slice s) { gg_write(stderr,s); }
+    static void k_os_flush_stdout(void) { fflush(stdout); }
+    static int64_t k_os_arg_count(void) { return gg_argc; }
+    static void k_os_arg(int64_t i,gg_reference out) { if(i>=0 && i<gg_argc)gg_append(out,gg_argv[i],(int64_t)strlen(gg_argv[i]),1); }
     """;
 }

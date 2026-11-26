@@ -31,7 +31,7 @@ The standard library has twenty modules under `stdlib/`: `std`,
 `base64`, `csv`, `json`, `regex`, `audio`, `gfx`, `physics`, `ui`, and `exception`.
 Import each module by name,
 for example `import std;`. The compiler locates the library in its source
-tree; use `--stdlib <dir>` or `KLANG_STDLIB` to select another location.
+tree; use `--stdlib <dir>` or `K_STDLIB` to select another location.
 Everything is written in K except the following parts, all reached
 through `extern fn` (spec §7.10):
 
@@ -42,16 +42,14 @@ through `extern fn` (spec §7.10):
   (`src/runtime/runtime_ext.h`);
 * libm, behind `math`;
 * the graphics layer behind `gfx`, the ui layer behind `ui` and the PCM
-  mixer behind `audio`, which are in the
-  [goose_gfx](https://github.com/aardappel/goose_gfx) package;
-* the physics layer behind `physics`, which is in the
-  [goose_physics](https://github.com/aardappel/goose_physics) package.
+  mixer behind `audio`, which are in the `packages/gfx` package;
+* the physics layer behind `physics`, which is in the `packages/physics`
+  package.
 
-Both packages are repositories of their own. The design and its rationale
-are described in `design/stdlib_design.md` and in the packages' own
-[docs/gfx.md](https://github.com/aardappel/goose_gfx/blob/main/docs/gfx.md),
-[docs/ui.md](https://github.com/aardappel/goose_gfx/blob/main/docs/ui.md), [docs/audio.md](https://github.com/aardappel/goose_gfx/blob/main/docs/audio.md) and
-[docs/physics.md](https://github.com/aardappel/goose_physics/blob/main/docs/physics.md).
+Both packages ship with K. Their CMake projects resolve the pinned native
+dependencies when built. The package notes cover the native layers.
+[Graphics](design/gfx.md) · [UI](design/ui.md) ·
+[Audio](design/audio.md) · [Physics](design/physics.md)
 This document is the reference.
 
 For **text rendering, fonts and game HUDs**, start with
@@ -1051,11 +1049,11 @@ copysign`. These return floats as C does (`as i64` converts). `expm1(x)`
 and `log1p(x)` are `exp(x) - 1` and `log(1 + x)` without the loss of a
 small `x`'s digits; `copysign(x, y)` is `x`'s magnitude with `y`'s sign
 bit, which tells `-0.0` from `0.0`.
-`sqrt` is implemented in the runtime (`gs_sqrt`, `gs_sqrtf`). It gives the
+`sqrt` is implemented in the runtime (`k_sqrt`, `k_sqrtf`). It gives the
 same correctly rounded root as C, and NaN below zero, but without C's
 errno, so it is the bare square root instruction where the C compiler
 allows. The other functions for which C sets errno (`sin` to `tanh`) are
-libm's own functions under runtime names (`gs_exp`, `gs_expf`, ...), which
+libm's own functions under runtime names (`k_exp`, `k_expf`, ...), which
 gcc and clang are told depend only on their arguments. Since K has no
 errno, a call does not make the C compiler reload values that a loop
 around the call holds in registers. Both compilers still know them as
@@ -1728,14 +1726,12 @@ regex::format_replaced(out, field, template) { caps =>
 
 Graphics on SDL3's GPU API, which draws through Direct3D 12, Vulkan or Metal:
 a window and its input, buffers, textures, samplers, pipelines, render and
-compute passes, and reading results back. The module is optional: it needs a
-compiler built with the `third_party/SDL` submodule, and a program using it
-links what `klang --gfx-link msvc|cc` prints (a response file:
-`cl game.c @<it>`, `cc game.c -o game @<it>`). A compiler built without it
-still typechecks and generates C for such a program; only running the
-program in-process fails. Everything is in namespace `gfx`;
+compute passes, and reading results back. The optional native part can be
+compiled into `k` or built on first use by `k run` or `k build`. A compiler
+with gfx built in can print its response file with `k --gfx-link msvc|cc`
+for linking generated C directly. Everything is in namespace `gfx`.
 `samples/27_gfx_cube.k` is a small complete program, and the package's
-[docs/gfx.md](https://github.com/aardappel/goose_gfx/blob/main/docs/gfx.md) says how it works.
+[graphics design](design/gfx.md) describes the native layer.
 
 **Text rendering is provided by [`ui`](#text-rendering-and-game-huds)**,
 including fonts, positioned text and noninteractive game HUDs. Use
@@ -1814,7 +1810,7 @@ fn presented(shown: bool)   fn needs_present() -> bool        // WINDOW_ONLY
 Flags for `open`: `WINDOW_RESIZABLE`, `WINDOW_HIDDEN`, `WINDOW_FULLSCREEN`,
 `NO_VSYNC`, `DEBUG` (validation layers where installed; on in a debug build of
 the layer), `WAIT_WHEN_IDLE` and `WINDOW_ONLY` (below). With
-`GOOSE_GFX_HEADLESS=1` in the environment, `open` opens no window; the test
+`K_GFX_HEADLESS=1` in the environment, `open` opens no window; the test
 runners use this. The screen is an RGBA8 texture the size of the window in
 pixels. Its depth texture is made on the first `screen_depth()`, which
 `begin_screen` calls; a 2D program that needs no depth draws with
@@ -2174,9 +2170,9 @@ coordinates with (0, 0) at the top left.
 
 Procedural PCM sound effects over SDL3, independent of a window or graphics
 device. `import audio;` uses the `audio::` namespace. It is a module of the
-`gfx` package ([goose_gfx](https://github.com/aardappel/goose_gfx)). It is compiled into the
-compiler with `-DKLANG_BUILTIN_LIBS=all` and otherwise built on first use;
-`klang build` links it. See the package's [docs/audio.md](https://github.com/aardappel/goose_gfx/blob/main/docs/audio.md) for the mixer.
+`gfx` package. It is compiled into the
+compiler with `-DK_BUILTIN_LIBS=all` and otherwise built on first use;
+`k build` links it. [Audio mixer design](design/audio.md)
 
 | Function | Behavior |
 |---|---|
@@ -2251,12 +2247,12 @@ nine kinds of joints, contact, sensor, hit, move and joint events, ray and
 shape casts and overlap queries, a character mover, and recording and replay.
 Like `gfx`, the module is optional: it needs a compiler built with the
 `third_party/box3d` submodule, and a program using it links what
-`klang --physics-link msvc|cc` prints (`cl game.c @<it>`,
+`k --physics-link msvc|cc` prints (`cl game.c @<it>`,
 `cc game.c -o game @<it>`; a program that also uses `gfx` adds gfx's
 response file). A compiler built without it still typechecks and generates
 C for such a program; only running the program in-process fails.
 Everything is in namespace `physics`; `samples/28_physics_boxes.k` is a
-complete program, and the package's [docs/physics.md](https://github.com/aardappel/goose_physics/blob/main/docs/physics.md) says how it works.
+complete program. [Physics design](design/physics.md)
 
 The API is Box3D's under K names: `b3Body_GetPosition` is
 `position(body)`, `b3CreateRevoluteJoint` is `create_revolute_joint`, a
@@ -2629,12 +2625,12 @@ bars, color pickers, properties, text fields and editors, charts, popups,
 combo boxes, contextual menus, tooltips, menus, styles and fonts. Like
 `gfx`, the module is optional: it needs a compiler built with the
 `third_party/nuklear` submodule, and a program using it links what
-`klang --ui-link msvc|cc` prints, together with gfx's if it renders through
+`k --ui-link msvc|cc` prints, together with gfx's if it renders through
 gfx (`cl app.c @<ui> @<gfx>`). A compiler built without it still
 typechecks and generates C for such a program; only running the program
 in-process fails. Everything is in namespace `ui`;
 `samples/29_ui_todo.k` is a complete program, and the package's
-[docs/ui.md](https://github.com/aardappel/goose_gfx/blob/main/docs/ui.md) says how it works.
+[UI design](design/ui.md) describes the native layer.
 
 The API is Nuklear's under K names: `nk_button_label` is
 `button_label`. In immediate mode, the program declares on each frame which

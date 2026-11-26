@@ -108,7 +108,7 @@ inline SizeClass CodeGen::Cls(TypeExpr *t) {
     }
 }
 
-// The innermost tail's gs_rhdr lvalue within frame object `obj`.
+// The innermost tail's k_rhdr lvalue within frame object `obj`.
 inline string CodeGen::FoTailHdr(TypeExpr *t, const string &obj) {
     auto si = SI(t);
     auto ti = LastRealField(si->st->fields);
@@ -126,7 +126,7 @@ inline TypeExpr *CodeGen::FoTailArr(TypeExpr *t) {
 // The bytes of a frame object before its innermost tail header, which is
 // the C struct's last member: the fixed fields at every nesting level.
 inline string CodeGen::FoPrefixSize(TypeExpr *t) {
-    return cat("(sizeof(", CT(t), ") - sizeof(gs_rhdr))");
+    return cat("(sizeof(", CT(t), ") - sizeof(k_rhdr))");
 }
 
 // Where the innermost tail's elements start in that bytes layout (FoBytes),
@@ -198,13 +198,13 @@ inline IntStorage CodeGen::LenStore(TypeArray *a) {
 inline const char *CodeGen::IntCT(IntStorage s, bool unaligned) {
     switch (s) {
         case IS_I8:  return "int8_t";
-        case IS_I16: return unaligned ? "gs_i16" : "int16_t";
-        case IS_I32: return unaligned ? "gs_i32" : "int32_t";
+        case IS_I16: return unaligned ? "k_i16" : "int16_t";
+        case IS_I32: return unaligned ? "k_i32" : "int32_t";
         case IS_U8:  return "uint8_t";
-        case IS_U16: return unaligned ? "gs_u16" : "uint16_t";
-        case IS_U32: return unaligned ? "gs_u32" : "uint32_t";
-        case IS_U64: return unaligned ? "gs_u64" : "uint64_t";
-        default:     return unaligned ? "gs_i64" : "int64_t";
+        case IS_U16: return unaligned ? "k_u16" : "uint16_t";
+        case IS_U32: return unaligned ? "k_u32" : "uint32_t";
+        case IS_U64: return unaligned ? "k_u64" : "uint64_t";
+        default:     return unaligned ? "k_i64" : "int64_t";
     }
 }
 
@@ -229,9 +229,9 @@ inline const char *CodeGen::IntSfx(IntStorage s) {
 inline const char *CodeGen::RelCT(IntStorage s, bool uns) {
     switch (IntSize(s)) {
         case 1: return uns ? "uint8_t" : "int8_t";
-        case 2: return uns ? "gs_u16" : "gs_i16";
-        case 4: return uns ? "gs_u32" : "gs_i32";
-        default: return uns ? "gs_u64" : "gs_i64";
+        case 2: return uns ? "k_u16" : "k_i16";
+        case 4: return uns ? "k_u32" : "k_i32";
+        default: return uns ? "k_u64" : "k_i64";
     }
 }
 
@@ -345,7 +345,7 @@ inline int64_t CodeGen::FixedSize(TypeExpr *t) {
 // A name from the program as a C identifier. Every one of them carries the
 // same suffix, which is what keeps the generated file free of collisions
 // without a list of names to avoid: not the C keywords, not the runtime's own
-// gs_ names, not the temporaries and labels below, and -- the reason a list
+// k_ names, not the temporaries and labels below, and -- the reason a list
 // could never be right -- not whatever the platform's headers happen to
 // declare or define as a macro, which is not the same set on Windows as it is
 // on Linux or macOS. Struct fields and enum variants get it too: those live in
@@ -506,13 +506,13 @@ inline void CodeGen::EmitCoreTypes() {
     // region for arrays, struct start for resizable-tailed structs) plus
     // the tail element count. A reference to one points at the header.
     tdecls +=
-        "typedef struct { uint8_t *base; int64_t len; } gs_rhdr;\n"
-        "typedef struct { gs_rhdr *hdr; gs_stack *stk; } gs_rref;\n"
-        "typedef struct { gs_rhdr *hdr; gs_stack *stk; gs_rhdr *fl; gs_stack *flstk; } "
-        "gs_pref;\n\n";
-    used.insert("gs_rhdr");
-    used.insert("gs_rref");
-    used.insert("gs_pref");
+        "typedef struct { uint8_t *base; int64_t len; } k_rhdr;\n"
+        "typedef struct { k_rhdr *hdr; k_stack *stk; } k_rref;\n"
+        "typedef struct { k_rhdr *hdr; k_stack *stk; k_rhdr *fl; k_stack *flstk; } "
+        "k_pref;\n\n";
+    used.insert("k_rhdr");
+    used.insert("k_rref");
+    used.insert("k_pref");
 }
 
 // The C type of a fixed-class value (also refs/slices to anything). Emits
@@ -524,8 +524,8 @@ inline void CodeGen::EmitCoreTypes() {
 inline string CodeGen::CT(TypeExpr *t, bool unaligned) {
     switch (t->kind) {
         case TY_INT:  assert(t->intstorage != IS_VARINT); return IntCT(t->intstorage, unaligned);
-        case TY_FLT:  return t->fltstorage == FS_F32 ? (unaligned ? "gs_f32" : "float")
-                                                   : (unaligned ? "gs_f64" : "double");
+        case TY_FLT:  return t->fltstorage == FS_F32 ? (unaligned ? "k_f32" : "float")
+                                                   : (unaligned ? "k_f64" : "double");
         case TY_BOOL: return "uint8_t";
         case TY_VOID: return "void";
         case TY_REF: {
@@ -535,7 +535,7 @@ inline string CodeGen::CT(TypeExpr *t, bool unaligned) {
                 return IntCT((IntStorage)r.lenstorage, unaligned);   // Stored offset form.
             }
             EmitCoreTypes();
-            if (IsResz(r.sub)) return "gs_rref";
+            if (IsResz(r.sub)) return "k_rref";
             // A pointer needs only the pointee's name, so a node type can
             // hold references to itself and the body can come later.
             if (!unaligned)
@@ -545,7 +545,7 @@ inline string CodeGen::CT(TypeExpr *t, bool unaligned) {
             if (cdefined.insert(Mangle(t)).second) {
                 auto sub = IsBytesT(r.sub) ? string("uint8_t") :
                            StructLike(r.sub) ? NameCT(r.sub) : CT(r.sub);
-                Append(tdecls, "typedef ", sub, " *", name, " GS_ALIGN1;\n");
+                Append(tdecls, "typedef ", sub, " *", name, " K_ALIGN1;\n");
             }
             return name;
         }
@@ -597,7 +597,7 @@ inline string CodeGen::CT(TypeExpr *t, bool unaligned) {
         case TY_STRUCT: {
             auto si = SI(t);
             Append(d, "struct ", name, " {\n");
-            if (EmptyLayout(si->st->fields)) Append(d, "    uint8_t gs_empty;\n");
+            if (EmptyLayout(si->st->fields)) Append(d, "    uint8_t k_empty;\n");
             else if (si->st->isroot) {
                 for (size_t i = 0; i < si->ftypes.size(); i++) {
                     if (!si->ftypes[i]) continue;
@@ -614,7 +614,7 @@ inline string CodeGen::CT(TypeExpr *t, bool unaligned) {
             auto vi = ei->en->VariantIndex(t->var->variant);
             auto &v = ei->en->variants[vi];
             Append(d, "struct ", name, " {\n");
-            if (EmptyLayout(v.fields)) Append(d, "    uint8_t gs_empty;\n");
+            if (EmptyLayout(v.fields)) Append(d, "    uint8_t k_empty;\n");
             else EmitCFields(d, v.fields, ei->vftypes[vi]);
             Append(d, "};\n");
             break;
@@ -679,7 +679,7 @@ inline void CodeGen::EmitCFields(string &d, const vector<Field> &fields,
         if (f.ispad) {
             auto next = i + 1 < n ? lo.offs[i + 1] : lo.size;
             auto sz = next - lo.offs[i];
-            if (sz > 0) Append(d, "    uint8_t gs_pad", npad++, "[", sz, "];\n");
+            if (sz > 0) Append(d, "    uint8_t k_pad", npad++, "[", sz, "];\n");
             continue;
         }
         Append(d, "    ", CT(ftypes[i], false), " ", Sanitize(f.name), ";\n");
@@ -727,7 +727,7 @@ inline TypeExpr *CodeGen::VariantType(TypeExpr *enumtype, int vi) {
 
 // ------------------------------------------------------------------
 // Runtime size of a bytes-class value: a generated per-type walker,
-// gs_size_<mangle>(p). Static-size subruns collapse into constants.
+// k_size_<mangle>(p). Static-size subruns collapse into constants.
 
 // A C expression for the size of the value of type t at ptr; emits the
 // walker function on demand for dynamic types.
@@ -738,7 +738,7 @@ inline string CodeGen::SizeX(TypeExpr *t, const string &ptr) {
 
 inline string CodeGen::SizeFn(TypeExpr *t) {
     auto m = Mangle(t);
-    auto name = cat("gs_size_", m);
+    auto name = cat("k_size_", m);
     if (sizefns.count(m)) return name;
     sizefns.insert(m);
     Append(protos, "static int64_t ", name, "(const uint8_t *p);\n");
@@ -759,10 +759,10 @@ inline void CodeGen::EmitSizeWalk(string &b, TypeExpr *t, const string &q) {
     }
     switch (t->kind) {
         case TY_INT:   // varint
-            Append(b, "    ", q, " += gs_uleb_size(", q, ");\n");
+            Append(b, "    ", q, " += k_uleb_size(", q, ");\n");
             return;
         case TY_REF:   // varint-width relative reference
-            Append(b, "    ", q, " += gs_uleb_size(", q, ");\n");
+            Append(b, "    ", q, " += k_uleb_size(", q, ");\n");
             return;
         case TY_ARRAY: {
             auto &a = *t->arr;
@@ -770,8 +770,8 @@ inline void CodeGen::EmitSizeWalk(string &b, TypeExpr *t, const string &q) {
                 case A_VAR: {
                     auto ls = LenStore(t->arr);
                     if (ls == IS_VARINT)
-                        Append(b, "    { int64_t n = GS_ULEB_READ(", q, "); ", q,
-                               " += GS_ULEB_SIZE(", q, ");\n");
+                        Append(b, "    { int64_t n = K_ULEB_READ(", q, "); ", q,
+                               " += K_ULEB_SIZE(", q, ");\n");
                     else
                         Append(b, "    { int64_t n = (int64_t)*(", IntCT(ls), " *)", q,
                                "; ", q, " += ", IntSize(ls), ";\n");
@@ -780,7 +780,7 @@ inline void CodeGen::EmitSizeWalk(string &b, TypeExpr *t, const string &q) {
                     return;
                 }
                 case A_LIMITED:   // Runtime capacity: [cap u32][len u32][cap slots].
-                    Append(b, "    ", q, " += 8 + (int64_t)*(gs_u32 *)", q, " * ",
+                    Append(b, "    ", q, " += 8 + (int64_t)*(k_u32 *)", q, " * ",
                            FixedSize(a.sub), ";\n");
                     return;
                 default:
@@ -902,14 +902,14 @@ inline void CodeGen::VNeed(string &b, const string &q, const string &bytes) {
     Append(b, "    if (n - ", q, " < ", bytes, ") return -1;\n");
 }
 
-// gs_verify_<T>(p, n, bm): the element count of the image at p, or -1 if
+// k_verify_<T>(p, n, bm): the element count of the image at p, or -1 if
 // those bytes are not one (serialization.md §3). Fixed elements start at
 // multiples of their size, so their links are checked in the same pass that
 // frames them; variable ones need the framing pass to record the starts in
 // `bm` before a second pass can check a link against them.
 inline string CodeGen::VerifyFn(TypeExpr *elem) {
     auto m = Mangle(elem);
-    auto name = cat("gs_verify_", m);
+    auto name = cat("k_verify_", m);
     if (verifyfns.count(m)) return name;
     verifyfns.insert(m);
     Append(protos, "static int64_t ", name, "(const uint8_t *p, int64_t n, uint8_t *bm);\n");
@@ -929,7 +929,7 @@ inline string CodeGen::VerifyFn(TypeExpr *elem) {
     Append(b, "    int64_t q = 0, cnt = 0;\n");
     Append(b, "    (void)e; (void)bm;\n");
     Append(b, "    while (q < n) {\n");
-    if (!fixed && rel) Append(b, "        GS_BM_SET(bm, q);\n");
+    if (!fixed && rel) Append(b, "        K_BM_SET(bm, q);\n");
     EmitVerifyWalk(b, elem, elem, "q", fixed && rel);
     Append(b, "        cnt++;\n");
     Append(b, "    }\n");
@@ -976,7 +976,7 @@ inline void CodeGen::EmitVerifyLink(string &b, TypeExpr *rt, TypeExpr *elem, con
         Append(b, "        if (", v, " % ",
                std::max<int64_t>(FixedSize(elem), 1), ") return -1;\n");
     else
-        Append(b, "        if (!GS_BM_GET(bm, ", v,
+        Append(b, "        if (!K_BM_GET(bm, ", v,
                ")) return -1;\n");
     if (variant)
         Append(b, "        if (n - ", v, " < ", skip, " || *(const ", IntCT(ts), " *)(p + ",
@@ -1034,7 +1034,7 @@ inline void CodeGen::EmitVerifyWalk(string &b, TypeExpr *t, TypeExpr *elem, cons
                 auto sz = IntSize(t->intstorage);
                 auto v = VTmp();
                 VNeed(b, q, cat(sz));
-                Append(b, "    { ", IntCT(t->intstorage), " ", v, "; GS_MEMCPY(&", v, ", p + ", q,
+                Append(b, "    { ", IntCT(t->intstorage), " ", v, "; K_MEMCPY(&", v, ", p + ", q,
                        ", ", sz, "); if ((uint64_t)", v, t->ix->upto ? " > " : " >= ",
                        "(uint64_t)", GlobalLenLv(t->ix->arr), ") return -1; ", q, " += ", sz,
                        "; }\n");
@@ -1042,7 +1042,7 @@ inline void CodeGen::EmitVerifyWalk(string &b, TypeExpr *t, TypeExpr *elem, cons
             }
             // A varint field: only its length matters to the walk.
             auto v = VTmp();
-            Append(b, "    { uint64_t ", v, "u; int64_t ", v, " = gs_uleb_check(p + ", q,
+            Append(b, "    { uint64_t ", v, "u; int64_t ", v, " = k_uleb_check(p + ", q,
                    ", e, &", v, "u); if (!", v, ") return -1; ", q, " += ", v, "; }\n");
             return;
         }
@@ -1055,11 +1055,11 @@ inline void CodeGen::EmitVerifyWalk(string &b, TypeExpr *t, TypeExpr *elem, cons
             if (w == IS_VARINT) {
                 if (links) {
                     Append(b, "        int64_t ", v, "o;\n");
-                    Append(b, "        int64_t ", v, "k = gs_zig_check(p + ", q, ", e, &", v,
+                    Append(b, "        int64_t ", v, "k = k_zig_check(p + ", q, ", e, &", v,
                            "o);\n");
                 } else {
                     Append(b, "        uint64_t ", v, "u;\n");
-                    Append(b, "        int64_t ", v, "k = gs_uleb_check(p + ", q, ", e, &", v,
+                    Append(b, "        int64_t ", v, "k = k_uleb_check(p + ", q, ", e, &", v,
                            "u);\n");
                     Append(b, "        (void)", v, "u;\n");
                 }
@@ -1094,7 +1094,7 @@ inline void CodeGen::EmitVerifyWalk(string &b, TypeExpr *t, TypeExpr *elem, cons
                     Append(b, "        int64_t ", v, "n;\n");
                     if (ls == IS_VARINT) {
                         Append(b, "        uint64_t ", v, "u;\n");
-                        Append(b, "        int64_t ", v, "k = gs_uleb_check(p + ", q, ", e, &",
+                        Append(b, "        int64_t ", v, "k = k_uleb_check(p + ", q, ", e, &",
                                v, "u);\n");
                         Append(b, "        if (!", v, "k || ", v, "u > (uint64_t)INT64_MAX) "
                                "return -1;\n");
@@ -1139,9 +1139,9 @@ inline void CodeGen::EmitVerifyWalk(string &b, TypeExpr *t, TypeExpr *elem, cons
                     } else {
                         Append(b, "        int64_t ", v, "c;\n");
                         Append(b, "        if (n - ", q, " < 8) return -1;\n");
-                        Append(b, "        ", v, "c = (int64_t)*(const gs_u32 *)(p + ", q,
+                        Append(b, "        ", v, "c = (int64_t)*(const k_u32 *)(p + ", q,
                                ");\n");
-                        Append(b, "        ", v, "n = (int64_t)*(const gs_u32 *)(p + ", q,
+                        Append(b, "        ", v, "n = (int64_t)*(const k_u32 *)(p + ", q,
                                " + 4);\n");
                         Append(b, "        if (", v, "n > ", v, "c || ", v, "c > (n - ", q,
                                " - 8) / ", esz, ") return -1;\n");
@@ -1249,7 +1249,7 @@ inline bool CodeGen::HasFieldDefaults(TypeExpr *t) {
 // checker builds its default as a literal (TypeCheck::CheckBuiltin).
 inline void CodeGen::EmitDefaultInto(const string &lv, TypeExpr *t) {
     assert(!HasFieldDefaults(t));
-    L("GS_MEMZERO(&", lv, ", sizeof(", lv, "));");
+    L("K_MEMZERO(&", lv, ", sizeof(", lv, "));");
 }
 
 // An explicitly checked, flat zero default, including aggregate defaults
@@ -1278,7 +1278,7 @@ inline bool CodeGen::ZeroDefaultValue(Node *n, TypeExpr *t) {
 }
 
 // ------------------------------------------------------------------
-// Structural equality (§4.5): gs_eq_<mangle>. Fixed values pass by value,
+// Structural equality (§4.5): k_eq_<mangle>. Fixed values pass by value,
 // bytes values as pointers. Gap-free fixed types without floats or self-relative
 // references of more than a few scalars shortcut to memcmp.
 
@@ -1372,7 +1372,7 @@ inline string CodeGen::EqFn(TypeExpr *t) {
         }
     };
     origins(origins, t);
-    auto name = cat("gs_eq_", m);
+    auto name = cat("k_eq_", m);
     if (eqfns.count(m)) return name;
     eqfns.insert(m);
     auto bytes = IsBytesT(t);
@@ -1474,8 +1474,8 @@ inline void CodeGen::EmitEqFixed(string &bo, TypeExpr *t) {
                            "    uint64_t d = 0;\n");
                     auto word = [&](int64_t w) {
                         auto at = w < 0 ? cat(" - ", -w) : w ? cat(" + ", w) : string();
-                        Append(bo, "    d |= (gs_ld64(pa", at, ") ^ gs_ld64(pb", at,
-                               ")) & gs_bytemask(n", w < 0 ? cat(" + ", -w) : w ? cat(" - ", w)
+                        Append(bo, "    d |= (k_ld64(pa", at, ") ^ k_ld64(pb", at,
+                               ")) & k_bytemask(n", w < 0 ? cat(" + ", -w) : w ? cat(" - ", w)
                                                                              : string(),
                                ");\n");
                     };
@@ -1484,7 +1484,7 @@ inline void CodeGen::EmitEqFixed(string &bo, TypeExpr *t) {
                     if (w < bytes) word(bytes - 8);
                     Append(bo, "    return d == 0;\n");
                 } else {
-                    Append(bo, "    return gs_memeq(a->e, b->e, (size_t)a->len * ", esz,
+                    Append(bo, "    return k_memeq(a->e, b->e, (size_t)a->len * ", esz,
                            ");\n");
                 }
             } else {   // Limited, static capacity.
@@ -1555,14 +1555,14 @@ inline void CodeGen::EmitEqWalk(string &bo, TypeExpr *t, const string &pa, const
         case TY_REF:
             if (IsSelfRelRef(t)) {
                 Append(bo, I, "if (!", EqFn(t), "(", pa, ", ", pb, ")) return 0;\n",
-                       I, pa, " += gs_uleb_size(", pa, "); ", pb, " += gs_uleb_size(", pb,
+                       I, pa, " += k_uleb_size(", pa, "); ", pb, " += k_uleb_size(", pb,
                        ");\n");
                 return;
             }
             [[fallthrough]];
         case TY_INT: {  // Varints and pool-relative links have canonical bytes.
-            Append(bo, I, "{ int64_t n = gs_uleb_size(", pa, ");\n",
-                   I, "  if (gs_uleb_size(", pb, ") != n || memcmp(", pa, ", ", pb,
+            Append(bo, I, "{ int64_t n = k_uleb_size(", pa, ");\n",
+                   I, "  if (k_uleb_size(", pb, ") != n || memcmp(", pa, ", ", pb,
                    ", (size_t)n) != 0) return 0;\n",
                    I, "  ", pa, " += n; ", pb, " += n; }\n");
             return;
@@ -1574,18 +1574,18 @@ inline void CodeGen::EmitEqWalk(string &bo, TypeExpr *t, const string &pa, const
                 if (a.akind == A_VAR) {
                     auto ls = LenStore(t->arr);
                     if (ls == IS_VARINT) {
-                        Append(bo, I, "int64_t ", out, " = GS_ULEB_READ(", p, "); ", p,
-                               " += GS_ULEB_SIZE(", p, ");\n");
+                        Append(bo, I, "int64_t ", out, " = K_ULEB_READ(", p, "); ", p,
+                               " += K_ULEB_SIZE(", p, ");\n");
                     } else {
                         Append(bo, I, "int64_t ", out, " = (int64_t)*(", IntCT(ls), " *)",
                                p, "; ", p, " += ", IntSize(ls), ";\n");
                     }
                 } else if (a.akind == A_LIMITED) {
-                    Append(bo, I, "int64_t ", out, "cap = (int64_t)*(gs_u32 *)", p,
-                           "; int64_t ", out, " = (int64_t)*(gs_u32 *)(", p, " + 4); ",
+                    Append(bo, I, "int64_t ", out, "cap = (int64_t)*(k_u32 *)", p,
+                           "; int64_t ", out, " = (int64_t)*(k_u32 *)(", p, " + 4); ",
                            p, " += 8;\n");
                 } else {
-                    Append(bo, I, "int64_t ", out, " = *(gs_i64 *)", p, "; ", p,
+                    Append(bo, I, "int64_t ", out, " = *(k_i64 *)", p, "; ", p,
                            " += 8;\n");
                 }
             };

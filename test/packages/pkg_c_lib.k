@@ -1,6 +1,6 @@
 // A program using a package with a native part (cmath2, C under its
-// sidecar) beside pure K packages: klang build links cmath2's objects,
-// klang run loads its library.
+// sidecar) beside pure K packages: k build links cmath2's objects,
+// k run loads its library.
 import std;
 import cmath2 from "./pkgs/cmath2";
 import greet from "./pkgs/greet";

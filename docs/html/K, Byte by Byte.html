@@ -593,7 +593,7 @@ pool.free(s0);                                  <span class="tc">// the slot goe
       </div>
       <div class="blk">
         <h3>Tools</h3>
-        <p><code>klang build</code> makes an executable with whatever C compiler it finds. Packages come from git at a pinned tag or commit. <code>klang lsp</code> is a language server for VS Code, Neovim, Helix and Emacs, with hover, go to definition, rename and inlay hints, and <code>--debug</code> adds overflow and range checks.</p>
+        <p><code>k build</code> makes an executable with whatever C compiler it finds. Packages come from git at a pinned tag or commit. <code>k lsp</code> is a language server for VS Code, Neovim, Helix and Emacs, with hover, go to definition, rename and inlay hints, and <code>--debug</code> adds overflow and range checks.</p>
         <pre class="code" aria-label="K code"><code><span class="tk">import</span> mylib <span class="tk">from</span> <span class="ts">"joe/mylib@v2"</span>;      <span class="tc">// fetched from GitHub at tag v2</span></code></pre>
       </div>
       <div class="blk">
@@ -616,14 +616,14 @@ pool.free(s0);                                  <span class="tc">// the slot goe
         <li><span><b>Save</b> this as <code>hello.k</code>.</span><pre class="code" aria-label="K code"><code><span class="tk">fn</span> <span class="td">main</span>() {
     <span class="tb">print</span>(<span class="ts">"hello, klang"</span>);
 }</code></pre></li>
-        <li><span><b>Run</b> it in-process, or build a native executable.</span><pre class="code"><code>klang run hello.k
-klang build hello.k</code></pre></li>
+        <li><span><b>Run</b> it in-process, or build a native executable.</span><pre class="code"><code>k run hello.k
+k build hello.k</code></pre></li>
       </ol>
       <nav class="links" aria-label="Where to read next">
         <a href="https://github.com/kense-labs/klang/blob/main/docs/tutorial.md"><b>Tutorial</b><span>The friendly introduction, by example.</span></a>
         <a href="https://github.com/kense-labs/klang/blob/main/docs/reference.md"><b>Language reference</b><span>Every rule, each with an example.</span></a>
         <a href="https://github.com/kense-labs/klang/tree/main/samples"><b>31 sample programs</b><span>From a tour of the language to a JSON parser and a mini Doom.</span></a>
-        <a href="https://github.com/kense-labs/klang/blob/main/docs/klang_spec.md"><b>Specification</b><span>The exact rules, for when something won't compile.</span></a>
+        <a href="https://github.com/kense-labs/klang/blob/main/docs/k_spec.md"><b>Specification</b><span>The exact rules, for when something won't compile.</span></a>
       </nav>
     </div>
   </section>

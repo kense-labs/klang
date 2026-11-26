@@ -37,7 +37,7 @@ inline string BoolLit::CgX(CodeGen &) { return val ? "1" : "0"; }
 inline string NullLit::CgX(CodeGen &cg) {
     if (exprtype && exprtype->kind == TY_REF && cg.IsResz(exprtype->ref->sub)) {
         auto t = cg.T();
-        cg.L("gs_rref ", t, " = { 0, 0 };");
+        cg.L("k_rref ", t, " = { 0, 0 };");
         return t;
     }
     return "NULL";
@@ -56,7 +56,7 @@ inline string StrLit::CgX(CodeGen &cg) {
     cg.FixedLocal(et, t, et->arr->akind == A_LIMITED ? "{0}" : "");
     if (et->arr->akind == A_LIMITED) cg.L(t, ".len = ", val.size(), ";");
     if (!val.empty())
-        cg.L("GS_MEMCPY(", t, ".e, ", cg.StrRaw(val), ", ", val.size(), ");");
+        cg.L("K_MEMCPY(", t, ".e, ", cg.StrRaw(val), ", ", val.size(), ");");
     return t;
 }
 
@@ -100,7 +100,7 @@ inline string Unary::CgX(CodeGen &cg) {
     switch (op) {
         case T_MINUS:
             if (child->exprtype->kind == TY_FLT) return cat("(-", x, ")");
-            return cat("gs_neg_", cg.IntSfx(child->exprtype->intstorage), "(", x,
+            return cat("k_neg_", cg.IntSfx(child->exprtype->intstorage), "(", x,
                        cg.OvfLocArgs(child->exprtype->intstorage, line), ")");
         case T_NOT: {
             auto ct = child->exprtype;
@@ -342,8 +342,8 @@ inline string SliceExpr::CgX(CodeGen &cg) {
     slv.t = cg.ast.SliceOf(exprtype->arr->sub, line);
     return cg.AdaptToFixed(slv, exprtype, line);
 }
-// `as` range-checks in debug builds (GS_RANGE and friends are identity
-// casts unless the C is compiled with -DGS_DEBUG=1, and a failing check
+// `as` range-checks in debug builds (K_RANGE and friends are identity
+// casts unless the C is compiled with -DK_DEBUG=1, and a failing check
 // names the value, the target type and the cast's location); `as!` always
 // wraps or truncates (§6.3). A conversion to a float is never checked: it
 // rounds like float arithmetic does, and beyond f32's range it is an
@@ -364,12 +364,12 @@ inline string AsCast::CgX(CodeGen &cg) {
         auto tct = cg.IntCT(is);
         auto named = [&] { return cat("\"", IntStorageName(is), "\", ", cg.LocArgs(line)); };
         if (st->kind == TY_FLT) {
-            if (unchecked) return cat("(", tct, ")gs_f2iwrap(", x, ")");
+            if (unchecked) return cat("(", tct, ")k_f2iwrap(", x, ")");
             auto f32 = IsF32(st) ? "1" : "0";
             if (is == IS_U64)
-                return cat("(uint64_t)GS_F2U(", x, ", ", f32, ", ", cg.LocArgs(line), ")");
+                return cat("(uint64_t)K_F2U(", x, ", ", f32, ", ", cg.LocArgs(line), ")");
             auto [lo, hi] = IntRange(is);
-            return cat("(", tct, ")GS_F2I(", x, ", ", f32, ", ", cg.IntStr(lo), ", ",
+            return cat("(", tct, ")K_F2I(", x, ", ", f32, ", ", cg.IntStr(lo), ", ",
                        cg.IntStr(hi), ", ", named(), ")");
         }
         if (unchecked || cg.TEq(st, tt)) return cat("(", tct, ")(", x, ")");
@@ -378,14 +378,14 @@ inline string AsCast::CgX(CodeGen &cg) {
             // maximum (all targets' maxima fit an unsigned compare).
             if (is == IS_U64) return cat("(", x, ")");
             auto hi = IntRange(is).second;
-            return cat("(", tct, ")GS_RANGE_U(", x, ", ", (uint64_t)hi, "ULL, ", named(), ")");
+            return cat("(", tct, ")K_RANGE_U(", x, ", ", (uint64_t)hi, "ULL, ", named(), ")");
         }
         // The source is at most i64.max, so a u64 target is its 0..i64.max
         // part (IntRange); a source whose every value fits needs no check.
         auto [slo, shi] = IntRange(st->intstorage);
         auto [lo, hi] = IntRange(is);
         if (slo >= lo && shi <= hi) return cat("(", tct, ")(", x, ")");
-        return cat("(", tct, ")GS_RANGE((int64_t)(", x, "), ", cg.IntStr(lo), ", ",
+        return cat("(", tct, ")K_RANGE((int64_t)(", x, "), ", cg.IntStr(lo), ", ",
                    cg.IntStr(hi), ", ", named(), ")");
     }
     assert(tt->kind == TY_FLT);
@@ -635,7 +635,7 @@ inline void MatchExpr::CgAny(CodeGen &cg, const Dst &d) {
                 cg.vstk[arm.binder] = stk;
                 auto sz = cg.T();
                 cg.L("int64_t ", sz, " = ", cg.SizeX(vt, payload), ";");
-                cg.L("GS_MEMCPY(", cg.Top(stk), ", ", payload, ", (size_t)", sz, ");");
+                cg.L("K_MEMCPY(", cg.Top(stk), ", ", payload, ", (size_t)", sz, ");");
                 cg.Bump(stk, sz);
             } else if (EmptyLayout(variant->fields)) {
                 cg.FixedLocal(vt, bn, "{0}");
@@ -652,7 +652,7 @@ inline void MatchExpr::CgAny(CodeGen &cg, const Dst &d) {
         cg.L("} break;");
     }
     if (!haswild)
-        cg.L("default: GS_UNREACHABLE(", cg.LocArgs(line), ");");
+        cg.L("default: K_UNREACHABLE(", cg.LocArgs(line), ");");
     cg.L("}");
     cg.termjump = false;
 }
@@ -901,7 +901,7 @@ inline void Assign::CgStmt(CodeGen &cg) {
     if (lv.val) {
         if (!quiet && (lv.viaref || lv.ispref || !cg.StableDest(lval))) {
             auto p = cg.T();
-            cg.L(lv.ispref ? string("gs_pref") : cg.CT(lv.t), " *", p, " = &(", lv.s, ");");
+            cg.L(lv.ispref ? string("k_pref") : cg.CT(lv.t), " *", p, " = &(", lv.s, ");");
             lv.s = cat("(*", p, ")");
         }
     } else if (!cg.IsResz(lv.t)) {
@@ -910,12 +910,12 @@ inline void Assign::CgStmt(CodeGen &cg) {
         lv.s = p;
     } else if (lv.viaref && !lv.lenlv.empty()) {
         auto p = cg.T();
-        cg.L("gs_i64 *", p, " = &(", lv.lenlv, ");");
+        cg.L("k_i64 *", p, " = &(", lv.lenlv, ");");
         lv.lenlv = cat("(*", p, ")");
     }
     if (lv.viaref && cg.IsResz(lv.t) && !lv.stk.empty() && !cg.CacheableStk(lv.stk)) {
         auto s = cg.T();
-        cg.L("gs_stack *", s, " = ", lv.stk, ";");
+        cg.L("k_stack *", s, " = ", lv.stk, ";");
         lv.stk = s;
     }
     if (op == T_DOTASSIGN) { cg.GenRebind(this, lv); return; }
@@ -972,11 +972,11 @@ inline void Assign::CgStmt(CodeGen &cg) {
         string srcstk;
         auto src = cg.GenPtr(rhs, &srcstk);
         auto nn = cg.T();
-        cg.L("int64_t ", nn, " = (int64_t)*(gs_u32 *)(", src, " + 4);");
-        cg.L("if (", nn, " > ", cg.LimitedCap(lv), ") gs_abort(GS_E_CAPACITY, ",
+        cg.L("int64_t ", nn, " = (int64_t)*(k_u32 *)(", src, " + 4);");
+        cg.L("if (", nn, " > ", cg.LimitedCap(lv), ") k_abort(K_E_CAPACITY, ",
              cg.LocArgs(line), ");");
-        cg.L("*(gs_u32 *)((", lv.s, ") + 4) = (uint32_t)", nn, ";");
-        cg.L("GS_MEMCPY((", lv.s, ") + 8, ", src, " + 8, (size_t)(", nn, " * ",
+        cg.L("*(k_u32 *)((", lv.s, ") + 4) = (uint32_t)", nn, ";");
+        cg.L("K_MEMCPY((", lv.s, ") + 8, ", src, " + 8, (size_t)(", nn, " * ",
           cg.FixedSize(t->arr->sub), "));");
         return;
     }

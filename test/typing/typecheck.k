@@ -414,7 +414,7 @@ fn words(text: u8[:]) -> u8[][>..] {
 }
 
 fn sequential() {
-    let ws = words("feed the goose");
+    let ws = words("roll the stone");
     var n = 0;
     for w, i in ws { n += w.len + i; }
     print(n);
@@ -609,7 +609,7 @@ fn process(n: i64) -> i64 {
 // --- globals, writability into globals, struct-stored refs ------------------
 
 var gcounter = 0;
-let gname: u8[] = "goose";
+let gname: u8[] = "stone";
 var gvec = Float3 { 0.0, 0.0, 0.0 };
 
 var gint = 5;

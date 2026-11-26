@@ -14,7 +14,7 @@ mutations that make some of them unsafe. Every program runs through the JIT
 with the pass on and off; a check the pass wrongly elides turns an abort into
 a read past the end, so the two runs differ. Programs that differ are kept.
 
-  python bench/bce_fuzz.py [--exe build/Release/klang.exe] [--seed 1] [--count 200]
+  python bench/bce_fuzz.py [--exe build/Release/k.exe] [--seed 1] [--count 200]
 """
 
 import argparse
@@ -169,7 +169,7 @@ def run(exe, path, nobce):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--exe", default=str(ROOT / "build" / "Release" / "klang.exe"))
+    ap.add_argument("--exe", default=str(ROOT / "build" / "Release" / "k.exe"))
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--count", type=int, default=200)
     args = ap.parse_args()

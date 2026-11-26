@@ -1,4 +1,4 @@
-// runtime-define: GS_STACK_RESERVE=4194304
+// runtime-define: K_STACK_RESERVE=4194304
 // An if ending its block whose else cannot complete normally, the shape
 // `guard c else { ... }` parses to (§6.4), is emitted with the rest of the
 // block after the else, not in a C block of its own. What the else, the rest

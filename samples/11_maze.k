@@ -6,7 +6,7 @@
 // through the library's heap_push/heap_pop with a comparator block.
 //
 // Build and run (from this directory):
-//   klang -o maze.c 11_maze.k && cl maze.c && maze
+//   k -o maze.c 11_maze.k && cl maze.c && maze
 
 import std;
 

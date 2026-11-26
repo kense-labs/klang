@@ -1,7 +1,7 @@
 // K compiler — packages (docs/design/packages.md §4): what a sourced
 // import, `import name from "source";`, names, and where that package's
 // files are. A path source is a directory used in place, relative to the
-// file that wrote it; a git source is fetched into KLANG_HOME (§4.6).
+// file that wrote it; a git source is fetched into K_HOME (§4.6).
 #pragma once
 
 namespace klang {
@@ -88,10 +88,10 @@ inline bool SameSource(const PackageSource &a, const PackageSource &b) {
 
 // --- fetching (§4.6) ------------------------------------------------------------
 
-// `klang fetch --update`: refs that are not commits are fetched again.
+// `k fetch --update`: refs that are not commits are fetched again.
 inline bool package_update = false;
 // `--offline`: nothing is fetched; a package whose checkout is not in the
-// cache is an error at its import, which `klang fetch` resolves.
+// cache is an error at its import, which `k fetch` resolves.
 inline bool package_nofetch = false;
 
 inline bool IsCommitHash(const string &ref) {
@@ -100,9 +100,9 @@ inline bool IsCommitHash(const string &ref) {
     return true;
 }
 
-// Where a git source is checked out: KLANG_HOME/pkg/<host>/<owner>/<repo>/
+// Where a git source is checked out: K_HOME/pkg/<host>/<owner>/<repo>/
 // <ref> for the usual repository URL, and for any other URL (a file:// one,
-// a deeper path) KLANG_HOME/pkg/<repo>-<hash of the URL>/<ref>, which keeps
+// a deeper path) K_HOME/pkg/<repo>-<hash of the URL>/<ref>, which keeps
 // the path short where Windows limits it. A commit is named by its first
 // twelve digits, a branch's slashes become underscores.
 inline string GitCacheKey(const PackageSource &s) {
@@ -256,7 +256,7 @@ inline string FetchPackage(const PackageSource &s, const string &name) {
     auto have = filesystem::is_directory(filesystem::path(dir), ec);
     if (!have && package_nofetch)
         throw CompileError { cat("the package ", name, " from ", s.text, " is not fetched, and "
-                                 "--offline fetches nothing: `klang fetch` fetches it") };
+                                 "--offline fetches nothing: `k fetch` fetches it") };
     auto update = have && package_update && !IsCommitHash(s.ref) && !package_nofetch;
     if (!have || update) {
         auto parent = filesystem::path(dir).parent_path();

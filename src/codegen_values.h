@@ -12,7 +12,7 @@ namespace klang {
 // The root's data stack (and pool freelist) ride along for growth ops.
 
 // Reference variables with reusable-pool provenance are represented as
-// gs_pref so pool operations stay available through them (§5.4). This is
+// k_pref so pool operations stay available through them (§5.4). This is
 // a property of the VarDef (provenance), shared by caller and callee.
 inline bool CodeGen::PrefVar(const VarDef *vd) {
     return vd->type && CarriesPool(vd->type) && vd->ref.reusable;
@@ -69,7 +69,7 @@ inline void CodeGen::RelParts(const Loc &lv, string &faddr, string &off) {
     if (r.lenstorage == IS_VARINT) {
         assert(!lv.val);
         faddr = lv.s;
-        off = cat(r.pool ? "gs_uleb_read(" : "gs_zig_read(", lv.s, ")");
+        off = cat(r.pool ? "k_uleb_read(" : "k_zig_read(", lv.s, ")");
     } else if (lv.val) {
         faddr = cat("((uint8_t *)&", lv.s, ")");
         off = cat("(int64_t)(", RelCT(lv.t), ")", lv.s);
@@ -138,7 +138,7 @@ inline void CodeGen::DerefLoc(Loc &lv) {
         nl.hlen = lv.hlen;
         nl.viaref = lv.viaref;
         nl.stk = cat(rv, ".stk");
-        // A pool reference (gs_pref) has the same leading members plus the
+        // A pool reference (k_pref) has the same leading members plus the
         // freelist; keep the companions reachable for pool operations.
         nl.fl = lv.ispref ? cat("(*", rv, ".fl)") : lv.fl;
         nl.flstk = lv.ispref ? cat(rv, ".flstk") : lv.flstk;
@@ -184,14 +184,14 @@ inline void CodeGen::PinLoc(Loc &lv) {
     } else {
         assert(!lv.hdr.empty());
         auto h = T();
-        L("gs_rhdr *", h, " = &(", lv.hdr, ");");
+        L("k_rhdr *", h, " = &(", lv.hdr, ");");
         lv.hdr = cat("(*", h, ")");
         lv.s = cat(h, "->base");
         lv.lenlv = cat(h, "->len");
     }
     if (!lv.stk.empty() && !CacheableStk(lv.stk)) {
         auto s = T();
-        L("gs_stack *", s, " = ", lv.stk, ";");
+        L("k_stack *", s, " = ", lv.stk, ";");
         lv.stk = s;
     }
     lv.viaref = false;
@@ -206,7 +206,7 @@ inline CodeGen::Loc CodeGen::VarLoc(VarDef *vd) {
         if (auto pit = aliaspath.find(vd); pit != aliaspath.end()) {
             auto tl = GenLoc(pit->second);
             l.val = true;
-            l.s = cat("((gs_rref){ (gs_rhdr *)&", tl.hdr, ", ", tl.stk, " })");
+            l.s = cat("((k_rref){ (k_rhdr *)&", tl.hdr, ", ", tl.stk, " })");
             l.aliaspath = pit->second;
         } else if (tg->type->kind == TY_REF) {
             l = VarLoc(tg);
@@ -218,7 +218,7 @@ inline CodeGen::Loc CodeGen::VarLoc(VarDef *vd) {
             // The reference value is made where one is needed; its pointee
             // is the variable's own location (DerefLoc).
             l.val = true;
-            l.s = cat("((gs_rref){ (gs_rhdr *)&", HdrLv(tg), ", ", VStkOf(tg), " })");
+            l.s = cat("((k_rref){ (k_rhdr *)&", HdrLv(tg), ", ", VStkOf(tg), " })");
             l.aliasof = tg;
         }
         // A view is the alias's own, hoisted for the loops BCE judged this
@@ -238,8 +238,8 @@ inline CodeGen::Loc CodeGen::VarLoc(VarDef *vd) {
         l.hlen = hit->second.second;
     }
     if (vd->reusable) {
-        // A reusable pool: locals/globals have gs_rhdr companions; a
-        // captured pool arrives as a gs_pref.
+        // A reusable pool: locals/globals have k_rhdr companions; a
+        // captured pool arrives as a k_pref.
         auto pit = vpool.find(vd);
         auto git = gpools.find(vd);
         if (pit != vpool.end() || git != gpools.end()) {
@@ -264,7 +264,7 @@ inline CodeGen::Loc CodeGen::VarLoc(VarDef *vd) {
         return l;
     }
     if (IsResz(vd->type)) {
-        // A gs_rhdr or frame object in the frame (or a pointer to one,
+        // A k_rhdr or frame object in the frame (or a pointer to one,
         // when captured).
         auto hdr = fvptr.count(vd) ? cat("(*", name, ")") : name;
         l.hdr = hdr;
@@ -297,15 +297,15 @@ inline CodeGen::Loc CodeGen::VarLoc(VarDef *vd) {
     return l;
 }
 
-// The gs_rhdr lvalue of a resizable variable (frame header form, C.2).
+// The k_rhdr lvalue of a resizable variable (frame header form, C.2).
 inline string CodeGen::HdrLv(VarDef *vd) {
     auto name = VName(vd);
     return fvptr.count(vd) ? cat("(*", name, ")") : name;
 }
 
-// The C type a variable's storage uses (gs_pref for pool references).
+// The C type a variable's storage uses (k_pref for pool references).
 inline string CodeGen::VarCT(const VarDef *vd) {
-    if (PrefVar(vd)) { EmitCoreTypes(); return "gs_pref"; }
+    if (PrefVar(vd)) { EmitCoreTypes(); return "k_pref"; }
     return CT(vd->type);
 }
 
@@ -379,8 +379,8 @@ inline CodeGen::ArrView CodeGen::RawArrayView(const Loc &lv) {
                 v.typedelems = true;
             } else {
                 v.elems = cat("((", lv.s, ") + 8)");
-                v.len = cat("(int64_t)*(gs_u32 *)((", lv.s, ") + 4)");
-                v.lenlv = cat("(*(gs_u32 *)((", lv.s, ") + 4))");
+                v.len = cat("(int64_t)*(k_u32 *)((", lv.s, ") + 4)");
+                v.lenlv = cat("(*(k_u32 *)((", lv.s, ") + 4))");
             }
             return v;
         case A_VAR: {
@@ -390,9 +390,9 @@ inline CodeGen::ArrView CodeGen::RawArrayView(const Loc &lv) {
                 // Sequential unless elements are fixed; length prefix is
                 // dynamic, so materialize both once.
                 auto p = T();
-                L("uint8_t *", p, " = (", lv.s, ") + GS_ULEB_SIZE(", lv.s, ");");
+                L("uint8_t *", p, " = (", lv.s, ") + K_ULEB_SIZE(", lv.s, ");");
                 v.elems = p;
-                v.len = cat("GS_ULEB_READ(", lv.s, ")");
+                v.len = cat("K_ULEB_READ(", lv.s, ")");
             } else {
                 v.elems = cat("((", lv.s, ") + ", IntSize(ls), ")");
                 v.len = cat("(int64_t)*(", IntCT(ls), " *)(", lv.s, ")");
@@ -508,7 +508,7 @@ inline void CodeGen::FixedLocal(TypeExpr *t, string &name, const string &init, b
     SaveBase(forlocal, stk, cat("(uint8_t *)", name));
     Bump(stk, cat("sizeof(", CT(t), ")"));
     name = cat("(*", name, ")");
-    if (init == "{0}") L("GS_MEMZERO(&", name, ", sizeof(", name, "));");
+    if (init == "{0}") L("K_MEMZERO(&", name, ", sizeof(", name, "));");
     else if (!init.empty()) L(name, " = ", init, ";");
 }
 
@@ -525,7 +525,7 @@ inline string CodeGen::GenPure(Node *n) {
     return Snapshot(n->exprtype, GenX(n));
 }
 
-// An integer `/` or `%` at storage s, through runtime.h's gs_div_/gs_mod_
+// An integer `/` or `%` at storage s, through runtime.h's k_div_/k_mod_
 // macros. Those name their operands more than once, so an operand that is
 // not already a C name or a number is read into a temp first; a signed `%`
 // also gets the temp it keeps the remainder in.
@@ -548,11 +548,11 @@ inline string CodeGen::DivX(bool div, IntStorage s, const string &l, const strin
         return t;
     };
     auto a = pure(l), b = pure(r);
-    if (div) return cat("gs_div_", IntSfx(s), "(", a, ", ", b, ", ", LocArgs(line), ")");
-    if (IsUnsigned(s)) return cat("gs_mod_", IntSfx(s), "(", a, ", ", b, ", ", LocArgs(line), ")");
+    if (div) return cat("k_div_", IntSfx(s), "(", a, ", ", b, ", ", LocArgs(line), ")");
+    if (IsUnsigned(s)) return cat("k_mod_", IntSfx(s), "(", a, ", ", b, ", ", LocArgs(line), ")");
     auto t = T();
     L("int64_t ", t, ";");
-    return cat("gs_mod_", IntSfx(s), "(", t, ", ", a, ", ", b, ", ", LocArgs(line), ")");
+    return cat("k_mod_", IntSfx(s), "(", t, ", ", a, ", ", b, ", ", LocArgs(line), ")");
 }
 
 // Scalar `l op r` at type t, an integer or a float type: the one table of
@@ -596,9 +596,9 @@ inline string CodeGen::ArithX(TType op, TypeExpr *t, const string &l, const stri
     auto s = t->intstorage;
     auto sfx = IntSfx(s);
     switch (op) {
-        case T_PLUS:  return cat("gs_add_", sfx, "(", l, ", ", r, OvfLocArgs(s, line), ")");
-        case T_MINUS: return cat("gs_sub_", sfx, "(", l, ", ", r, OvfLocArgs(s, line), ")");
-        case T_MUL:   return cat("gs_mul_", sfx, "(", l, ", ", r, OvfLocArgs(s, line), ")");
+        case T_PLUS:  return cat("k_add_", sfx, "(", l, ", ", r, OvfLocArgs(s, line), ")");
+        case T_MINUS: return cat("k_sub_", sfx, "(", l, ", ", r, OvfLocArgs(s, line), ")");
+        case T_MUL:   return cat("k_mul_", sfx, "(", l, ", ", r, OvfLocArgs(s, line), ")");
         case T_DIV: case T_MOD:
             if (!nonneg) return DivX(op == T_DIV, s, l, r, line);
             return cat("(", ct, ")((uint64_t)(", lx, op == T_DIV ? ") / " : ") % ", "(uint64_t)(",
@@ -606,9 +606,9 @@ inline string CodeGen::ArithX(TType op, TypeExpr *t, const string &l, const stri
         case T_BITAND: return cat("(", ct, ")(", lx, " & ", rx, ")");
         case T_BITOR:  return cat("(", ct, ")(", lx, " | ", rx, ")");
         case T_XOR:    return cat("(", ct, ")(", lx, " ^ ", rx, ")");
-        case T_SHL:    return cat("gs_shl_", sfx, "(", l, ", (int64_t)(", r, "))");
+        case T_SHL:    return cat("k_shl_", sfx, "(", l, ", (int64_t)(", r, "))");
         case T_SHR:
-            if (!nonneg) return cat("gs_shr_", sfx, "(", l, ", (int64_t)(", r, "))");
+            if (!nonneg) return cat("k_shr_", sfx, "(", l, ", (int64_t)(", r, "))");
             return cat("(", ct, ")((uint64_t)(", lx, ") >> ((int64_t)(", r, ") & ", IntBits(s) - 1,
                        "))");
         default: assert(false); return l;
@@ -674,7 +674,7 @@ inline CodeGen::Loc CodeGen::IndexLoc(Loc lv, Node *idxnode, Line ln, bool nobc)
     auto statlen = lv.t->kind == TY_ARRAY && lv.t->arr->akind == A_FIXED
                        ? ArrSize(lv.t->arr) : -1;
     if (nobc || (il && statlen >= 0 && il->val >= 0 && il->val < statlen)) ix = idx;
-    else ix = cat("GS_IDX((int64_t)(", idx, "), ", v.len, ", ", LocArgs(ln), ")");
+    else ix = cat("K_IDX((int64_t)(", idx, "), ", v.len, ", ", LocArgs(ln), ")");
     if (v.typedelems) {
         Loc r;
         r.t = v.elem;
@@ -766,7 +766,7 @@ inline void CodeGen::EmitHoistedCheck(Index *ta, Index *ea, const string &c) {
     auto tl = LocLine(ta->line), el = LocLine(ea->line);
     auto file = tf == ef ? tf : cat("(", c, ") ? ", tf, " : ", ef);
     auto line = tl == el ? tl : cat("(", c, ") ? ", tl, " : ", el);
-    L("(void)GS_IDX((int64_t)(", idx, "), ", v.len, ", ", file, ", ", line, ");");
+    L("(void)K_IDX((int64_t)(", idx, "), ", v.len, ", ", file, ", ", line, ");");
 }
 
 inline CodeGen::Loc CodeGen::GenLoc(Node *n) {
@@ -898,7 +898,7 @@ inline string CodeGen::RzTemp(TypeExpr *t, string &stk) {
         L(base, " = ", Top(stk), ";");
         SaveBase(false, stk, base);
     } else {
-        L("gs_rhdr ", h, " = { ", Top(stk), ", 0 };");
+        L("k_rhdr ", h, " = { ", Top(stk), ", 0 };");
         SaveBase(false, stk, cat(h, ".base"));
     }
     return h;
@@ -1049,7 +1049,7 @@ inline string CodeGen::LoadLoc(Loc lv, TypeExpr *et, Line ln) {
     if (!lv.val) {
         assert(IsBytesT(lv.t));
         if (lv.t->kind == TY_INT)   // varint field read: decode to i64.
-            return cat("gs_zig_read(", lv.s, ")");
+            return cat("k_zig_read(", lv.s, ")");
         if (et && IsFix(et) && !TEq(lv.t, et)) return AdaptToFixed(lv, et, ln);
         return lv.s;   // Bytes value: the pointer is the currency.
     }
@@ -1063,7 +1063,7 @@ inline string CodeGen::LoadLoc(Loc lv, TypeExpr *et, Line ln) {
     if (lv.ispref && et && et->kind == TY_REF) {
         // A pool reference read as a plain reference drops the freelist.
         auto t = T();
-        L("gs_rref ", t, " = { ", lv.s, ".hdr, ", lv.s, ".stk };");
+        L("k_rref ", t, " = { ", lv.s, ".hdr, ", lv.s, ".stk };");
         return t;
     }
     return lv.s;
@@ -1097,7 +1097,7 @@ inline string CodeGen::AdaptToFixed(Loc lv, TypeExpr *et, Line ln) {
             L("case ", TagConst(ei, (int)vi), ":");
             ind++;
             if (psz)
-                L("GS_MEMCPY(&", tv, ".u.v_", Sanitize(ei->en->variants[vi].name), ", ",
+                L("K_MEMCPY(&", tv, ".u.v_", Sanitize(ei->en->variants[vi].name), ", ",
                   lv.s, " + ", ts, ", ", psz, ");");
             L("break;");
             ind--;
@@ -1123,8 +1123,8 @@ inline void CodeGen::CopyIntoLimited(Loc lv, TypeExpr *et, Line ln, const string
     auto nn = T();
     L("int64_t ", nn, " = ", v.len, ";");
     L("if (", nn, " > ", ArrSize(et->arr),
-      ") gs_abort(GS_E_CAPACITY, ", LocArgs(ln), ");");
-    L(overlap ? "gs_memmove" : CopyFn(), "(", dst, ".e, ", v.elems, ", (size_t)(", nn, " * ",
+      ") k_abort(K_E_CAPACITY, ", LocArgs(ln), ");");
+    L(overlap ? "k_memmove" : CopyFn(), "(", dst, ".e, ", v.elems, ", (size_t)(", nn, " * ",
       FixedSize(et->arr->sub), "));");
     L(dst, ".len = (", IntCT(LenStore(et->arr)), ")", nn, ";");
 }
@@ -1185,7 +1185,7 @@ inline string CodeGen::GenRefVal(Node *child, Line ln) {
         auto stk = VStkOf(id->vdef);
         assert(!stk.empty());
         auto t = T();
-        L("gs_rref ", t, " = { (gs_rhdr *)&", HdrLv(id->vdef), ", ", stk, " };");
+        L("k_rref ", t, " = { (k_rhdr *)&", HdrLv(id->vdef), ", ", stk, " };");
         return t;
     }
     auto lv = GenLoc(child);
@@ -1201,7 +1201,7 @@ inline string CodeGen::GenRefVal(Node *child, Line ln) {
                      "prefix or an ADT payload is unsupported; reference the owning "
                      "variable");
         auto t = T();
-        L("gs_rref ", t, " = { (gs_rhdr *)&", lv.hdr, ", ", lv.stk, " };");
+        L("k_rref ", t, " = { (k_rhdr *)&", lv.hdr, ", ", lv.stk, " };");
         return t;
     }
     if (!lv.val) return lv.s;
@@ -1231,7 +1231,7 @@ inline string CodeGen::GenXD(Node *n, TypeExpr *want) {
             return LoadLoc(lv, want, n->line);
         }
         auto x = GenX(n);
-        if (IsVarintT(sub)) return cat("gs_zig_read(", x, ")");
+        if (IsVarintT(sub)) return cat("k_zig_read(", x, ")");
         if (IsResz(sub) || IsBytesT(sub)) return x;   // Byte-pointer currency.
         return PointeeLv(x, sub);
     }
@@ -1569,7 +1569,7 @@ inline void CodeGen::LeafAny(Node *n, const Dst &d) {
             // Nothing reads a fresh destination: built there, not in a
             // temporary copied over (StructLit::CgX). Without d.fresh,
             // fixed_pointer_abi's from_global prints otherwise at -O2.
-            if (HasUninitSlots(n->exprtype)) L("GS_MEMZERO(&", d.s, ", sizeof(", d.s, "));");
+            if (HasUninitSlots(n->exprtype)) L("K_MEMZERO(&", d.s, ", sizeof(", d.s, "));");
             StructLitAt(sl, d.s, false);
         } else {
             // A named result already where it is returned to (OpenIbFixed)
@@ -1661,7 +1661,7 @@ inline string CodeGen::GenPtr(Node *n, string *stkout) {
 inline string CodeGen::StrRaw(const string &v) {
     auto it = strdata.find(v);
     if (it != strdata.end()) return it->second;
-    auto name = Unique(cat("gs_str", strdata.size()));
+    auto name = Unique(cat("k_str", strdata.size()));
     // The checker admits no write to a literal (§9.5), so the data is C
     // const and a hole in the analysis faults rather than corrupting; the
     // cast keeps the slice and copy sites at their plain pointer type.
@@ -1678,7 +1678,7 @@ inline string CodeGen::StrRaw(const string &v) {
 inline string CodeGen::BlobRaw(const string &v) {
     auto it = blobdata.find(v);
     if (it != blobdata.end()) return it->second;
-    auto name = Unique(cat("gs_blob", blobdata.size()));
+    auto name = Unique(cat("k_blob", blobdata.size()));
     Append(pdata, "static const uint8_t ", name, "[", v.size() ? v.size() : 1, "] = {");
     for (size_t i = 0; i < v.size(); i++) {
         if (i % 24 == 0) pdata += "\n   ";
@@ -1697,7 +1697,7 @@ inline string CodeGen::GenStrBytes(StrLit *s) {
     auto it = strval.find(key);
     if (it != strval.end()) return it->second;
     auto ls = LenStore(et->arr);
-    auto name = Unique(cat("gs_strv", strval.size()));
+    auto name = Unique(cat("k_strv", strval.size()));
     if (ls == IS_VARINT) {
         uint8_t lenbuf[10];
         uint64_t v = s->val.size();
@@ -1815,7 +1815,7 @@ inline string CodeGen::GenSliceEq(TypeExpr *st, const string &l, const string &r
 
 // Structural equality of two element ranges (§4.5): length then elements.
 // Either range's elements may be an empty slice's null pointer, which
-// gs_memeq allows.
+// k_memeq allows.
 inline string CodeGen::GenRangeEq(TypeExpr *elem, const string &ae, const string &an,
                                   const string &be, const string &bn) {
     auto t = T();
@@ -1823,7 +1823,7 @@ inline string CodeGen::GenRangeEq(TypeExpr *elem, const string &ae, const string
     L("if (", t, ") {");
     ind++;
     if (ScalarEq(elem) && BitwiseEq(elem)) {
-        L(t, " = gs_memeq(", ae, ", ", be, ", (size_t)((", an, ") * ", FixedSize(elem), "));");
+        L(t, " = k_memeq(", ae, ", ", be, ", (size_t)((", an, ") * ", FixedSize(elem), "));");
     } else if (IsFix(elem)) {
         auto pa = T(), pb = T(), iv = T();
         L("const ", CT(elem), " *", pa, " = (const ", CT(elem), " *)(", ae, ");");
@@ -1851,7 +1851,7 @@ inline string CodeGen::GenRangeEq(TypeExpr *elem, const string &ae, const string
 
 // Elementwise arithmetic (§6.1), expanded member by member with direct
 // loads and stores — no whole-struct temporaries, which backends fail to
-// scalarize — except that floats GS_VEC can hold go through one vector
+// scalarize — except that floats K_VEC can hold go through one vector
 // operation where the C compiler has vector extensions (VecShape,
 // implementation §6.14). Member i of the result depends only on member i of each
 // operand, so writing members straight into `dst` is exact even when it
@@ -1869,16 +1869,16 @@ inline void CodeGen::GenElemwiseInto(TypeExpr *t, TType op, Line line, const str
                                                      : nullptr;
     bool vec = o && VecShape(t, fs, n);
     // Where the C compiler has vector extensions, one vector operation
-    // (GS_VEC, runtime.h); the members below otherwise.
+    // (K_VEC, runtime.h); the members below otherwise.
     if (vec) {
         // The operands go to temps of their own type first, inside the test
         // so that the member-by-member form doesn't pay for them; both are
         // read before dst, which may be one of them, is written.
-        L("#if GS_VEC");
+        L("#if K_VEC");
         auto a = VecOperand(t, fs, l, lscalar);
         auto b = VecOperand(t, fs, r, rscalar);
         auto vt = VecType(fs, n);
-        L("GS_VST(", vt, ", &(", dst, "), ", VecLoad(vt, n, a, lscalar), o,
+        L("K_VST(", vt, ", &(", dst, "), ", VecLoad(vt, n, a, lscalar), o,
           VecLoad(vt, n, b, rscalar), ");");
         L("#else");
     }
@@ -1898,23 +1898,23 @@ inline void CodeGen::GenElemwiseNegInto(TypeExpr *t, Line line, const string &x,
     int64_t n = 0;
     bool vec = VecShape(t, fs, n);
     if (vec) {
-        L("#if GS_VEC");
+        L("#if K_VEC");
         auto a = VecOperand(t, fs, x, false);
         auto vt = VecType(fs, n);
-        L("GS_VST(", vt, ", &(", dst, "), -", VecLoad(vt, n, a, false), ");");
+        L("K_VST(", vt, ", &(", dst, "), -", VecLoad(vt, n, a, false), ");");
         L("#else");
     }
     GenElemwiseLeaves(t, dst, [&](TypeExpr *tt, const string &path) {
         auto a = cat("(", x, ")", path);
         if (tt->kind == TY_FLT) return cat("(-", a, ")");
-        return cat("gs_neg_", IntSfx(tt->intstorage), "(", a,
+        return cat("k_neg_", IntSfx(tt->intstorage), "(", a,
                    OvfLocArgs(tt->intstorage, line), ")");
     });
     if (vec) L("#endif");
 }
 
 // Whether t is all floats of one width, 2, 4, 8 or 16 of them in 16, 32 or
-// 64 bytes with no padding: a value GS_VEC can compute on as one vector.
+// 64 bytes with no padding: a value K_VEC can compute on as one vector.
 inline bool CodeGen::VecShape(TypeExpr *t, FltStorage &fs, int64_t &n) {
     n = 0;
     // Anything past 64 bytes is too big for a vector, however it nests:
@@ -1951,7 +1951,7 @@ inline bool CodeGen::VecShape(TypeExpr *t, FltStorage &fs, int64_t &n) {
 }
 
 inline string CodeGen::VecType(FltStorage fs, int64_t n) {
-    return cat("gs_v", FltStorageName(fs), "_", n);
+    return cat("k_v", FltStorageName(fs), "_", n);
 }
 
 // An operand of a vector operation in a new temp: a scalar of the lanes'
@@ -1970,7 +1970,7 @@ inline string CodeGen::VecOperand(TypeExpr *t, FltStorage fs, const string &x, b
 // The vector of type vt (n lanes) that the temp v holds, or that it fills
 // every lane of.
 inline string CodeGen::VecLoad(const string &vt, int64_t n, const string &v, bool scalar) {
-    if (!scalar) return cat("GS_VLD(", vt, ", &", v, ")");
+    if (!scalar) return cat("K_VLD(", vt, ", &", v, ")");
     string lanes;
     for (int64_t i = 0; i < n; i++) lanes += cat(i ? ", " : "", v);
     return cat("((", vt, "){ ", lanes, " })");
@@ -2065,7 +2065,7 @@ inline string CodeGen::GenSlice(SliceExpr *se, const string &into) {
     L("int64_t ", hiv, " = ", hi, ";");
     if (!se->nobc)
         L("if (", lov, " < 0 || ", hiv, " < ", lov, " || ", hiv, " > ", lenv,
-          ") gs_abort(GS_E_SLICE, ", LocArgs(se->line), ");");
+          ") k_abort(K_E_SLICE, ", LocArgs(se->line), ");");
     // Adapted contexts (slice constructing an array) leave an array
     // exprtype on the node; the slice value's own type comes from the
     // source element.

@@ -69,7 +69,7 @@ extension are both caught before the walk starts.
 
 The payload must be little-endian, as specified by the layouts in C.2 and
 supported by every compiler target. `to_bytes`, `bytes_of`, and `from_bytes`
-test the host and abort with `GS_E_ENDIAN` on a big-endian host. The test folds
+test the host and abort with `K_E_ENDIAN` on a big-endian host. The test folds
 to a constant on every supported target. A big-endian port would need either to
 prove that an image never leaves the program or to emit byte-swapping variants.
 
@@ -169,7 +169,7 @@ element type `from_bytes` accepts.
 ## 6. Generating the verifier per type
 
 The verifier is generated per element type, like the existing size and equality
-functions (`gs_size_T`, `EmitEqWalk`). Its signature is `gs_verify_T(const
+functions (`k_size_T`, `EmitEqWalk`). Its signature is `k_verify_T(const
 uint8_t *p, int64_t n, uint8_t *bm) -> int64_t`; it returns the element count or
 −1. `EmitVerifyWalk` in `codegen_types.h` generates it using a case for each
 type kind and the layout rules (`Layout`, C.2). The generated code recurses into
@@ -187,7 +187,7 @@ implementation adds about 250 lines to codegen.
   `(n + 7) / 8` bytes on a statement-scoped stack, so it is released at the
   end of the statement.
 * **Bounds.** Every read is bounded before it happens, and the varint decoders
-  are the bounded `gs_uleb_check` / `gs_zig_check` (runtime.h) rather than the
+  are the bounded `k_uleb_check` / `k_zig_check` (runtime.h) rather than the
   ordinary ones, which loop until a terminator the image may not contain.
 * **Element types with no relative references** skip the link pass. **Types
   that need no checks** (fixed, with no tag to range-check, no limited-array
@@ -205,7 +205,7 @@ moves the cursor past the whole capacity.
 
 **The bitmap ceiling.** The bitmap uses one bit per payload byte, on one data
 stack, so the largest verifiable image of *variable* elements is eight times
-a stack's reservation. That is 16 GB at the default `GS_STACK_RESERVE` of
+a stack's reservation. That is 16 GB at the default `K_STACK_RESERVE` of
 2 GB, and the ceiling changes with that constant. A larger payload is rejected
 (`false`) rather than letting the bitmap grow into the guard region, which
 would abort. Fixed-element images have no such limit, since they need no

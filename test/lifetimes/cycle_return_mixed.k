@@ -61,7 +61,7 @@ fn main() {
     print(even.v, " ", odd.v);
     last .= find(spare, 3);
     print(last.v);
-    var word: u8[>..] = "goose";
+    var word: u8[>..] = "stone";
     print(nth_or(word, 2), " ", nth_or(word, 7));
     print(bump(pool, 3).v);
 }

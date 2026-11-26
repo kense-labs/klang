@@ -32,7 +32,7 @@ fn points(n: i64) -> Pt[>..] {
 }
 fn words() -> u8[][>..] {
     var a: u8[][>..] = [];
-    a.push("goose");
+    a.push("stone");
     a.push("gander");
     return a;
 }

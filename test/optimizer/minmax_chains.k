@@ -70,7 +70,7 @@ fn ordered(n: i64) -> i64 {
 fn main() {
     print(edit_distance("kitten", "sitting"), " ", edit_distance("flaw", "lawn"), " ",
           edit_distance("", "abc"), " ", edit_distance("intention", "execution"));
-    print(lcs("ABCBDAB", "BDCABA"), " ", lcs("goose", "moose"), " ", lcs("", "x"));
+    print(lcs("ABCBDAB", "BDCABA"), " ", lcs("stone", "atone"), " ", lcs("", "x"));
     let xs: i32[6] = [4, -9, 12, 1, -30, 7];
     print(running(xs));
     print(ordered(5), " ", trail);

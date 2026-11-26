@@ -77,7 +77,7 @@ static size_t TerminalColumns() {
 
 static void Decide(ProgressState &s) {
     if (s.mode >= 0) return;
-    auto env = getenv("KLANG_PROGRESS");
+    auto env = getenv("K_PROGRESS");
     string want = env ? env : "";
     s.mode = want == "plain" ? 0 : want == "live" ? 1 : StderrIsTerminal();
 }

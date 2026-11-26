@@ -87,7 +87,7 @@ runs.
 python bench/kostya/compare.py build                 # all three languages
 python bench/kostya/compare.py test                  # test.js checksums
 python bench/kostya/compare.py run --reps 3          # run.js timings and a ratio table
-python bench/kostya/compare.py run --langs klang --only Sort,Json --reps 1
+python bench/kostya/compare.py run --langs k --only Sort,Json --reps 1
 ```
 
 Runs are pinned to CPUs 16-31 (`--cpus`). On the Ryzen 9950X3D these results

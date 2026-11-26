@@ -2376,7 +2376,7 @@ inline bool CodeLenses(Workspace &ws, const Json &params, JsonOut &j) {
 
 // --- formatting --------------------------------------------------------------
 
-// `textDocument/formatting`: the open document's text as `klang format`
+// `textDocument/formatting`: the open document's text as `k format`
 // writes it, as the changes to its lines (LineChanges), none where it is
 // formatted. The editor's text is formatted, not the analysis's, so no
 // analysis is waited for. 0 for null: a document not open, or one that does

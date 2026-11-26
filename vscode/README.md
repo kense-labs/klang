@@ -1,9 +1,9 @@
 # K for Visual Studio Code
 
 An extension for the [K language](https://github.com/kense-labs/klang). With
-a compiler that has `klang lsp`, the compiler itself is the language server:
+a compiler that has `k lsp`, the compiler itself is the language server:
 the extension starts it, and the server analyzes your programs as you type.
-With an older compiler, the extension checks saved files with `klang check`
+With an older compiler, the extension checks saved files with `k check`
 instead.
 Other editors can use the same server: [K in other editors](../docs/editors.md)
 has the configuration for Neovim, Helix and Emacs.
@@ -41,7 +41,7 @@ has the configuration for Neovim, Helix and Emacs.
   snippets (`main`, `fn`, `struct`, `enum`, `for`, `guard`, `match`, and more).
 - Without the language server: compiler checks on open/save, error and
   warning underlines, and Problems entries. Use **F8 / Shift+F8** to jump
-  between problems. A compiler with `klang check --diagnostics json` reports
+  between problems. A compiler with `k check --diagnostics json` reports
   the source range of each error and warning, which is what gets underlined,
   and instantiation chains appear as related locations in Problems at the
   calls that made them. With an older compiler the extension reads the text
@@ -56,7 +56,7 @@ has the configuration for Neovim, Helix and Emacs.
   item counts the errors it reports. **Run** next to it runs the file with
   the JIT.
 - **K: Check Program**, **K: Run with JIT**, **K: Build
-  Executable** (`klang build`: an executable beside the source, linked with
+  Executable** (`k build`: an executable beside the source, linked with
   the packages the program uses), **K: Generate C**, and
   **K: Show Compiler Output** in the Command Palette. The editor's play
   button and **Run** status-bar button run the program in a task terminal,
@@ -74,7 +74,7 @@ has the configuration for Neovim, Helix and Emacs.
 
 The language server also completes names in scope and members after a `.`,
 finds references and calls, renames, shows inlay hints, folds, and formats:
-**Format Document** (Shift+Alt+F) lays the file out as `klang format` does,
+**Format Document** (Shift+Alt+F) lays the file out as `k format` does,
 and `"editor.formatOnSave": true` does it on every save. It does not provide
 debugging (`docs/design/language_server.md` has the plan). A
 function body that no instantiation reaches has no types: hover says so, and
@@ -114,15 +114,14 @@ Open this `vscode/` directory in VS Code and press **F5** to launch an Extension
 Development Host with the parent K repository open; the launch runs the
 bundler first (`npm run bundle`, after an `npm install`).
 Packaging is local; the package is not published to the Marketplace.
-The extension is under the repository's [Apache License 2.0](../LICENSE); the
-build copies that file into this directory, where `vsce` looks for it, so it
-ships inside the package.
+The extension is distributed under the Apache License 2.0. The build copies
+the license into this directory for `vsce` to package. [Apache License 2.0](../LICENSE-APACHE)
 
 ## Compiler setup
 
 Build K separately. By default the extension looks in the workspace folder
-for `klang`, `build/Release/klang`, `build/Debug/klang`, and `build/klang` (with
-`.exe` on Windows), then uses `klang` on PATH. For another location, set
+for `k`, `build/Release/k`, `build/Debug/k`, and `build/k` (with
+`.exe` on Windows), then uses `k` on PATH. For another location, set
 `klang.compilerPath` to the executable, without shell quotes or arguments.
 
 Checking accepts a file with no `fn main()`, so editing an imported file does
@@ -131,7 +130,7 @@ entry file so that checks and runs use the whole program:
 
 ```json
 {
-  "klang.compilerPath": "${workspaceFolder}/build/Release/klang.exe",
+  "klang.compilerPath": "${workspaceFolder}/build/Release/k.exe",
   "klang.entryFile": "samples/01_tour.k",
   "klang.checkOnSave": true,
   "klang.checkTimeout": 15000,
@@ -142,23 +141,23 @@ entry file so that checks and runs use the whole program:
 Paths are relative to the containing workspace folder, or the source directory
 when no folder is open. Settings can be configured per folder in a multi-root
 workspace. `klang.stdlibPath` supplies `--stdlib`; leave it empty to use K's
-usual lookup, including `KLANG_STDLIB` and directories near the executable.
+usual lookup, including `K_STDLIB` and directories near the executable.
 
 The language server is started once per window. It uses the compiler and
 standard library of the first workspace folder (or of the open file, if
 there is no folder), and analyzes every folder's `klang.entryFile` as a
 program. A K file that no entry file imports is analyzed on its own, as
-`klang check` would analyze it. The extension asks the compiler whether it
-provides a language server (`klang lsp --probe`) at activation and whenever
+`k check` would analyze it. The extension asks the compiler whether it
+provides a language server (`k lsp --probe`) at activation and whenever
 the K settings, the folders or the workspace's trust change, and
 otherwise falls back to the checks described below. The server's output is
 in the K output channel. The server does not fetch packages: an
 unfetched package is an error at its import, which **K: Check Program**
-(with the language server, this runs `klang check` in a terminal) or
-`klang fetch` resolves.
+(with the language server, this runs `k check` in a terminal) or
+`k fetch` resolves.
 
-Without the language server, checks use `klang check --diagnostics json` and never run the program or
-generate C. A compiler that rejects the flag is checked with plain `klang check`
+Without the language server, checks use `k check --diagnostics json` and never run the program or
+generate C. A compiler that rejects the flag is checked with plain `k check`
 from then on, until it is rebuilt, and its text output is parsed instead; the
 K output channel shows the compiler's text either way. Checks run on
 saved files, wait while any open K file in the same folder has unsaved
@@ -254,7 +253,7 @@ tests cover probing and setup, then use the real protocol to check diagnostics
 after text changes and a hover response.
 
 Compiler integration tests run when a K build exists in the parent
-repository. Set `KLANG_TEST_COMPILER` to test another executable. A missing
+repository. Set `K_TEST_COMPILER` to test another executable. A missing
 compiler is reported as a skip. So are JSON tests with a compiler that lacks the
 flag, and server tests with one that lacks the verb.
 

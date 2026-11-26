@@ -14,6 +14,6 @@ recursive fn first(s: const u8[:], n: i64) -> Fragment {
 }
 
 fn main() {
-    var word: u8[>..] = "goose";
+    var word: u8[>..] = "stone";
     print(first(word, 2).text);
 }

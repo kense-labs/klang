@@ -1,17 +1,17 @@
 # K in other editors
 
-The compiler is its own language server: `klang lsp` speaks the Language
+The compiler is its own language server: `k lsp` speaks the Language
 Server Protocol on stdin and stdout, so any editor with an LSP client can
 use it. VS Code has an [extension](../vscode/README.md) that starts it for
 you. For Neovim, Helix and Emacs, the configuration below is all that is
 needed.
 
-Every snippet starts `klang lsp` assuming the compiler is on PATH; if it
-is not, replace `klang` with the executable's full path. The server finds
-the standard library the way `klang check` does (`KLANG_STDLIB`, or the
+Every snippet starts `k lsp` assuming the compiler is on PATH; if it
+is not, replace `k` with the executable's full path. The server finds
+the standard library the way `k check` does (`K_STDLIB`, or the
 `stdlib/` directory near the executable). For a compiler that is not in
 its source checkout, add `--stdlib` and the directory to the command:
-`klang lsp --stdlib /path/to/klang/stdlib`.
+`k lsp --stdlib /path/to/klang/stdlib`.
 
 Each open file is analyzed as a program of its own, with the files it
 imports. To have a module checked as part of the program that imports it
@@ -32,7 +32,7 @@ Neovim 0.11 or later, in `init.lua`:
 ```lua
 vim.filetype.add({ extension = { k = 'klang' } })
 vim.lsp.config('klang', {
-  cmd = { 'klang', 'lsp' },
+  cmd = { 'k', 'lsp' },
   filetypes = { 'klang' },
   root_markers = { '.git' },
   -- init_options = { entryFiles = { '/path/to/project/main.k' } },
@@ -47,7 +47,7 @@ vim.filetype.add({ extension = { k = 'klang' } })
 vim.api.nvim_create_autocmd('FileType', {
   pattern = 'klang',
   callback = function(ev)
-    vim.lsp.start({ name = 'klang', cmd = { 'klang', 'lsp' }, root_dir = vim.fs.root(ev.buf, { '.git' }) })
+    vim.lsp.start({ name = 'klang', cmd = { 'k', 'lsp' }, root_dir = vim.fs.root(ev.buf, { '.git' }) })
   end,
 })
 ```
@@ -78,7 +78,7 @@ the project):
 
 ```toml
 [language-server.klang]
-command = "klang"
+command = "k"
 args = ["lsp"]
 # config = { entryFiles = ["/path/to/project/main.k"] }
 
@@ -142,12 +142,12 @@ With Eglot (built in since Emacs 29), in `init.el`:
   (setq-local comment-start "// "))
 (add-to-list 'auto-mode-alist '("\\.k\\'" . klang-mode))
 (with-eval-after-load 'eglot
-  (add-to-list 'eglot-server-programs '(klang-mode "klang" "lsp")))
+  (add-to-list 'eglot-server-programs '(klang-mode "k" "lsp")))
 (add-hook 'klang-mode-hook #'eglot-ensure)
 ```
 
 For entry files, the server program takes the options after the command:
-`'(klang-mode "klang" "lsp" :initializationOptions (:entryFiles ["/path/to/project/main.k"]))`.
+`'(klang-mode "k" "lsp" :initializationOptions (:entryFiles ["/path/to/project/main.k"]))`.
 
 Eglot shows diagnostics through Flymake, hover and signature help in
 ElDoc, go to definition (`M-.`), references (`M-?`), rename
@@ -158,13 +158,13 @@ the newest Eglot, from GNU ELPA, highlights with semantic tokens too
 
 ## Formatting
 
-`klang format` rewrites files in the standard layout: indentation, the
+`k format` rewrites files in the standard layout: indentation, the
 spaces between tokens, blank lines and trailing commas, with the line
 breaks left where they are. As with gofmt, the types and `=`s of a run of
 declarations (consecutive `const`s, a struct's fields) line up in columns. It takes files and directories (a directory
 stands for the `.k` files under it), and with none, or `-`, formats
 standard input to standard output. A file that does not parse is left as
-it is and its errors printed, with exit status 2; `klang format --check`
+it is and its errors printed, with exit status 2; `k format --check`
 writes nothing and lists the files that are not formatted, with exit
 status 1, for a CI step or a commit hook.
 
@@ -193,17 +193,17 @@ In Emacs, `eglot-format-buffer` formats; to format on save:
           (lambda () (add-hook 'before-save-hook #'eglot-format-buffer nil t)))
 ```
 
-Without the language server, an editor can run `klang format -` on the
+Without the language server, an editor can run `k format -` on the
 buffer instead: with [conform.nvim](https://github.com/stevearc/conform.nvim)
 in Neovim, say,
 
 ```lua
 require('conform').setup({
-  formatters = { klang = { command = 'klang', args = { 'format', '-' }, stdin = true } },
+  formatters = { klang = { command = 'k', args = { 'format', '-' }, stdin = true } },
   formatters_by_ft = { klang = { 'klang' } },
   format_on_save = { timeout_ms = 2000 },
 })
 ```
 
-or `formatter = { command = "klang", args = ["format", "-"] }` in Helix's
+or `formatter = { command = "k", args = ["format", "-"] }` in Helix's
 `[[language]]` entry.

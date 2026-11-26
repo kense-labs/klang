@@ -10,29 +10,29 @@
 //   internal calls pass private copies by pointer and return via out-pointers.
 // * Variable values ("bytes" values) are self-describing byte images on a
 //   data stack, held as a uint8_t* to the value start. A resizable value is
-//   a header in the owning frame (gs_rhdr: element base + count, C.2) -- or a
+//   a header in the owning frame (k_rhdr: element base + count, C.2) -- or a
 //   frame object, the C struct of a resizable-tailed struct's fixed fields
 //   with the tail's header last -- plus the elements on a data stack: growth
 //   bumps the stack top and the header's count; the base pointer never moves.
-// * References to resizable-class values are fat (gs_rref: header + stack);
+// * References to resizable-class values are fat (k_rref: header + stack);
 //   references with reusable-pool provenance additionally carry the hidden
-//   freelist (gs_pref). Which form a parameter uses comes from the
+//   freelist (k_pref). Which form a parameter uses comes from the
 //   specialization's RootArg info, not the type.
 // * Stack assignment (§10.3) is fully dynamic: every stack-using function
-//   takes a hidden `int64_t gs_sp` argument, its nonfixed locals/temps use
-//   gs_stks[gs_sp + k] with per-function constant k, and callees get
-//   gs_sp + <locals in use>. §10.3 explicitly permits this strategy. Globals
+//   takes a hidden `int64_t k_sp` argument, its nonfixed locals/temps use
+//   k_stks[k_sp + k] with per-function constant k, and callees get
+//   k_sp + <locals in use>. §10.3 explicitly permits this strategy. Globals
 //   own dedicated stacks outside the sp-indexed block, so thread programs
 //   (which get a fresh block) share all generated functions.
 // * Nonfixed return values are constructed directly at a destination stack
-//   passed as a hidden gs_stack* argument (guaranteed in-place, §4.3/§7.3);
+//   passed as a hidden k_stack* argument (guaranteed in-place, §4.3/§7.3);
 //   the C function returns nothing for them. `v.append(f())` calls f at v's
 //   top and then slides the result's 8-byte length header out (see EmitCall).
 // * `return ... from` (§7.9) signals through one thread-local discriminant,
-//   gs_rf, plus per-target thread-local channels for the in-flight fixed
+//   k_rf, plus per-target thread-local channels for the in-flight fixed
 //   values (nonfixed ones are built on the target's destination stack,
 //   recorded thread-locally at target entry, and moved to where that
-//   destination started if the unwound calls had built there first). gs_rf
+//   destination started if the unwound calls had built there first). k_rf
 //   is zero except between a `return ... from` and the catch in its target
 //   frame, so only those two points write it: every other exit of a
 //   propagating function leaves it alone, and a call on a propagation path
@@ -58,7 +58,7 @@ namespace klang {
 // where the receiver knows it; `lenlv` is set for stack destinations of
 // resizable class: elements go to the stack, and the construction assigns
 // the element count (or the whole frame object) to it. A `pool` lvalue is a
-// gs_pref, which a construct's value choosing among pools reaches as each
+// k_pref, which a construct's value choosing among pools reaches as each
 // branch's pool reference (GenPrefVal).
 // DK_BRANCH is where an inlined bool call in a condition delivers its value
 // (CodeGen::GenBranch): a branch to label s where the value is `when`,
@@ -103,10 +103,10 @@ struct CodeGen {
     string tdecls;      // Packed typedefs.
     string pdata;       // Packed static data (string literals).
     string data;        // Queues, long-distance return channels, globals.
-    // The members of gs_globals_t, the program instance's globals (§11.1):
+    // The members of k_globals_t, the program instance's globals (§11.1):
     // every global that is not read-only static data, with the dedicated
-    // stacks of the resizable ones. Accessed through GS_GL, main's static
-    // instance directly or a worker's through the thread-local gs_gl.
+    // stacks of the resizable ones. Accessed through K_GL, main's static
+    // instance directly or a worker's through the thread-local k_gl.
     string gblock;
     // The globals a thread program uses, in declaration order: what a spawn
     // copies into the worker's instance (EmitThreadSpawn, EnsureThreadThunk).
@@ -124,7 +124,7 @@ struct CodeGen {
     string DlSlot(FnSpec *sp) {
         auto it = std::find(usedexterns.begin(), usedexterns.end(), sp);
         assert(it != usedexterns.end() && !sp->sf->dylib.empty());
-        return cat("gs_dl", it - usedexterns.begin(), "_", sp->sf->cname);
+        return cat("k_dl", it - usedexterns.begin(), "_", sp->sf->cname);
     }
     // The function a call goes through to reach the pointer (ExternProto).
     string DlCall(FnSpec *sp) { return cat(DlSlot(sp), "_call"); }
@@ -172,7 +172,7 @@ struct CodeGen {
         for (auto &f : firsts) libs.push_back(f.second);
         return libs;
     }
-    // What gs_program_init's bind call counted, which the tables that
+    // What k_program_init's bind call counted, which the tables that
     // Finish writes must agree with: every function is emitted by then.
     size_t dlbinds = 0;
     string code;        // Function bodies, size/eq helpers, thunks, main.
@@ -231,7 +231,7 @@ struct CodeGen {
     // file in the generated code; call sites pass it plus the line number.
     // A check in a standard library function fails where the program called
     // the library: such a function takes that call's location, a static
-    // gs_loc, as its last parameter, gs_at, reports its own lines there, and
+    // k_loc, as its last parameter, k_at, reports its own lines there, and
     // passes it on to the library functions it calls (SpecInfo::located).
     // Library code inlined into the program's is anchored at the call
     // already (Inliner::AtCallSite).
@@ -244,31 +244,31 @@ struct CodeGen {
             auto f = l.fileidx >= 0 && l.fileidx < (int)ast.sources.size()
                          ? ast.sources[l.fileidx].first : string("?");
             for (auto &c : f) if (c == '\\') c = '/';
-            auto name = Unique(cat("gs_file", filerefs.size()));
+            auto name = Unique(cat("k_file", filerefs.size()));
             Append(data, "static const char ", name, "[] = ", CStr(f), ";\n");
             it = filerefs.emplace(l.fileidx, name).first;
         }
         return it->second;
     }
     bool AtCaller(Line l) { return curinfo && curinfo->located && ast.StdlibFile(l.fileidx); }
-    string LocFile(Line l) { return AtCaller(l) ? string("gs_at->file") : FileRef(l); }
-    string LocLine(Line l) { return AtCaller(l) ? string("gs_at->line") : cat(l.line); }
+    string LocFile(Line l) { return AtCaller(l) ? string("k_at->file") : FileRef(l); }
+    string LocLine(Line l) { return AtCaller(l) ? string("k_at->line") : cat(l.line); }
     string LocArgs(Line l) { return cat(LocFile(l), ", ", LocLine(l)); }
     // What a call at l hands a callee that takes its caller's location.
     string CallerLoc(Line l) {
-        if (AtCaller(l)) return "gs_at";
+        if (AtCaller(l)) return "k_at";
         auto key = make_pair(l.fileidx, l.line);
         auto it = locrefs.find(key);
         if (it == locrefs.end()) {
             auto file = FileRef(l);
-            auto name = Unique(cat("gs_loc", locrefs.size()));
-            Append(data, "static const gs_loc ", name, " = { ", file, ", ", l.line, " };\n");
+            auto name = Unique(cat("k_loc", locrefs.size()));
+            Append(data, "static const k_loc ", name, " = { ", file, ", ", l.line, " };\n");
             it = locrefs.emplace(key, name).first;
         }
         return cat("&", it->second);
     }
 
-    // The trailing arguments of a gs_add/sub/mul/neg helper call: a signed
+    // The trailing arguments of a k_add/sub/mul/neg helper call: a signed
     // type's operation takes its location, for the debug build's overflow
     // message (§6.2); unsigned arithmetic wraps and takes none.
     string OvfLocArgs(IntStorage s, Line l) {
@@ -345,14 +345,14 @@ struct CodeGen {
         return t->kind == TY_ARRAY && t->arr->akind == A_LIMITED && IsFix(t);
     }
     // A resizable-tailed struct with an all-fixed prefix is a frame object
-    // (C.2): a C struct of its fixed fields plus its tail's own gs_rhdr (or
+    // (C.2): a C struct of its fixed fields plus its tail's own k_rhdr (or
     // nested frame object), held in the owning frame like a fixed value;
-    // only the innermost tail's elements occupy a data stack. A gs_rref to
+    // only the innermost tail's elements occupy a data stack. A k_rref to
     // one carries the object's address in `hdr`.
     bool IsFrameObj(TypeExpr *t) { return t->kind == TY_STRUCT && SI(t)->frameobj; }
     // The C type of a resizable value's header: a frame object's own struct,
-    // a gs_rhdr for anything else.
-    string RzCT(TypeExpr *t) { return IsFrameObj(t) ? CT(t) : "gs_rhdr"; }
+    // a k_rhdr for anything else.
+    string RzCT(TypeExpr *t) { return IsFrameObj(t) ? CT(t) : "k_rhdr"; }
     string FoTailHdr(TypeExpr *t, const string &obj);
     TypeExpr *FoTailArr(TypeExpr *t);
     string FoPrefixSize(TypeExpr *t);
@@ -442,7 +442,7 @@ struct CodeGen {
 
     // ------------------------------------------------------------------
     // Runtime size of a bytes-class value: a generated per-type walker,
-    // gs_size_<mangle>(p). Static-size subruns collapse into constants.
+    // k_size_<mangle>(p). Static-size subruns collapse into constants.
 
     set<string> sizefns, eqfns;
 
@@ -455,7 +455,7 @@ struct CodeGen {
     // ------------------------------------------------------------------
     // The verifier from_bytes runs over an untrusted image
     // (docs/design/serialization.md §5): a generated per-element-type
-    // gs_verify_<mangle>(p, n, bm), the same walker shape as the size and
+    // k_verify_<mangle>(p, n, bm), the same walker shape as the size and
     // equality functions, returning the element count or -1.
 
     set<string> verifyfns;
@@ -484,7 +484,7 @@ struct CodeGen {
     void EmitDefaultInto(const string &lv, TypeExpr *t);
 
     // ------------------------------------------------------------------
-    // Structural equality (§4.5): gs_eq_<mangle>. Fixed values pass by value,
+    // Structural equality (§4.5): k_eq_<mangle>. Fixed values pass by value,
     // bytes values as pointers. Gap-free fixed types without floats of more
     // than a few scalars shortcut to memcmp.
 
@@ -499,14 +499,14 @@ struct CodeGen {
 
     // ------------------------------------------------------------------
     // Per-specialization call interface. Signature shape (C.3 order):
-    //   [declared params (resizable by-value ones add a gs_stack*)]
+    //   [declared params (resizable by-value ones add a k_stack*)]
     //   [free-variable references, §7.5]
     //   [out-pointers for fixed returns after the first]
     //   [destination stacks for nonfixed returns]
-    //   [int64_t gs_sp]
-    //   [const gs_loc *gs_at, for a standard library function].
+    //   [int64_t k_sp]
+    //   [const k_loc *k_at, for a standard library function].
     // The C return value is the first fixed return, else void; a `return ...
-    // from` discriminant travels in the thread-local gs_rf, not the signature.
+    // from` discriminant travels in the thread-local k_rf, not the signature.
 
     struct SpecInfo {
         string cname;
@@ -524,7 +524,7 @@ struct CodeGen {
     // Data stack accounting (codegen_stacks.h). What each emitted function
     // asks for: the calls it hands a stack index, with that index relative
     // to its own (SpTop), and the most stacks its own body opens. The
-    // nullptr function is what runs with gs_sp fixed at 0: gs_init_globals
+    // nullptr function is what runs with k_sp fixed at 0: k_init_globals
     // and the render functions.
     struct StackCall {
         FnSpec *callee;
@@ -538,11 +538,11 @@ struct CodeGen {
     // cycle is made with a stack in use (§7.8).
     unordered_map<FnSpec *, int64_t> stackneed;
     // Regions outside the indexed block: the globals' dedicated stacks
-    // gs_init_globals reserves for the main program, and what each worker's
+    // k_init_globals reserves for the main program, and what each worker's
     // thunk reserves for its arguments and its copy of the globals.
     int globalregions = 0;
     unordered_map<FnSpec *, int> thunkregions;
-    // GS_MAX_STACKS as the program is configured (main.cpp): the most data
+    // K_MAX_STACKS as the program is configured (main.cpp): the most data
     // stacks one thread program may use at once, zero for no limit.
     int64_t maxstacks = 0;
     void NoteStackCall(FnSpec *callee, Line ln) {
@@ -561,7 +561,7 @@ struct CodeGen {
     void StackReport(FILE *out, const StackConfig &cfg);
 
     // Long-distance return targets (§7.9): id, per-ret TLS channels. The C
-    // spells an id only as what gs_rf is compared with or set to and in its
+    // spells an id only as what k_rf is compared with or set to and in its
     // channels' names, which is where MergeSpecs reads it.
     unordered_map<FnSpec *, int> fromids;
     set<FnSpec *> fromemitted;
@@ -570,7 +570,7 @@ struct CodeGen {
     // The bytes of one unit of a pool's freelist, which its count counts: a
     // slot index, or a node of a slice pool's tree of spans (runtime.h).
     static const char *FlEntrySize(const VarDef *d) {
-        return d->reusable == RU_SLICES ? "GS_SPAN_NODE" : "8";
+        return d->reusable == RU_SLICES ? "K_SPAN_NODE" : "8";
     }
 
     // Which globals with dedicated data stacks a specialization may touch, its
@@ -606,7 +606,7 @@ struct CodeGen {
     int ind = 1;
     int tmpn = 0;
     int stknext = 0, stkmax = 0;
-    string spexpr;                       // "gs_sp" inside functions, "0" at global init.
+    string spexpr;                       // "k_sp" inside functions, "0" at global init.
     set<string> fnused;                  // Local C identifiers.
     unordered_map<string, int> fnnextsuffix;
     unordered_map<const VarDef *, string> vnames;
@@ -629,7 +629,7 @@ struct CodeGen {
         string pref, hdr;         // Reserved prefix address, header name (BindLocal).
     };
     unordered_map<const VarDef *, NrvoDest> nrvo;
-    vector<string> fdstsaves;            // Epilogue restores for gs_fdst_* saves.
+    vector<string> fdstsaves;            // Epilogue restores for k_fdst_* saves.
 
     // Constructions under way per stack, while their parts are emitted
     // (GenConstruct, an inlined body's named result bound there): what they
@@ -641,7 +641,7 @@ struct CodeGen {
         OpenAt(CodeGen &cg, const string &stk) : cg(cg), stk(stk) { cg.openat[stk]++; }
         ~OpenAt() { cg.openat[stk]--; }
     };
-    vector<string> dsttop0;              // gs_dst<i>'s top on entry, once needed.
+    vector<string> dsttop0;              // k_dst<i>'s top on entry, once needed.
 
     enum { SC_PLAIN, SC_FN, SC_LOOP, SC_BLOCK, SC_IB, SC_STMT };
     struct CScope {
@@ -687,7 +687,7 @@ struct CodeGen {
     string T() { return cat("t", tmpn++); }
     string Lbl() { return cat("L", tmpn++); }
 
-    string SpIdx(int k) { return cat("GS(", spexpr, " + ", k, ")"); }
+    string SpIdx(int k) { return cat("K_STACK(", spexpr, " + ", k, ")"); }
     string SpTop() { return cat(spexpr, " + ", stknext); }   // First free index.
     // A call into the recursive cycle the function being emitted is in
     // (§7.8) is made with none of its stacks in use: the checker rejects
@@ -714,7 +714,7 @@ struct CodeGen {
 
     // ------------------------------------------------------------------
     // Data-stack top caching. A bump pointer read and written through
-    // gs_stks[i].top is memory the C backend must reload after every byte
+    // k_stks[i].top is memory the C backend must reload after every byte
     // store, because a `uint8_t *` store may alias it; a run of pushes then
     // costs a load, an add and a store each instead of register arithmetic.
     // So a stack the function owns keeps its top in a local, and memory is
@@ -732,7 +732,7 @@ struct CodeGen {
     //
     // Soundness rests on one spelling per cached stack. Own stacks qualify:
     // a callee's indices start above the caller's in-use watermark (§10.3), so
-    // `GS(gs_sp + k)` names a stack no caller expression can also name, and
+    // `K_STACK(k_sp + k)` names a stack no caller expression can also name, and
     // global stacks live outside the indexed block entirely. A reference to a
     // resizable carries its stack inside the reference value (`p.stk`), which
     // is a second spelling for a stack the body may also name directly, so
@@ -782,10 +782,10 @@ struct CodeGen {
     void NoteLen(const string &stk, const string &lenlv, const string &component = {});
     static bool LenRoot(const string &lenlv, string &root);
     bool cachetops = false;             // Any class below is cached.
-    bool topown = false;                // Own indexed stacks, `GS(gs_sp + k)`.
+    bool topown = false;                // Own indexed stacks, `K_STACK(k_sp + k)`.
     bool topglob = false;               // Globals' dedicated stacks.
     bool topcap = false;                // Captured resizables' stacks.
-    bool topdst = false;                // Return destinations, `gs_dst<i>`.
+    bool topdst = false;                // Return destinations, `k_dst<i>`.
     bool reftops = false;               // Reference parameters' stacks.
     set<string> refstkexprs;            // Their `<param>.stk` / `.flstk` spellings.
     set<string> capstkexprs;            // The captured resizables' `<fv>_stk` spellings.
@@ -874,13 +874,13 @@ struct CodeGen {
 
     // For resizable-class locations, `s` is the data pointer (elements for
     // arrays, struct start for resizable-tailed structs) and `lenlv` the
-    // int64 length lvalue of the owning header; `fl` is a gs_rhdr lvalue for
+    // int64 length lvalue of the owning header; `fl` is a k_rhdr lvalue for
     // a reusable pool's freelist.
     struct Loc {
         string s;
         TypeExpr *t = nullptr;
         bool val = false;
-        bool ispref = false;   // s is a gs_pref-typed lvalue (pool reference).
+        bool ispref = false;   // s is a k_pref-typed lvalue (pool reference).
         // A reference on the way here can be rebound -- one held in a `var`
         // variable, a field or an element (for a reference location, the
         // reference itself) -- so evaluating s later may reach other storage.
@@ -958,9 +958,9 @@ struct CodeGen {
         bool typedelems = false;   // elems is CT* (else uint8_t*).
     };
 
-    // The C copy for a run of elements: gs_memcpy takes a slice's null
+    // The C copy for a run of elements: k_memcpy takes a slice's null
     // pointer for zero bytes, which memcpy may not be handed.
-    static const char *CopyFn() { return "gs_memcpy"; }
+    static const char *CopyFn() { return "k_memcpy"; }
 
     ArrView ArrayView(const Loc &lv);
     ArrView RawArrayView(const Loc &lv);
@@ -973,7 +973,7 @@ struct CodeGen {
     // A limited array's capacity: static for the C-typed form, read from
     // the header of the runtime-capacity byte form.
     string LimitedCap(const Loc &lv) {
-        return lv.val ? cat(ArrSize(lv.t->arr)) : cat("(int64_t)*(gs_u32 *)(", lv.s, ")");
+        return lv.val ? cat(ArrSize(lv.t->arr)) : cat("(int64_t)*(k_u32 *)(", lv.s, ")");
     }
 
     // ------------------------------------------------------------------
@@ -1183,7 +1183,7 @@ struct CodeGen {
     // Byte span of the largest fixed value that can be a relative
     // reference's root array (§3.9). Roots are variables, so this is the
     // widest offset a store into a root that is *not* on a data stack can
-    // produce; stack roots are bounded by GS_STACK_RESERVE instead. Both
+    // produce; stack roots are bounded by K_STACK_RESERVE instead. Both
     // bounds decide whether EmitRelStoreAt emits its range check.
     int64_t relrootmax = 0;
 
@@ -1274,8 +1274,8 @@ struct CodeGen {
     static bool CallsRecursive(Node *n);
 
     // Divisors fixed for a loop being emitted, by DivisionKey: the C locals
-    // holding the divisor's value as a u64, its gs_divu_gen magic and its
-    // shift, or as a u32 and gs_divu32_gen's where `narrow` (HoistDivisors).
+    // holding the divisor's value as a u64, its k_divu_gen magic and its
+    // shift, or as a u32 and k_divu32_gen's where `narrow` (HoistDivisors).
     // `zeronone`: only a zero divisor leaves it without a magic.
     struct DivMagic { string val, magic, more; bool narrow, zeronone; };
     unordered_map<string, DivMagic> divmagic;
@@ -1454,7 +1454,7 @@ struct CodeGen {
 
     // ------------------------------------------------------------------
     // Text forms (§3.7): print, str and format share them. A scalar's text
-    // comes from a gs_fmt_* runtime helper writing at most GS_FMT_MAX bytes;
+    // comes from a k_fmt_* runtime helper writing at most K_FMT_MAX bytes;
     // a u8 array or slice contributes its bytes as they are, and any other
     // value renders structurally into a u8[>..] builder, or through a user
     // `format` overload recorded on the call for its type.
@@ -1523,7 +1523,7 @@ struct CodeGen {
     vector<string> EmitSlicePool(Call *c, vector<Node *> &an, Line ln);
     string SpanArgs(const Loc &lv);
     string PlaceRun(const Loc &lv, const string &n);
-    string SliceLen(Node *n, TypeExpr *elem, Line ln, const char *error = "GS_E_SLICELEN",
+    string SliceLen(Node *n, TypeExpr *elem, Line ln, const char *error = "K_E_SLICELEN",
                     Node *msg = nullptr);
     string FailCall(const char *error, Node *msg, Line ln);
     void EmitSliceExtend(const Loc &lv, const string &end, int64_t esz);
@@ -1547,7 +1547,7 @@ struct CodeGen {
     void DetectNrvo(FnSpec *sp);
     // What a specialization's C declaration says besides its signature.
     static const char *FnAttrs(FnSpec *sp) {
-        return sp->outofline ? "GS_NOINLINE " : sp->cinline ? "GS_INLINE " : "";
+        return sp->outofline ? "K_NOINLINE " : sp->cinline ? "K_INLINE " : "";
     }
     const VarDef *NamedResult(Block *fnbody, SFunction *target, size_t nrets, size_t resultidx);
     const VarDef *OpenIbNrvo(InlineBlock *ib, const Dst &d);
@@ -1557,7 +1557,7 @@ struct CodeGen {
     string EnsureEr(FnSpec *sp);
     void EmitSpec(FnSpec *sp, bool er = false);
     // The instruction-set levels above the baseline a simd function has a
-    // version for; runtime.h names them (GS_SIMD_TARGET1, ...).
+    // version for; runtime.h names them (K_SIMD_TARGET1, ...).
     static constexpr int SIMD_LEVELS = 2;
     void EmitSimdVersions(FnSpec *sp, const string &name, const string &params,
                           const string &fnbody, vector<string> &names);
@@ -1566,12 +1566,12 @@ struct CodeGen {
     // Globals (§11.1): C globals plus dedicated data stacks for nonfixed
     // ones; initializers run in declaration order before main.
 
-    // Globals whose declaration carries a C initializer, so gs_init_globals
+    // Globals whose declaration carries a C initializer, so k_init_globals
     // has nothing left to do for them (§11.1), with the initializer, which
     // a later global's initializer naming one is spelled out from.
     map<const VarDef *, Node *> gstatic;
     // Constant globals of flat fixed type whose initializer has no static
-    // spelling: a C static of its own that gs_init_globals fills once, read
+    // spelling: a C static of its own that k_init_globals fills once, read
     // in place by every instance (§11.2) rather than copied to a worker.
     set<const VarDef *> gshared;
 
@@ -1638,7 +1638,7 @@ struct CodeGen {
         FindSplitRootParams();
         // Zero means "no long-distance return in flight", which is also the
         // state every propagating function's ordinary exit leaves behind.
-        if (!fromids.empty()) data += "static GS_TLS int32_t gs_rf;\n";
+        if (!fromids.empty()) data += "static K_TLS int32_t k_rf;\n";
         EmitGlobalDecls();
         // Prototypes for every live specialization, then their bodies.
         for (auto sp : livespecs) {
@@ -1656,13 +1656,13 @@ struct CodeGen {
         EmitExports();
         if (!library) EmitMain();
         MergeSpecs();
-        if (usesthreads) predefs = "#define GS_NEED_THREADS 1\n";
+        if (usesthreads) predefs = "#define K_NEED_THREADS 1\n";
         // The instance block: with workers each thread reaches its own
-        // through gs_gl; without them there is only main's.
-        Append(data, "typedef struct {\n", gblock.empty() ? "    uint8_t gs_none;\n" : gblock,
-               "} gs_globals_t;\nstatic gs_globals_t gs_globals_main;\n",
-               usesthreads ? "#define GS_GL ((gs_globals_t *)gs_gl)\n"
-                           : "#define GS_GL (&gs_globals_main)\n");
+        // through k_gl; without them there is only main's.
+        Append(data, "typedef struct {\n", gblock.empty() ? "    uint8_t k_none;\n" : gblock,
+               "} k_globals_t;\nstatic k_globals_t k_globals_main;\n",
+               usesthreads ? "#define K_GL ((k_globals_t *)k_gl)\n"
+                           : "#define K_GL (&k_globals_main)\n");
         // Extern fns: the runtime's own C follows the types it is written
         // against, then user headers, then prototypes for whatever neither
         // declares.
@@ -1673,7 +1673,7 @@ struct CodeGen {
             for (auto t : sp->argtypes) {
                 CT(t);
                 // CT only forward-declares a struct behind a pointer; an
-                // adapter needs its fields too. Builders use gs_rref instead.
+                // adapter needs its fields too. Builders use k_rref instead.
                 if (t->kind == TY_REF && !IsResz(t->ref->sub)) CT(t->ref->sub);
             }
             for (auto t : sp->rets) CT(t);
@@ -1690,21 +1690,21 @@ struct CodeGen {
             externs += ExternProto(sp);
         }
         // The shared libraries the dynamic externs bind from and the
-        // pointers each symbol fills, which gs_program_init hands to
-        // gs_dl_bind (design/dynamic_externs.md §5). Only a used extern is
+        // pointers each symbol fills, which k_program_init hands to
+        // k_dl_bind (design/dynamic_externs.md §5). Only a used extern is
         // bound, so a declared library no call reaches is never opened.
         auto dllibs = DlLibs();
         if (!dllibs.empty()) {
             auto spelling = [&](const string &s) { return s.empty() ? string("0") : CStr(s); };
-            externs += "static const gs_dllib gs_dllibs[] = {\n";
+            externs += "static const k_dllib k_dllibs[] = {\n";
             for (auto &lib : dllibs)
                 Append(externs, "    { ", CStr(lib.name), ", ", spelling(lib.onwindows), ", ",
                        spelling(lib.onmacos), ", ", spelling(lib.onlinux), " },\n");
-            externs += "};\nstatic const gs_dlbind gs_dlbinds[] = {\n";
+            externs += "};\nstatic const k_dlbind k_dlbinds[] = {\n";
             size_t n = 0;
             for (auto sp : usedexterns) {
                 if (sp->sf->dylib.empty()) continue;
-                assert(++n <= dlbinds && "an extern bound after gs_program_init was emitted");
+                assert(++n <= dlbinds && "an extern bound after k_program_init was emitted");
                 auto d = DlSpelling(sp);
                 auto lib = std::find_if(dllibs.begin(), dllibs.end(),
                                         [&](auto &l) { return SameDylib(l, d); }) - dllibs.begin();

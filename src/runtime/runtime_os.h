@@ -20,40 +20,40 @@
 #endif
 
 /* Paths are UTF-8 on every platform, and reach the C APIs NUL-terminated in
-   a buffer of GS_OS_PATH_MAX characters. A path that would not fit, that
+   a buffer of K_OS_PATH_MAX characters. A path that would not fit, that
    holds a NUL byte (where C would end it) or, on Windows, that is not UTF-8
    is refused: cut short or read another way, it could name another file. */
-#define GS_OS_PATH_MAX 4096
+#define K_OS_PATH_MAX 4096
 
 #ifdef _WIN32
 /* Windows names files in UTF-16, which its wide APIs take as it is; the
    narrow ones read their bytes in the ANSI code page. */
-typedef wchar_t gs_os_char;
-#define gs_os_fopen(p, mode) _wfopen(p, L##mode)
+typedef wchar_t k_os_char;
+#define k_os_fopen(p, mode) _wfopen(p, L##mode)
 /* Vista's; TinyCC's winnls.h predates it. */
 #ifndef WC_ERR_INVALID_CHARS
 #define WC_ERR_INVALID_CHARS 0x80
 #endif
 #else
-typedef char gs_os_char;
-#define gs_os_fopen(p, mode) fopen(p, mode)
+typedef char k_os_char;
+#define k_os_fopen(p, mode) fopen(p, mode)
 #endif
 
 /* The native form of a path, or of an environment variable's name, in buf
-   (GS_OS_PATH_MAX characters): its length, or -1 where it is refused. */
-static int gs_os_native(sl_u8 s, gs_os_char *buf) {
-    if (s.len >= GS_OS_PATH_MAX || (s.len > 0 && memchr(s.data, 0, (size_t)s.len)))
+   (K_OS_PATH_MAX characters): its length, or -1 where it is refused. */
+static int k_os_native(sl_u8 s, k_os_char *buf) {
+    if (s.len >= K_OS_PATH_MAX || (s.len > 0 && memchr(s.data, 0, (size_t)s.len)))
         return -1;
     int n = (int)s.len;
 #ifdef _WIN32
     /* A UTF-16 path has no more units than its UTF-8 form has bytes. */
     if (n > 0) {
         n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, (const char *)s.data, n, buf,
-                                GS_OS_PATH_MAX - 1);
+                                K_OS_PATH_MAX - 1);
         if (n == 0) return -1;
     }
 #else
-    gs_memcpy(buf, s.data, (size_t)n);
+    k_memcpy(buf, s.data, (size_t)n);
 #endif
     buf[n] = 0;
     return n;
@@ -62,12 +62,12 @@ static int gs_os_native(sl_u8 s, gs_os_char *buf) {
 #ifdef _WIN32
 /* Appends n UTF-16 units as UTF-8; where they are not valid UTF-16, appends
    nothing and returns 0. */
-static int gs_os_append_wide(gs_rref out, const wchar_t *w, int n) {
+static int k_os_append_wide(k_rref out, const wchar_t *w, int n) {
     if (n <= 0) return 1;
     int k = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, n, NULL, 0, NULL, NULL);
     char *s = k > 0 ? (char *)malloc((size_t)k) : NULL;
     int ok = s && WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, n, s, k, NULL, NULL) == k;
-    if (ok) gs_bld_append(out, s, k);
+    if (ok) k_bld_append(out, s, k);
     free(s);
     return ok;
 }
@@ -79,7 +79,7 @@ static int gs_os_append_wide(gs_rref out, const wchar_t *w, int n) {
    delete sharing (ERROR_SHARING_VIOLATION). Those failures are tried again
    for about a second, unless `to` is a directory or read-only, which no
    wait changes. */
-static int gs_os_replace(const wchar_t *from, const wchar_t *to) {
+static int k_os_replace(const wchar_t *from, const wchar_t *to) {
     for (DWORD wait = 0;; wait = wait ? wait * 2 : 1) {
         if (MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return 1;
         DWORD e = GetLastError(), a = GetFileAttributesW(to);
@@ -92,7 +92,7 @@ static int gs_os_replace(const wchar_t *from, const wchar_t *to) {
 #else
 /* An fsync that reaches the disk: on macOS a plain one stops at the drive's
    cache. */
-static int gs_os_fsync(int fd) {
+static int k_os_fsync(int fd) {
     #ifdef F_FULLFSYNC
         if (fcntl(fd, F_FULLFSYNC) == 0) return 1;
     #endif
@@ -102,8 +102,8 @@ static int gs_os_fsync(int fd) {
 /* A rename is on the disk once the directory holding the new name is (what
    MOVEFILE_WRITE_THROUGH waits for on Windows). Best effort: the rename has
    happened either way. */
-static void gs_os_sync_dir(const char *path) {
-    char dir[GS_OS_PATH_MAX];
+static void k_os_sync_dir(const char *path) {
+    char dir[K_OS_PATH_MAX];
     const char *slash = strrchr(path, '/');
     size_t n = slash ? (size_t)(slash - path) : 0;
     if (slash && n == 0) n = 1;
@@ -112,14 +112,14 @@ static void gs_os_sync_dir(const char *path) {
     dir[n] = 0;
     int fd = open(dir, O_RDONLY);
     if (fd < 0) return;
-    gs_os_fsync(fd);
+    k_os_fsync(fd);
     close(fd);
 }
 #endif
 
 /* What a native path names: 0 nothing that can be reached, 1 something
    other than a directory, 2 a directory. */
-static int gs_os_kind(const gs_os_char *p) {
+static int k_os_kind(const k_os_char *p) {
 #ifdef _WIN32
     DWORD a = GetFileAttributesW(p);
     if (a == INVALID_FILE_ATTRIBUTES) return 0;
@@ -132,10 +132,10 @@ static int gs_os_kind(const gs_os_char *p) {
 }
 
 /* Appends the whole file; on a failure, nothing. */
-GS_API uint8_t gs_os_read_file(sl_u8 path, gs_rref out) {
-    gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
-    FILE *f = gs_os_fopen(p, "rb");
+K_API uint8_t k_os_read_file(sl_u8 path, k_rref out) {
+    k_os_char p[K_OS_PATH_MAX];
+    if (k_os_native(path, p) < 0) return 0;
+    FILE *f = k_os_fopen(p, "rb");
     if (!f) return 0;
     int64_t len = out.hdr->len;
     uint8_t *top = out.stk->top;
@@ -143,7 +143,7 @@ GS_API uint8_t gs_os_read_file(sl_u8 path, gs_rref out) {
     for (;;) {
         size_t n = fread(buf, 1, sizeof buf, f);
         if (n == 0) break;
-        gs_bld_append(out, buf, (int64_t)n);
+        k_bld_append(out, buf, (int64_t)n);
     }
     int bad = ferror(f);
     fclose(f);
@@ -156,10 +156,10 @@ GS_API uint8_t gs_os_read_file(sl_u8 path, gs_rref out) {
 }
 
 /* write_file and append_file. */
-static uint8_t gs_os_put_file(sl_u8 path, sl_u8 data, int append) {
-    gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
-    FILE *f = append ? gs_os_fopen(p, "ab") : gs_os_fopen(p, "wb");
+static uint8_t k_os_put_file(sl_u8 path, sl_u8 data, int append) {
+    k_os_char p[K_OS_PATH_MAX];
+    if (k_os_native(path, p) < 0) return 0;
+    FILE *f = append ? k_os_fopen(p, "ab") : k_os_fopen(p, "wb");
     if (!f) return 0;
     size_t n = (size_t)(data.len < 0 ? 0 : data.len);
     int ok = fwrite(data.data, 1, n, f) == n;
@@ -167,18 +167,18 @@ static uint8_t gs_os_put_file(sl_u8 path, sl_u8 data, int append) {
     return ok ? 1 : 0;
 }
 
-GS_API uint8_t gs_os_write_file(sl_u8 path, sl_u8 data) { return gs_os_put_file(path, data, 0); }
+K_API uint8_t k_os_write_file(sl_u8 path, sl_u8 data) { return k_os_put_file(path, data, 0); }
 
-GS_API uint8_t gs_os_append_file(sl_u8 path, sl_u8 data) { return gs_os_put_file(path, data, 1); }
+K_API uint8_t k_os_append_file(sl_u8 path, sl_u8 data) { return k_os_put_file(path, data, 1); }
 
-GS_API uint8_t gs_os_file_exists(sl_u8 path) {
-    gs_os_char p[GS_OS_PATH_MAX];
-    return gs_os_native(path, p) >= 0 && gs_os_kind(p) == 1;
+K_API uint8_t k_os_file_exists(sl_u8 path) {
+    k_os_char p[K_OS_PATH_MAX];
+    return k_os_native(path, p) >= 0 && k_os_kind(p) == 1;
 }
 
-GS_API uint8_t gs_os_remove_file(sl_u8 path) {
-    gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
+K_API uint8_t k_os_remove_file(sl_u8 path) {
+    k_os_char p[K_OS_PATH_MAX];
+    if (k_os_native(path, p) < 0) return 0;
 #ifdef _WIN32
     return DeleteFileW(p) != 0;
 #else
@@ -189,14 +189,14 @@ GS_API uint8_t gs_os_remove_file(sl_u8 path) {
 
 /* Replaces `to` if it exists, in one step: `to` names the old file or the
    moved one, never neither. */
-GS_API uint8_t gs_os_rename_file(sl_u8 from, sl_u8 to) {
-    gs_os_char f[GS_OS_PATH_MAX], t[GS_OS_PATH_MAX];
-    if (gs_os_native(from, f) < 0 || gs_os_native(to, t) < 0) return 0;
+K_API uint8_t k_os_rename_file(sl_u8 from, sl_u8 to) {
+    k_os_char f[K_OS_PATH_MAX], t[K_OS_PATH_MAX];
+    if (k_os_native(from, f) < 0 || k_os_native(to, t) < 0) return 0;
 #ifdef _WIN32
-    return gs_os_replace(f, t);
+    return k_os_replace(f, t);
 #else
     if (rename(f, t) != 0) return 0;
-    gs_os_sync_dir(t);
+    k_os_sync_dir(t);
     return 1;
 #endif
 }
@@ -207,14 +207,14 @@ GS_API uint8_t gs_os_rename_file(sl_u8 from, sl_u8 to) {
    Its name is path's with a random tag and ".tmp" added, created only if
    nothing has that name already: one that does belongs to someone else, and
    another tag is drawn. */
-GS_API uint8_t gs_os_write_file_atomic(sl_u8 path, sl_u8 data) {
-    gs_os_char p[GS_OS_PATH_MAX], t[GS_OS_PATH_MAX + 21];
-    int n = gs_os_native(path, p);
+K_API uint8_t k_os_write_file_atomic(sl_u8 path, sl_u8 data) {
+    k_os_char p[K_OS_PATH_MAX], t[K_OS_PATH_MAX + 21];
+    int n = k_os_native(path, p);
     if (n <= 0) return 0;
     const uint8_t *d = data.data;
     int64_t left = data.len;
     for (int tries = 0; tries < 8; tries++) {
-        uint64_t tag = gs_os_random_u64();
+        uint64_t tag = k_os_random_u64();
         int k = n;
         memcpy(t, p, (size_t)n * sizeof *t);
         t[k++] = '.';
@@ -239,7 +239,7 @@ GS_API uint8_t gs_os_write_file_atomic(sl_u8 path, sl_u8 data) {
         }
         ok = ok && FlushFileBuffers(h);
         if (!CloseHandle(h)) ok = 0;
-        ok = ok && gs_os_replace(t, p);
+        ok = ok && k_os_replace(t, p);
         if (!ok) DeleteFileW(t);
 #else
         int fd = open(t, O_WRONLY | O_CREAT | O_EXCL, 0666);
@@ -260,10 +260,10 @@ GS_API uint8_t gs_os_write_file_atomic(sl_u8 path, sl_u8 data) {
                 left -= w;
             }
         }
-        ok = ok && gs_os_fsync(fd);
+        ok = ok && k_os_fsync(fd);
         if (close(fd) != 0) ok = 0;
         ok = ok && rename(t, p) == 0;
-        if (ok) gs_os_sync_dir(p);
+        if (ok) k_os_sync_dir(p);
         else unlink(t);
 #endif
         return ok ? 1 : 0;
@@ -273,26 +273,26 @@ GS_API uint8_t gs_os_write_file_atomic(sl_u8 path, sl_u8 data) {
 
 /* True where path is a directory afterwards, one that was there already
    included. */
-GS_API uint8_t gs_os_make_dir(sl_u8 path) {
-    gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
+K_API uint8_t k_os_make_dir(sl_u8 path) {
+    k_os_char p[K_OS_PATH_MAX];
+    if (k_os_native(path, p) < 0) return 0;
 #ifdef _WIN32
     if (CreateDirectoryW(p, NULL)) return 1;
 #else
     if (mkdir(p, 0777) == 0) return 1;
 #endif
-    return gs_os_kind(p) == 2;
+    return k_os_kind(p) == 2;
 }
 
-GS_API uint8_t gs_os_is_dir(sl_u8 path) {
-    gs_os_char p[GS_OS_PATH_MAX];
-    return gs_os_native(path, p) >= 0 && gs_os_kind(p) == 2;
+K_API uint8_t k_os_is_dir(sl_u8 path) {
+    k_os_char p[K_OS_PATH_MAX];
+    return k_os_native(path, p) >= 0 && k_os_kind(p) == 2;
 }
 
 /* An empty directory. */
-GS_API uint8_t gs_os_remove_dir(sl_u8 path) {
-    gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
+K_API uint8_t k_os_remove_dir(sl_u8 path) {
+    k_os_char p[K_OS_PATH_MAX];
+    if (k_os_native(path, p) < 0) return 0;
 #ifdef _WIN32
     return RemoveDirectoryW(p) != 0;
 #else
@@ -305,11 +305,11 @@ GS_API uint8_t gs_os_remove_dir(sl_u8 path) {
 typedef struct {
     char *text;
     size_t len, cap, count;
-} gs_os_names;
+} k_os_names;
 
 /* A name with a newline in it cannot be a line of the listing, and is left
    out. */
-static int gs_os_names_add(gs_os_names *ns, const char *name, size_t n) {
+static int k_os_names_add(k_os_names *ns, const char *name, size_t n) {
     if (memchr(name, '\n', n)) return 1;
     if (ns->len + n + 1 > ns->cap) {
         size_t cap = ns->cap ? ns->cap * 2 : 4096;
@@ -326,21 +326,21 @@ static int gs_os_names_add(gs_os_names *ns, const char *name, size_t n) {
     return 1;
 }
 
-static int gs_os_name_order(const void *a, const void *b) {
+static int k_os_name_order(const void *a, const void *b) {
     return strcmp(*(const char *const *)a, *(const char *const *)b);
 }
 
 /* Appends the names in bytewise order, each followed by a newline. */
-static int gs_os_names_put(gs_os_names *ns, gs_rref out) {
+static int k_os_names_put(k_os_names *ns, k_rref out) {
     if (!ns->count) return 1;
     const char **v = (const char **)malloc(ns->count * sizeof *v);
     if (!v) return 0;
     size_t i = 0;
     for (size_t at = 0; at < ns->len; at += strlen(ns->text + at) + 1) v[i++] = ns->text + at;
-    qsort(v, ns->count, sizeof *v, gs_os_name_order);
+    qsort(v, ns->count, sizeof *v, k_os_name_order);
     for (i = 0; i < ns->count; i++) {
-        gs_bld_append(out, v[i], (int64_t)strlen(v[i]));
-        gs_bld_append(out, "\n", 1);
+        k_bld_append(out, v[i], (int64_t)strlen(v[i]));
+        k_bld_append(out, "\n", 1);
     }
     free(v);
     return 1;
@@ -349,11 +349,11 @@ static int gs_os_names_put(gs_os_names *ns, gs_rref out) {
 /* Appends the name of every entry of a directory but "." and "..", sorted
    so that a listing does not depend on the file system; on a failure
    appends nothing. */
-GS_API uint8_t gs_os_list_dir(sl_u8 path, gs_rref out) {
-    gs_os_char p[GS_OS_PATH_MAX + 2];
-    int n = gs_os_native(path, p);
+K_API uint8_t k_os_list_dir(sl_u8 path, k_rref out) {
+    k_os_char p[K_OS_PATH_MAX + 2];
+    int n = k_os_native(path, p);
     if (n <= 0) return 0;
-    gs_os_names ns = { 0 };
+    k_os_names ns = { 0 };
     int ok = 1;
 #ifdef _WIN32
     /* FindFirstFileW takes a pattern, which "*" after the directory makes
@@ -368,7 +368,7 @@ GS_API uint8_t gs_os_list_dir(sl_u8 path, gs_rref out) {
         /* No entry at all, not even "." and "..": the empty root of a drive. */
         int empty = GetLastError() == ERROR_FILE_NOT_FOUND;
         p[dirlen] = 0;
-        return empty && gs_os_kind(p) == 2;
+        return empty && k_os_kind(p) == 2;
     }
     do {
         const wchar_t *w = e.cFileName;
@@ -378,7 +378,7 @@ GS_API uint8_t gs_os_list_dir(sl_u8 path, gs_rref out) {
         char name[1024];
         int k = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, -1, name, sizeof name,
                                     NULL, NULL);
-        if (k > 1 && !gs_os_names_add(&ns, name, (size_t)k - 1)) ok = 0;
+        if (k > 1 && !k_os_names_add(&ns, name, (size_t)k - 1)) ok = 0;
     } while (ok && FindNextFileW(h, &e));
     if (ok && GetLastError() != ERROR_NO_MORE_FILES) ok = 0;
     FindClose(h);
@@ -394,53 +394,53 @@ GS_API uint8_t gs_os_list_dir(sl_u8 path, gs_rref out) {
         }
         const char *w = e->d_name;
         if (w[0] == '.' && (!w[1] || (w[1] == '.' && !w[2]))) continue;
-        if (!gs_os_names_add(&ns, w, strlen(w))) {
+        if (!k_os_names_add(&ns, w, strlen(w))) {
             ok = 0;
             break;
         }
     }
     closedir(d);
 #endif
-    ok = ok && gs_os_names_put(&ns, out);
+    ok = ok && k_os_names_put(&ns, out);
     free(ns.text);
     return ok ? 1 : 0;
 }
 
-GS_API void gs_os_write_stdout(sl_u8 s) {
+K_API void k_os_write_stdout(sl_u8 s) {
     if (s.len > 0) fwrite(s.data, 1, (size_t)s.len, stdout);
 }
 
-GS_API void gs_os_write_stderr(sl_u8 s) {
+K_API void k_os_write_stderr(sl_u8 s) {
     if (s.len > 0) fwrite(s.data, 1, (size_t)s.len, stderr);
 }
 
-GS_API void gs_os_flush_stdout(void) { fflush(stdout); }
+K_API void k_os_flush_stdout(void) { fflush(stdout); }
 
 /* fgetc takes the stream's lock for every byte; read_line takes it once
    per line and reads the bytes without it. */
 #ifdef _WIN32
-#define gs_os_lock_stdin() _lock_file(stdin)
-#define gs_os_unlock_stdin() _unlock_file(stdin)
-#define gs_os_getc_stdin() _getc_nolock(stdin)
+#define k_os_lock_stdin() _lock_file(stdin)
+#define k_os_unlock_stdin() _unlock_file(stdin)
+#define k_os_getc_stdin() _getc_nolock(stdin)
 #else
-#define gs_os_lock_stdin() flockfile(stdin)
-#define gs_os_unlock_stdin() funlockfile(stdin)
-#define gs_os_getc_stdin() getc_unlocked(stdin)
+#define k_os_lock_stdin() flockfile(stdin)
+#define k_os_unlock_stdin() funlockfile(stdin)
+#define k_os_getc_stdin() getc_unlocked(stdin)
 #endif
 
 /* One line of stdin, without its newline or a carriage return before it;
    false at end of input. */
-GS_API uint8_t gs_os_read_line(gs_rref out) {
-    gs_os_lock_stdin();
-    int c = gs_os_getc_stdin();
-    if (c == EOF) { gs_os_unlock_stdin(); return 0; }
+K_API uint8_t k_os_read_line(k_rref out) {
+    k_os_lock_stdin();
+    int c = k_os_getc_stdin();
+    if (c == EOF) { k_os_unlock_stdin(); return 0; }
     int64_t start = out.hdr->len;
     while (c != EOF && c != '\n') {
         uint8_t b = (uint8_t)c;
-        gs_bld_append(out, &b, 1);
-        c = gs_os_getc_stdin();
+        k_bld_append(out, &b, 1);
+        c = k_os_getc_stdin();
     }
-    gs_os_unlock_stdin();
+    k_os_unlock_stdin();
     if (c == '\n' && out.hdr->len > start && out.hdr->base[out.hdr->len - 1] == '\r') {
         out.hdr->len--;
         out.stk->top--;
@@ -449,43 +449,43 @@ GS_API uint8_t gs_os_read_line(gs_rref out) {
 }
 
 /* All of stdin. */
-GS_API void gs_os_read_stdin(gs_rref out) {
+K_API void k_os_read_stdin(k_rref out) {
     uint8_t buf[65536];
     for (;;) {
         size_t n = fread(buf, 1, sizeof buf, stdin);
         if (n == 0) break;
-        gs_bld_append(out, buf, (int64_t)n);
+        k_bld_append(out, buf, (int64_t)n);
     }
 }
 
 /* Up to max bytes of stdin; false when none were left. */
-GS_API uint8_t gs_os_read_stdin_max(gs_rref out, int64_t max) {
+K_API uint8_t k_os_read_stdin_max(k_rref out, int64_t max) {
     uint8_t buf[65536];
     int64_t got = 0;
     while (got < max) {
         size_t want = max - got < (int64_t)sizeof buf ? (size_t)(max - got) : sizeof buf;
         size_t n = fread(buf, 1, want, stdin);
         if (n == 0) break;
-        gs_bld_append(out, buf, (int64_t)n);
+        k_bld_append(out, buf, (int64_t)n);
         got += (int64_t)n;
     }
     return got > 0;
 }
 
-GS_API int64_t gs_os_arg_count(void) { return gs_argc; }
+K_API int64_t k_os_arg_count(void) { return k_argc; }
 
 /* The application's resource directory (resource_dir(), below) in native
-   form with its final separator, NUL-terminated in buf (GS_OS_PATH_MAX
+   form with its final separator, NUL-terminated in buf (K_OS_PATH_MAX
    characters): its length, or 0 where it is not known. JIT supplies its
    entry source directory; AOT discovers the running executable. */
-static int gs_os_resource_native(gs_os_char *buf) {
-#ifdef GS_JIT_RESOURCE_DIR
-    sl_u8 dir = { (uint8_t *)GS_JIT_RESOURCE_DIR, (int64_t)strlen(GS_JIT_RESOURCE_DIR) };
-    int n = gs_os_native(dir, buf);
+static int k_os_resource_native(k_os_char *buf) {
+#ifdef K_JIT_RESOURCE_DIR
+    sl_u8 dir = { (uint8_t *)K_JIT_RESOURCE_DIR, (int64_t)strlen(K_JIT_RESOURCE_DIR) };
+    int n = k_os_native(dir, buf);
     return n < 0 ? 0 : n;
 #elif defined(_WIN32)
-    DWORD n = GetModuleFileNameW(NULL, buf, GS_OS_PATH_MAX);
-    if (!n || n >= GS_OS_PATH_MAX) return 0;
+    DWORD n = GetModuleFileNameW(NULL, buf, K_OS_PATH_MAX);
+    if (!n || n >= K_OS_PATH_MAX) return 0;
     while (n && buf[n - 1] != L'\\' && buf[n - 1] != L'/') --n;
     buf[n] = 0;
     return (int)n;
@@ -493,18 +493,18 @@ static int gs_os_resource_native(gs_os_char *buf) {
     char *path = buf;
     size_t n;
     #ifdef __APPLE__
-        uint32_t capacity = GS_OS_PATH_MAX;
+        uint32_t capacity = K_OS_PATH_MAX;
         if (_NSGetExecutablePath(path, &capacity) != 0) return 0;
         /* Resolve the loader's possible relative path and symlinks. */
         char *resolved = realpath(path, NULL);
         if (!resolved) return 0;
         n = strlen(resolved);
-        if (n >= (size_t)GS_OS_PATH_MAX) { free(resolved); return 0; }
+        if (n >= (size_t)K_OS_PATH_MAX) { free(resolved); return 0; }
         memcpy(path, resolved, n + 1);
         free(resolved);
     #elif defined(__linux__)
-        ssize_t count = readlink("/proc/self/exe", path, (size_t)GS_OS_PATH_MAX);
-        if (count <= 0 || (size_t)count >= (size_t)GS_OS_PATH_MAX) return 0;
+        ssize_t count = readlink("/proc/self/exe", path, (size_t)K_OS_PATH_MAX);
+        if (count <= 0 || (size_t)count >= (size_t)K_OS_PATH_MAX) return 0;
         n = (size_t)count;
     #else
         return 0;
@@ -516,7 +516,7 @@ static int gs_os_resource_native(gs_os_char *buf) {
         size_t suffixlen = sizeof suffix - 1;
         if (n >= suffixlen && !memcmp(path + n - suffixlen, suffix, suffixlen)) {
             n -= sizeof "MacOS/" - 1;
-            if (n + sizeof "Resources/" - 1 >= (size_t)GS_OS_PATH_MAX) return 0;
+            if (n + sizeof "Resources/" - 1 >= (size_t)K_OS_PATH_MAX) return 0;
             memcpy(path + n, "Resources/", sizeof "Resources/" - 1);
             n += sizeof "Resources/" - 1;
         }
@@ -528,20 +528,20 @@ static int gs_os_resource_native(gs_os_char *buf) {
 
 /* Application resources, independent of cwd and argv[0]. Append only on
    success, including a final path separator. */
-GS_API uint8_t gs_os_resource_dir(gs_rref out) {
-    gs_os_char path[GS_OS_PATH_MAX];
-    int n = gs_os_resource_native(path);
+K_API uint8_t k_os_resource_dir(k_rref out) {
+    k_os_char path[K_OS_PATH_MAX];
+    int n = k_os_resource_native(path);
     if (!n) return 0;
 #ifdef _WIN32
-    return gs_os_append_wide(out, path, n);
+    return k_os_append_wide(out, path, n);
 #else
-    gs_bld_append(out, path, (int64_t)n);
+    k_bld_append(out, path, (int64_t)n);
     return 1;
 #endif
 }
 
 /* The shortest digits of a finite double (runtime_ext.h). */
-GS_API int64_t gs_f64_digits(double x, sl_u8 dig, int64_t *point) {
+K_API int64_t k_f64_digits(double x, sl_u8 dig, int64_t *point) {
     uint64_t b, frac;
     char buf[20];
     int k, n, bexp;
@@ -549,7 +549,7 @@ GS_API int64_t gs_f64_digits(double x, sl_u8 dig, int64_t *point) {
     memcpy(&b, &x, sizeof b);
     bexp = (int)(b >> 52) & 0x7FF;
     frac = b & (((uint64_t)1 << 52) - 1);
-    n = gs_float_digits(bexp ? frac | (uint64_t)1 << 52 : frac, (bexp ? bexp - 1 : 0) - 1074,
+    n = k_float_digits(bexp ? frac | (uint64_t)1 << 52 : frac, (bexp ? bexp - 1 : 0) - 1074,
                         53, -1074, buf, &k);
     if (n > dig.len) n = (int)dig.len;
     memcpy(dig.data, buf, (size_t)n);
@@ -559,14 +559,14 @@ GS_API int64_t gs_f64_digits(double x, sl_u8 dig, int64_t *point) {
 
 /* ---- Dynamic externs: the libraries the program's extern blocks name ---- */
 
-/* The spelling this platform opens for a library, UTF-8 in buf (GS_OS_PATH_MAX
+/* The spelling this platform opens for a library, UTF-8 in buf (K_OS_PATH_MAX
    bytes): the sidecar's for the platform, else the block's name. A last
    component without a dot takes the platform's library form (SDL2 is
    SDL2.dll, libSDL2.dylib, libSDL2.so); a spelling with a separator, unless
    absolute, is under the resource directory; a bare one goes to the loader's
    search as it is. 0 where it does not fit or the resource directory is not
    known. */
-static int gs_dl_spelling(const gs_dllib *lib, char *buf) {
+static int k_dl_spelling(const k_dllib *lib, char *buf) {
 #ifdef _WIN32
     const char *s = lib->onwindows, *prefix = "", *suffix = ".dll";
 #elif defined(__APPLE__)
@@ -590,14 +590,14 @@ static int gs_dl_spelling(const gs_dllib *lib, char *buf) {
     int drive = (s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z');
     absolute = absolute || s[0] == '\\' || (len >= 2 && drive && s[1] == ':');
 #endif
-    char root[GS_OS_PATH_MAX];
+    char root[K_OS_PATH_MAX];
     root[0] = 0;
     if (dir && !absolute) {
-        gs_os_char native[GS_OS_PATH_MAX];
-        int n = gs_os_resource_native(native);
+        k_os_char native[K_OS_PATH_MAX];
+        int n = k_os_resource_native(native);
         if (!n) return 0;
 #ifdef _WIN32
-        n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, native, n, root, GS_OS_PATH_MAX - 1,
+        n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, native, n, root, K_OS_PATH_MAX - 1,
                                 NULL, NULL);
         if (n <= 0) return 0;
         root[n] = 0;
@@ -605,25 +605,25 @@ static int gs_dl_spelling(const gs_dllib *lib, char *buf) {
         memcpy(root, native, (size_t)n + 1);
 #endif
     }
-    int n = snprintf(buf, GS_OS_PATH_MAX, "%s%.*s%s%s%s", root, (int)dir, s, bare ? prefix : "",
+    int n = snprintf(buf, K_OS_PATH_MAX, "%s%.*s%s%s%s", root, (int)dir, s, bare ? prefix : "",
                      leaf, bare ? suffix : "");
-    return n > 0 && n < GS_OS_PATH_MAX ? n : 0;
+    return n > 0 && n < K_OS_PATH_MAX ? n : 0;
 }
 
-GS_API void gs_dl_bind(const gs_dllib *libs, int64_t nlibs, const gs_dlbind *binds,
+K_API void k_dl_bind(const k_dllib *libs, int64_t nlibs, const k_dlbind *binds,
                        int64_t nbinds) {
     for (int64_t l = 0; l < nlibs; l++) {
-        char spelling[GS_OS_PATH_MAX], msg[GS_OS_PATH_MAX + 512];
-        if (!gs_dl_spelling(&libs[l], spelling)) {
+        char spelling[K_OS_PATH_MAX], msg[K_OS_PATH_MAX + 512];
+        if (!k_dl_spelling(&libs[l], spelling)) {
             snprintf(msg, sizeof msg, "cannot load %s: its path does not fit or is not known",
                      libs[l].name);
-            gs_panic(msg);
+            k_panic(msg);
         }
 #ifdef _WIN32
         sl_u8 utf8 = { (uint8_t *)spelling, (int64_t)strlen(spelling) };
-        wchar_t wide[GS_OS_PATH_MAX];
+        wchar_t wide[K_OS_PATH_MAX];
         HMODULE h = NULL;
-        if (gs_os_native(utf8, wide) >= 0) {
+        if (k_os_native(utf8, wide) >= 0) {
             /* A path, the resource directory's or an absolute one: the
                libraries it depends on are looked for beside it first, as
                a library shipped with its dependencies under lib/ needs.
@@ -637,7 +637,7 @@ GS_API void gs_dl_bind(const gs_dllib *libs, int64_t nlibs, const gs_dlbind *bin
         if (!h) {
             snprintf(msg, sizeof msg, "cannot load %s (%s): Windows error %u", libs[l].name,
                      spelling, (unsigned)GetLastError());
-            gs_panic(msg);
+            k_panic(msg);
         }
 #else
         void *h = dlopen(spelling, RTLD_NOW | RTLD_LOCAL);
@@ -645,7 +645,7 @@ GS_API void gs_dl_bind(const gs_dllib *libs, int64_t nlibs, const gs_dlbind *bin
             const char *why = dlerror();
             snprintf(msg, sizeof msg, "cannot load %s (%s): %s", libs[l].name, spelling,
                      why ? why : "unknown error");
-            gs_panic(msg);
+            k_panic(msg);
         }
 #endif
         for (int64_t b = 0; b < nbinds; b++) {
@@ -658,16 +658,16 @@ GS_API void gs_dl_bind(const gs_dllib *libs, int64_t nlibs, const gs_dlbind *bin
             if (!f) {
                 snprintf(msg, sizeof msg, "%s (%s) has no symbol %s", libs[l].name, spelling,
                          binds[b].sym);
-                gs_panic(msg);
+                k_panic(msg);
             }
             *binds[b].slot = f;
         }
     }
 }
 
-GS_API void gs_os_arg(int64_t i, gs_rref out) {
-    if (i < 0 || i >= gs_argc) return;
-    const char *a = gs_argv[i];
+K_API void k_os_arg(int64_t i, k_rref out) {
+    if (i < 0 || i >= k_argc) return;
+    const char *a = k_argv[i];
 #ifdef _WIN32
     /* main's argv is in the ANSI code page. The program gets it in UTF-8,
        the encoding of its paths, by way of UTF-16, which holds every
@@ -675,16 +675,16 @@ GS_API void gs_os_arg(int64_t i, gs_rref out) {
     int n = MultiByteToWideChar(CP_ACP, 0, a, -1, NULL, 0);
     wchar_t *w = n > 0 ? (wchar_t *)malloc((size_t)n * sizeof *w) : NULL;
     int ok = w && MultiByteToWideChar(CP_ACP, 0, a, -1, w, n) == n &&
-             gs_os_append_wide(out, w, n - 1);
+             k_os_append_wide(out, w, n - 1);
     free(w);
     if (ok) return;
 #endif
-    gs_bld_append(out, a, (int64_t)strlen(a));
+    k_bld_append(out, a, (int64_t)strlen(a));
 }
 
-GS_API uint8_t gs_os_getenv(sl_u8 name, gs_rref out) {
-    gs_os_char nm[GS_OS_PATH_MAX];
-    if (gs_os_native(name, nm) < 0) return 0;
+K_API uint8_t k_os_getenv(sl_u8 name, k_rref out) {
+    k_os_char nm[K_OS_PATH_MAX];
+    if (k_os_native(name, nm) < 0) return 0;
 #ifdef _WIN32
     /* The environment holds UTF-16, which getenv would hand out in the ANSI
        code page. A value can change size between the calls. */
@@ -701,19 +701,19 @@ GS_API uint8_t gs_os_getenv(sl_u8 name, gs_rref out) {
     }
     /* Zero is also the length of an empty value. */
     int ok = (len > 0 || GetLastError() != ERROR_ENVVAR_NOT_FOUND) &&
-             gs_os_append_wide(out, v, (int)len);
+             k_os_append_wide(out, v, (int)len);
     if (v != small) free(v);
     return ok ? 1 : 0;
 #else
     const char *v = getenv(nm);
     if (!v) return 0;
-    gs_bld_append(out, v, (int64_t)strlen(v));
+    k_bld_append(out, v, (int64_t)strlen(v));
     return 1;
 #endif
 }
 
 /* Wall-clock time in nanoseconds since the Unix epoch. */
-GS_API int64_t gs_os_time_ns(void) {
+K_API int64_t k_os_time_ns(void) {
     /* Neither branch uses C11's timespec_get: the Microsoft C runtime tcc
        links against does not have it, and glibc hides it from a compiler
        announcing C99, which tcc also is. */
@@ -732,7 +732,7 @@ GS_API int64_t gs_os_time_ns(void) {
 }
 
 /* A monotonic clock in nanoseconds, for measuring intervals. */
-GS_API int64_t gs_os_clock_ns(void) {
+K_API int64_t k_os_clock_ns(void) {
 #ifdef _WIN32
     LARGE_INTEGER f, c;
     QueryPerformanceFrequency(&f);
@@ -745,7 +745,7 @@ GS_API int64_t gs_os_clock_ns(void) {
 #endif
 }
 
-GS_API void gs_os_sleep_ms(int64_t ms) {
+K_API void k_os_sleep_ms(int64_t ms) {
     if (ms <= 0) return;
 #ifdef _WIN32
     /* Sleep takes 32 bits, the largest of them meaning INFINITE: a longer
@@ -770,31 +770,31 @@ GS_API void gs_os_sleep_ms(int64_t ms) {
    links no library beyond the runtime's (TinyCC's .def files list neither).
    Elsewhere getentropy(3), 256 bytes a call, else /dev/urandom. */
 #ifdef _WIN32
-typedef BOOL (WINAPI *gs_os_process_prng)(PBYTE, SIZE_T);
-typedef BOOLEAN (WINAPI *gs_os_rtl_gen_random)(PVOID, ULONG);
+typedef BOOL (WINAPI *k_os_process_prng)(PBYTE, SIZE_T);
+typedef BOOLEAN (WINAPI *k_os_rtl_gen_random)(PVOID, ULONG);
 
 /* A function of a system DLL: from the copy already loaded, else from one
    loaded out of System32 only, as Go does. bcryptprimitives.dll is not a
    KnownDLL, so a plain LoadLibraryW would look in the application's
    directory first, and a DLL placed there would supply the program's keys. */
-static FARPROC gs_os_system_proc(const wchar_t *dll, const char *name) {
+static FARPROC k_os_system_proc(const wchar_t *dll, const char *name) {
     HMODULE h = GetModuleHandleW(dll);
     if (!h) h = LoadLibraryExW(dll, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
     return h ? GetProcAddress(h, name) : NULL;
 }
 
-static int gs_os_entropy(uint8_t *p, size_t n) {
+static int k_os_entropy(uint8_t *p, size_t n) {
     /* The function pointers themselves are published, with full barriers,
        so a thread that sees one sees it whole (ARM64 too). Workers racing
        the first call each look it up and find the same function. */
     static PVOID volatile prng_fn, rtl_fn;
-    gs_os_process_prng prng = (gs_os_process_prng)InterlockedCompareExchangePointer(&prng_fn, NULL, NULL);
-    gs_os_rtl_gen_random rtl = (gs_os_rtl_gen_random)InterlockedCompareExchangePointer(&rtl_fn, NULL, NULL);
+    k_os_process_prng prng = (k_os_process_prng)InterlockedCompareExchangePointer(&prng_fn, NULL, NULL);
+    k_os_rtl_gen_random rtl = (k_os_rtl_gen_random)InterlockedCompareExchangePointer(&rtl_fn, NULL, NULL);
     if (!prng && !rtl) {
-        prng = (gs_os_process_prng)gs_os_system_proc(L"bcryptprimitives.dll", "ProcessPrng");
+        prng = (k_os_process_prng)k_os_system_proc(L"bcryptprimitives.dll", "ProcessPrng");
         if (prng) InterlockedExchangePointer(&prng_fn, (PVOID)prng);
         else {
-            rtl = (gs_os_rtl_gen_random)gs_os_system_proc(L"advapi32.dll", "SystemFunction036");
+            rtl = (k_os_rtl_gen_random)k_os_system_proc(L"advapi32.dll", "SystemFunction036");
             if (rtl) InterlockedExchangePointer(&rtl_fn, (PVOID)rtl);
         }
     }
@@ -810,7 +810,7 @@ static int gs_os_entropy(uint8_t *p, size_t n) {
     return 1;
 }
 #else
-static int gs_os_entropy(uint8_t *p, size_t n) {
+static int k_os_entropy(uint8_t *p, size_t n) {
     size_t done = 0;
     while (done < n) {
         size_t part = n - done > 256 ? 256 : n - done;
@@ -831,24 +831,24 @@ static int gs_os_entropy(uint8_t *p, size_t n) {
 }
 #endif
 
-GS_API uint8_t gs_os_random_bytes(sl_u8 out) {
+K_API uint8_t k_os_random_bytes(sl_u8 out) {
     if (out.len <= 0) return 1;
-    return (uint8_t)gs_os_entropy(out.data, (size_t)out.len);
+    return (uint8_t)k_os_entropy(out.data, (size_t)out.len);
 }
 
 /* Entropy for seeding a PRNG: the OS's, as random_bytes takes it; if it
    gives none, a splitmix64 mix of the clocks, the process id and an
    address, which is not cryptographic. */
-static uint64_t gs_os_mix64(uint64_t x) {
+static uint64_t k_os_mix64(uint64_t x) {
     x += 0x9e3779b97f4a7c15u;
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9u;
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebu;
     return x ^ (x >> 31);
 }
 
-GS_API uint64_t gs_os_random_u64(void) {
+K_API uint64_t k_os_random_u64(void) {
     uint64_t v = 0;
-    if (gs_os_entropy((uint8_t *)&v, sizeof v)) return v;
+    if (k_os_entropy((uint8_t *)&v, sizeof v)) return v;
     /* Which call this is, counted atomically: workers calling at once each
        get a count of their own. */
 #ifdef _WIN32
@@ -858,83 +858,83 @@ GS_API uint64_t gs_os_random_u64(void) {
     static uint64_t counter;
     uint64_t count = __atomic_add_fetch(&counter, 1, __ATOMIC_SEQ_CST);
 #endif
-    uint64_t seed = (uint64_t)gs_os_time_ns();
-    seed = gs_os_mix64(seed ^ (uint64_t)gs_os_clock_ns());
+    uint64_t seed = (uint64_t)k_os_time_ns();
+    seed = k_os_mix64(seed ^ (uint64_t)k_os_clock_ns());
 #ifdef _WIN32
-    seed = gs_os_mix64(seed ^ (uint64_t)GetCurrentProcessId());
+    seed = k_os_mix64(seed ^ (uint64_t)GetCurrentProcessId());
 #endif
-    seed = gs_os_mix64(seed ^ (uint64_t)(uintptr_t)&counter);
-    return gs_os_mix64(seed ^ count);
+    seed = k_os_mix64(seed ^ (uint64_t)(uintptr_t)&counter);
+    return k_os_mix64(seed ^ count);
 }
 
 /* ---------------------------------------------------------------------------
    std's slice_pool (stdlib/slice_pool_internal.k) keeps the span tree
-   of runtime_impl.h's gs_spans_* in nodes of its own and a `tree` field for
+   of runtime_impl.h's k_spans_* in nodes of its own and a `tree` field for
    the header, both of which the program can write. These are those
    functions, taking the nodes as its externs pass them and the header
    apart from them, as `hd`, and with everything read from the tree checked
    before it is used: a node number must be one of the nodes past node 0
-   (GS_SPBADNUM), an entry count must fit the node it is read from as a leaf
+   (K_SPBADNUM), an entry count must fit the node it is read from as a leaf
    or inner node, a height must fit a path, and an entry moved into or out
    of a node must be one it has room for or holds. A node reached at two
    levels of a path, or one the chain hands out while it is in the tree,
    keeps every access inside the nodes: each count these write fits a leaf,
    and the counts that index an inner node's children are checked where
    they are read. Sums of stored indices and counts wrap. A check that fails
-   aborts (GS_E_SPANTREE); a wrong tree that passes them hands out wrong
+   aborts (K_E_SPANTREE); a wrong tree that passes them hands out wrong
    spans, which slice_pool checks against its length. New nodes start
    zeroed, as a pushed `node { .. }` would. reusable[]'s freelist is out of
    the program's reach, so it keeps the unchecked functions, and this copy
    goes when reusable[] does. It is here, not beside them, because the
-   externs take a gs_rref, which runtime_ext.h defines. */
+   externs take a k_rref, which runtime_ext.h defines. */
 
 typedef struct {
-    gs_sphead *hd;
+    k_sphead *hd;
     uint8_t *base;
     int64_t *n;
     uint8_t **top;
-    const gs_loc *at;    /* The call that a corrupt tree is reported at. */
-    int64_t h, node[GS_SPAN_DEPTH], pos[GS_SPAN_DEPTH];
-} gs_spcpath;
+    const k_loc *at;    /* The call that a corrupt tree is reported at. */
+    int64_t h, node[K_SPAN_DEPTH], pos[K_SPAN_DEPTH];
+} k_spcpath;
 
-#define GS_SPCHEAD(p) ((p)->hd)
-#define GS_SPSUM(a, b) ((int64_t)((uint64_t)(a) + (uint64_t)(b)))
+#define K_SPCHEAD(p) ((p)->hd)
+#define K_SPSUM(a, b) ((int64_t)((uint64_t)(a) + (uint64_t)(b)))
 
 /* Macros rather than functions, which TinyCC would call at every level. */
-#define GS_SPBADNUM(p, i) ((uint64_t)(i) - 1 >= (uint64_t)*(p)->n - 1)
-#define GS_SPBADIN(p, i) (GS_SPBADNUM(p, i) || (uint64_t)GS_SPINNER(p, i)->n - 1 >= GS_SPAN_FAN)
-#define GS_SPBADLEAF(p, i) (GS_SPBADNUM(p, i) || (uint64_t)GS_SPLEAF(p, i)->n > GS_SPAN_LEAF)
-#define GS_SPBADH(h) ((uint64_t)(h) >= GS_SPAN_DEPTH)
+#define K_SPBADNUM(p, i) ((uint64_t)(i) - 1 >= (uint64_t)*(p)->n - 1)
+#define K_SPBADIN(p, i) (K_SPBADNUM(p, i) || (uint64_t)K_SPINNER(p, i)->n - 1 >= K_SPAN_FAN)
+#define K_SPBADLEAF(p, i) (K_SPBADNUM(p, i) || (uint64_t)K_SPLEAF(p, i)->n > K_SPAN_LEAF)
+#define K_SPBADH(h) ((uint64_t)(h) >= K_SPAN_DEPTH)
 
-static GS_NORETURN void gs_spc_corrupt(const gs_spcpath *p) {
-    gs_abort(GS_E_SPANTREE, p->at->file, p->at->line);
+static K_NORETURN void k_spc_corrupt(const k_spcpath *p) {
+    k_abort(K_E_SPANTREE, p->at->file, p->at->line);
 }
 
-#define GS_SPSTART(p, tree, nodes, loc) \
-    ((p)->hd = (gs_sphead *)(tree), (p)->base = (nodes).hdr->base, (p)->n = &(nodes).hdr->len, \
+#define K_SPSTART(p, tree, nodes, loc) \
+    ((p)->hd = (k_sphead *)(tree), (p)->base = (nodes).hdr->base, (p)->n = &(nodes).hdr->len, \
      (p)->top = &(nodes).stk->top, (p)->at = (loc))
 
-static int64_t gs_spc_newnode(gs_spcpath *p) {
-    int64_t i = GS_SPCHEAD(p)->chain;
+static int64_t k_spc_newnode(k_spcpath *p) {
+    int64_t i = K_SPCHEAD(p)->chain;
     if (i) {
-        if (GS_SPBADNUM(p, i)) gs_spc_corrupt(p);
-        GS_SPCHEAD(p)->chain = GS_SPLEAF(p, i)->link;
+        if (K_SPBADNUM(p, i)) k_spc_corrupt(p);
+        K_SPCHEAD(p)->chain = K_SPLEAF(p, i)->link;
         return i;
     }
     i = (*p->n)++;
-    memset(GS_SPLEAF(p, i), 0, GS_SPAN_NODE);
-    *p->top += GS_SPAN_NODE;
+    memset(K_SPLEAF(p, i), 0, K_SPAN_NODE);
+    *p->top += K_SPAN_NODE;
     return i;
 }
 
-static void gs_spc_dropnode(gs_spcpath *p, int64_t i) {
-    GS_SPLEAF(p, i)->link = GS_SPCHEAD(p)->chain;
-    GS_SPCHEAD(p)->chain = i;
+static void k_spc_dropnode(k_spcpath *p, int64_t i) {
+    K_SPLEAF(p, i)->link = K_SPCHEAD(p)->chain;
+    K_SPCHEAD(p)->chain = i;
 }
 
-static void gs_spc_open(const gs_spcpath *p, gs_spleaf *lf, int64_t s) {
+static void k_spc_open(const k_spcpath *p, k_spleaf *lf, int64_t s) {
     int64_t j;
-    if ((uint64_t)lf->n >= GS_SPAN_LEAF || (uint64_t)s > (uint64_t)lf->n) gs_spc_corrupt(p);
+    if ((uint64_t)lf->n >= K_SPAN_LEAF || (uint64_t)s > (uint64_t)lf->n) k_spc_corrupt(p);
     for (j = lf->n; j > s; j--) {
         lf->idx[j] = lf->idx[j - 1];
         lf->cnt[j] = lf->cnt[j - 1];
@@ -942,9 +942,9 @@ static void gs_spc_open(const gs_spcpath *p, gs_spleaf *lf, int64_t s) {
     lf->n++;
 }
 
-static void gs_spc_close(const gs_spcpath *p, gs_spleaf *lf, int64_t s) {
+static void k_spc_close(const k_spcpath *p, k_spleaf *lf, int64_t s) {
     int64_t j;
-    if ((uint64_t)s >= (uint64_t)lf->n) gs_spc_corrupt(p);
+    if ((uint64_t)s >= (uint64_t)lf->n) k_spc_corrupt(p);
     lf->n--;
     for (j = s; j < lf->n; j++) {
         lf->idx[j] = lf->idx[j + 1];
@@ -952,9 +952,9 @@ static void gs_spc_close(const gs_spcpath *p, gs_spleaf *lf, int64_t s) {
     }
 }
 
-static void gs_spc_openin(const gs_spcpath *p, gs_spinner *in, int64_t s) {
+static void k_spc_openin(const k_spcpath *p, k_spinner *in, int64_t s) {
     int64_t j;
-    if ((uint64_t)in->n >= GS_SPAN_FAN || (uint64_t)s > (uint64_t)in->n) gs_spc_corrupt(p);
+    if ((uint64_t)in->n >= K_SPAN_FAN || (uint64_t)s > (uint64_t)in->n) k_spc_corrupt(p);
     for (j = in->n; j > s; j--) {
         in->key[j] = in->key[j - 1];
         in->max[j] = in->max[j - 1];
@@ -963,9 +963,9 @@ static void gs_spc_openin(const gs_spcpath *p, gs_spinner *in, int64_t s) {
     in->n++;
 }
 
-static void gs_spc_closein(const gs_spcpath *p, gs_spinner *in, int64_t s) {
+static void k_spc_closein(const k_spcpath *p, k_spinner *in, int64_t s) {
     int64_t j;
-    if (in->n > GS_SPAN_FAN || (uint64_t)s >= (uint64_t)in->n) gs_spc_corrupt(p);
+    if (in->n > K_SPAN_FAN || (uint64_t)s >= (uint64_t)in->n) k_spc_corrupt(p);
     in->n--;
     for (j = s; j < in->n; j++) {
         in->key[j] = in->key[j + 1];
@@ -974,22 +974,22 @@ static void gs_spc_closein(const gs_spcpath *p, gs_spinner *in, int64_t s) {
     }
 }
 
-static int64_t gs_spc_max(gs_spcpath *p, int64_t i, int leaf, int64_t stop) {
-    return leaf ? gs_sp_most(GS_SPLEAF(p, i)->cnt, GS_SPLEAF(p, i)->n, stop)
-                : gs_sp_most(GS_SPINNER(p, i)->max, GS_SPINNER(p, i)->n, stop);
+static int64_t k_spc_max(k_spcpath *p, int64_t i, int leaf, int64_t stop) {
+    return leaf ? k_sp_most(K_SPLEAF(p, i)->cnt, K_SPLEAF(p, i)->n, stop)
+                : k_sp_most(K_SPINNER(p, i)->max, K_SPINNER(p, i)->n, stop);
 }
 
-static int64_t gs_spc_key(gs_spcpath *p, int64_t i, int leaf) {
-    return leaf ? GS_SPLEAF(p, i)->idx[0] : GS_SPINNER(p, i)->key[0];
+static int64_t k_spc_key(k_spcpath *p, int64_t i, int leaf) {
+    return leaf ? K_SPLEAF(p, i)->idx[0] : K_SPINNER(p, i)->key[0];
 }
 
-static void gs_spc_fix(gs_spcpath *p, int64_t l, int64_t was, int64_t now) {
+static void k_spc_fix(k_spcpath *p, int64_t l, int64_t was, int64_t now) {
     for (; l > 0; l--) {
-        gs_spinner *in = GS_SPINNER(p, p->node[l - 1]);
+        k_spinner *in = K_SPINNER(p, p->node[l - 1]);
         int64_t k = p->pos[l - 1], c = p->node[l], m = in->max[k];
         int leaf = l == p->h;
-        int64_t key = gs_spc_key(p, c, leaf);
-        int64_t nm = now >= m ? now : was < m ? m : gs_spc_max(p, c, leaf, was);
+        int64_t key = k_spc_key(p, c, leaf);
+        int64_t nm = now >= m ? now : was < m ? m : k_spc_max(p, c, leaf, was);
         if (in->key[k] == key && nm == m) return;
         in->key[k] = key;
         in->max[k] = nm;
@@ -998,53 +998,53 @@ static void gs_spc_fix(gs_spcpath *p, int64_t l, int64_t was, int64_t now) {
     }
 }
 
-static int64_t gs_spc_find(gs_spcpath *p, int64_t idx) {
-    int64_t l, i = GS_SPCHEAD(p)->root, k;
-    gs_spleaf *lf;
-    p->h = GS_SPCHEAD(p)->height;
-    if (GS_SPBADH(p->h)) gs_spc_corrupt(p);
+static int64_t k_spc_find(k_spcpath *p, int64_t idx) {
+    int64_t l, i = K_SPCHEAD(p)->root, k;
+    k_spleaf *lf;
+    p->h = K_SPCHEAD(p)->height;
+    if (K_SPBADH(p->h)) k_spc_corrupt(p);
     for (l = 0; l < p->h; l++) {
-        gs_spinner *in;
-        if (GS_SPBADIN(p, i)) gs_spc_corrupt(p);
-        in = GS_SPINNER(p, i);
+        k_spinner *in;
+        if (K_SPBADIN(p, i)) k_spc_corrupt(p);
+        in = K_SPINNER(p, i);
         for (k = 1; k < in->n && in->key[k] <= idx; k++) {}
         p->node[l] = i;
         p->pos[l] = k - 1;
         i = in->child[k - 1];
     }
     p->node[p->h] = i;
-    if (GS_SPBADLEAF(p, i)) gs_spc_corrupt(p);
-    lf = GS_SPLEAF(p, i);
+    if (K_SPBADLEAF(p, i)) k_spc_corrupt(p);
+    lf = K_SPLEAF(p, i);
     for (k = 0; k < lf->n && lf->idx[k] <= idx; k++) {}
     p->pos[p->h] = k - 1;
     return k - 1;
 }
 
-static void gs_spc_newroot(gs_spcpath *p, int64_t a, int64_t b, int leaf) {
-    int64_t r = gs_spc_newnode(p);
-    gs_spinner *rn = GS_SPINNER(p, r);
+static void k_spc_newroot(k_spcpath *p, int64_t a, int64_t b, int leaf) {
+    int64_t r = k_spc_newnode(p);
+    k_spinner *rn = K_SPINNER(p, r);
     rn->n = 2;
-    rn->key[0] = gs_spc_key(p, a, leaf);
-    rn->max[0] = gs_spc_max(p, a, leaf, INT64_MAX);
+    rn->key[0] = k_spc_key(p, a, leaf);
+    rn->max[0] = k_spc_max(p, a, leaf, INT64_MAX);
     rn->child[0] = a;
-    rn->key[1] = gs_spc_key(p, b, leaf);
-    rn->max[1] = gs_spc_max(p, b, leaf, INT64_MAX);
+    rn->key[1] = k_spc_key(p, b, leaf);
+    rn->max[1] = k_spc_max(p, b, leaf, INT64_MAX);
     rn->child[1] = b;
-    GS_SPCHEAD(p)->root = r;
-    GS_SPCHEAD(p)->height++;
+    K_SPCHEAD(p)->root = r;
+    K_SPCHEAD(p)->height++;
 }
 
-static void gs_spc_addchild(gs_spcpath *p, int64_t l, int64_t k, int64_t child, int leaf) {
+static void k_spc_addchild(k_spcpath *p, int64_t l, int64_t k, int64_t child, int leaf) {
     for (;;) {
-        gs_spinner *in = GS_SPINNER(p, p->node[l]), *o = in;
-        int64_t key = gs_spc_key(p, child, leaf), max = gs_spc_max(p, child, leaf, INT64_MAX);
+        k_spinner *in = K_SPINNER(p, p->node[l]), *o = in;
+        int64_t key = k_spc_key(p, child, leaf), max = k_spc_max(p, child, leaf, INT64_MAX);
         int64_t s = k, nn = 0;
-        if (in->n == GS_SPAN_FAN) {
-            int64_t half = GS_SPAN_FAN / 2;
-            gs_spinner *r;
-            nn = gs_spc_newnode(p);
-            if (nn == p->node[l]) gs_spc_corrupt(p);
-            r = GS_SPINNER(p, nn);
+        if (in->n == K_SPAN_FAN) {
+            int64_t half = K_SPAN_FAN / 2;
+            k_spinner *r;
+            nn = k_spc_newnode(p);
+            if (nn == p->node[l]) k_spc_corrupt(p);
+            r = K_SPINNER(p, nn);
             r->n = in->n - half;
             memcpy(r->key, in->key + half, (size_t)r->n * 8);
             memcpy(r->max, in->max + half, (size_t)r->n * 8);
@@ -1055,19 +1055,19 @@ static void gs_spc_addchild(gs_spcpath *p, int64_t l, int64_t k, int64_t child, 
                 s = k - half;
             }
         }
-        gs_spc_openin(p, o, s);
+        k_spc_openin(p, o, s);
         o->key[s] = key;
         o->max[s] = max;
         o->child[s] = child;
         if (!nn) {
-            gs_spc_fix(p, l, 0, max);
+            k_spc_fix(p, l, 0, max);
             return;
         }
         if (l == 0) {
-            gs_spc_newroot(p, p->node[0], nn, 0);
+            k_spc_newroot(p, p->node[0], nn, 0);
             return;
         }
-        gs_spc_fix(p, l, INT64_MAX, 0);
+        k_spc_fix(p, l, INT64_MAX, 0);
         child = nn;
         leaf = 0;
         k = p->pos[l - 1] + 1;
@@ -1075,15 +1075,15 @@ static void gs_spc_addchild(gs_spcpath *p, int64_t l, int64_t k, int64_t child, 
     }
 }
 
-static void gs_spc_insert(gs_spcpath *p, int64_t k, int64_t idx, int64_t cnt) {
-    gs_spleaf *lf = GS_SPLEAF(p, p->node[p->h]), *o = lf;
+static void k_spc_insert(k_spcpath *p, int64_t k, int64_t idx, int64_t cnt) {
+    k_spleaf *lf = K_SPLEAF(p, p->node[p->h]), *o = lf;
     int64_t s = k, nn = 0;
-    if (lf->n == GS_SPAN_LEAF) {
-        int64_t half = GS_SPAN_LEAF / 2;
-        gs_spleaf *r;
-        nn = gs_spc_newnode(p);
-        if (nn == p->node[p->h]) gs_spc_corrupt(p);
-        r = GS_SPLEAF(p, nn);
+    if (lf->n == K_SPAN_LEAF) {
+        int64_t half = K_SPAN_LEAF / 2;
+        k_spleaf *r;
+        nn = k_spc_newnode(p);
+        if (nn == p->node[p->h]) k_spc_corrupt(p);
+        r = K_SPLEAF(p, nn);
         r->n = lf->n - half;
         memcpy(r->idx, lf->idx + half, (size_t)r->n * 8);
         memcpy(r->cnt, lf->cnt + half, (size_t)r->n * 8);
@@ -1093,76 +1093,76 @@ static void gs_spc_insert(gs_spcpath *p, int64_t k, int64_t idx, int64_t cnt) {
             s = k - half;
         }
     }
-    gs_spc_open(p, o, s);
+    k_spc_open(p, o, s);
     o->idx[s] = idx;
     o->cnt[s] = cnt;
     if (!nn) {
-        gs_spc_fix(p, p->h, 0, cnt);
+        k_spc_fix(p, p->h, 0, cnt);
     } else if (p->h == 0) {
-        gs_spc_newroot(p, p->node[0], nn, 1);
+        k_spc_newroot(p, p->node[0], nn, 1);
     } else {
-        gs_spc_fix(p, p->h, INT64_MAX, 0);
-        gs_spc_addchild(p, p->h - 1, p->pos[p->h - 1] + 1, nn, 1);
+        k_spc_fix(p, p->h, INT64_MAX, 0);
+        k_spc_addchild(p, p->h - 1, p->pos[p->h - 1] + 1, nn, 1);
     }
 }
 
-static void gs_spc_delete(gs_spcpath *p, int64_t k) {
-    gs_spleaf *lf = GS_SPLEAF(p, p->node[p->h]);
+static void k_spc_delete(k_spcpath *p, int64_t k) {
+    k_spleaf *lf = K_SPLEAF(p, p->node[p->h]);
     int64_t c = lf->cnt[k], l;
-    gs_spc_close(p, lf, k);
+    k_spc_close(p, lf, k);
     if (lf->n > 0 || p->h == 0) {
-        gs_spc_fix(p, p->h, c, 0);
+        k_spc_fix(p, p->h, c, 0);
         return;
     }
-    gs_spc_dropnode(p, p->node[p->h]);
+    k_spc_dropnode(p, p->node[p->h]);
     for (l = p->h - 1;; l--) {
-        gs_spinner *in = GS_SPINNER(p, p->node[l]);
+        k_spinner *in = K_SPINNER(p, p->node[l]);
         int64_t e = p->pos[l], m = in->max[e];
-        gs_spc_closein(p, in, e);
+        k_spc_closein(p, in, e);
         if (in->n > 0) {
-            gs_spc_fix(p, l, m, 0);
+            k_spc_fix(p, l, m, 0);
             break;
         }
         /* A root of one child, which the functions never leave. */
-        if (l == 0) gs_spc_corrupt(p);
-        gs_spc_dropnode(p, p->node[l]);
+        if (l == 0) k_spc_corrupt(p);
+        k_spc_dropnode(p, p->node[l]);
     }
-    while (GS_SPCHEAD(p)->height > 0) {
-        int64_t r = GS_SPCHEAD(p)->root;
-        if (GS_SPBADNUM(p, r)) gs_spc_corrupt(p);
-        if (GS_SPINNER(p, r)->n != 1) break;
-        GS_SPCHEAD(p)->root = GS_SPINNER(p, r)->child[0];
-        GS_SPCHEAD(p)->height--;
-        gs_spc_dropnode(p, r);
+    while (K_SPCHEAD(p)->height > 0) {
+        int64_t r = K_SPCHEAD(p)->root;
+        if (K_SPBADNUM(p, r)) k_spc_corrupt(p);
+        if (K_SPINNER(p, r)->n != 1) break;
+        K_SPCHEAD(p)->root = K_SPINNER(p, r)->child[0];
+        K_SPCHEAD(p)->height--;
+        k_spc_dropnode(p, r);
     }
 }
 
-static void gs_spc_take(gs_spcpath *p, int64_t k, int64_t cnt) {
-    gs_spleaf *lf = GS_SPLEAF(p, p->node[p->h]);
+static void k_spc_take(k_spcpath *p, int64_t k, int64_t cnt) {
+    k_spleaf *lf = K_SPLEAF(p, p->node[p->h]);
     int64_t c = lf->cnt[k];
     if (c <= cnt) {
-        gs_spc_delete(p, k);
+        k_spc_delete(p, k);
         return;
     }
-    lf->idx[k] = GS_SPSUM(lf->idx[k], cnt);
+    lf->idx[k] = K_SPSUM(lf->idx[k], cnt);
     lf->cnt[k] = c - cnt;
-    gs_spc_fix(p, p->h, c, c - cnt);
+    k_spc_fix(p, p->h, c, c - cnt);
 }
 
-GS_API int64_t gs_slice_pool_place(gs_rref nodes, void *tree, int64_t len, int64_t cnt,
-                                   const gs_loc *at) {
-    gs_spcpath p;
-    int64_t l, i, k = 0, j, m, c, now, idx, before[GS_SPAN_DEPTH];
-    gs_spleaf *lf = NULL;
+K_API int64_t k_slice_pool_place(k_rref nodes, void *tree, int64_t len, int64_t cnt,
+                                   const k_loc *at) {
+    k_spcpath p;
+    int64_t l, i, k = 0, j, m, c, now, idx, before[K_SPAN_DEPTH];
+    k_spleaf *lf = NULL;
     if (cnt == 0 || nodes.hdr->len == 0) return len;
-    GS_SPSTART(&p, tree, nodes, at);
-    p.h = GS_SPCHEAD(&p)->height;
-    if (GS_SPBADH(p.h)) gs_spc_corrupt(&p);
-    i = GS_SPCHEAD(&p)->root;
+    K_SPSTART(&p, tree, nodes, at);
+    p.h = K_SPCHEAD(&p)->height;
+    if (K_SPBADH(p.h)) k_spc_corrupt(&p);
+    i = K_SPCHEAD(&p)->root;
     for (l = 0; l < p.h; l++) {
-        gs_spinner *in;
-        if (GS_SPBADIN(&p, i)) gs_spc_corrupt(&p);
-        in = GS_SPINNER(&p, i);
+        k_spinner *in;
+        if (K_SPBADIN(&p, i)) k_spc_corrupt(&p);
+        in = K_SPINNER(&p, i);
         for (k = 0, m = 0; k < in->n && in->max[k] < cnt; k++)
             if (in->max[k] > m) m = in->max[k];
         if (k == in->n) break;
@@ -1172,28 +1172,28 @@ GS_API int64_t gs_slice_pool_place(gs_rref nodes, void *tree, int64_t len, int64
         i = in->child[k];
     }
     if (l == p.h) {
-        if (GS_SPBADLEAF(&p, i)) gs_spc_corrupt(&p);
-        lf = GS_SPLEAF(&p, i);
+        if (K_SPBADLEAF(&p, i)) k_spc_corrupt(&p);
+        lf = K_SPLEAF(&p, i);
         for (k = 0, m = 0; k < lf->n && lf->cnt[k] < cnt; k++)
             if (lf->cnt[k] > m) m = lf->cnt[k];
         before[l] = m;
     }
     if (l < p.h || k == lf->n) {
-        for (l = 0, i = GS_SPCHEAD(&p)->root; l < p.h; l++) {
-            gs_spinner *in;
-            if (GS_SPBADIN(&p, i)) gs_spc_corrupt(&p);
-            in = GS_SPINNER(&p, i);
+        for (l = 0, i = K_SPCHEAD(&p)->root; l < p.h; l++) {
+            k_spinner *in;
+            if (K_SPBADIN(&p, i)) k_spc_corrupt(&p);
+            in = K_SPINNER(&p, i);
             p.node[l] = i;
             p.pos[l] = in->n - 1;
             i = in->child[in->n - 1];
         }
         p.node[p.h] = i;
-        if (GS_SPBADLEAF(&p, i)) gs_spc_corrupt(&p);
-        lf = GS_SPLEAF(&p, i);
+        if (K_SPBADLEAF(&p, i)) k_spc_corrupt(&p);
+        lf = K_SPLEAF(&p, i);
         k = lf->n - 1;
-        if (k < 0 || GS_SPSUM(lf->idx[k], lf->cnt[k]) != len) return len;
+        if (k < 0 || K_SPSUM(lf->idx[k], lf->cnt[k]) != len) return len;
         idx = lf->idx[k];
-        gs_spc_take(&p, k, cnt);
+        k_spc_take(&p, k, cnt);
         return idx;
     }
     p.node[p.h] = i;
@@ -1201,24 +1201,24 @@ GS_API int64_t gs_slice_pool_place(gs_rref nodes, void *tree, int64_t len, int64
     idx = lf->idx[k];
     c = lf->cnt[k];
     if (c > cnt) {
-        lf->idx[k] = GS_SPSUM(idx, cnt);
+        lf->idx[k] = K_SPSUM(idx, cnt);
         lf->cnt[k] = now = c - cnt;
         j = k + 1;
     } else if (lf->n > 1 || p.h == 0) {
-        gs_spc_close(&p, lf, k);
+        k_spc_close(&p, lf, k);
         now = 0;
         j = k;
     } else {
-        gs_spc_delete(&p, k);
+        k_spc_delete(&p, k);
         return idx;
     }
     for (l = p.h; l > 0; l--) {
-        gs_spinner *in = GS_SPINNER(&p, p.node[l - 1]);
+        k_spinner *in = K_SPINNER(&p, p.node[l - 1]);
         int64_t e = p.pos[l - 1], mx = in->max[e], nm = mx;
-        int64_t key = gs_spc_key(&p, p.node[l], l == p.h);
+        int64_t key = k_spc_key(&p, p.node[l], l == p.h);
         if (c == mx) {
-            const int64_t *v = l == p.h ? lf->cnt : GS_SPINNER(&p, p.node[l])->max;
-            int64_t w = l == p.h ? lf->n : GS_SPINNER(&p, p.node[l])->n;
+            const int64_t *v = l == p.h ? lf->cnt : K_SPINNER(&p, p.node[l])->max;
+            int64_t w = l == p.h ? lf->n : K_SPINNER(&p, p.node[l])->n;
             nm = before[l] > now ? before[l] : now;
             for (; j < w && nm < c; j++)
                 if (v[j] > nm) nm = v[j];
@@ -1234,15 +1234,15 @@ GS_API int64_t gs_slice_pool_place(gs_rref nodes, void *tree, int64_t len, int64
 }
 
 typedef struct {
-    gs_spleaf *lf, *nl;
+    k_spleaf *lf, *nl;
     int64_t k, nk;
-    gs_spcpath *np;
-} gs_spcnear;
+    k_spcpath *np;
+} k_spcnear;
 
-static void gs_spc_near(gs_spcpath *p, gs_spcpath *q, int64_t idx, int64_t end, gs_spcnear *s) {
+static void k_spc_near(k_spcpath *p, k_spcpath *q, int64_t idx, int64_t end, k_spcnear *s) {
     int64_t l;
-    s->k = gs_spc_find(p, idx);
-    s->lf = GS_SPLEAF(p, p->node[p->h]);
+    s->k = k_spc_find(p, idx);
+    s->lf = K_SPLEAF(p, p->node[p->h]);
     s->nl = NULL;
     s->nk = -1;
     s->np = p;
@@ -1251,8 +1251,8 @@ static void gs_spc_near(gs_spcpath *p, gs_spcpath *q, int64_t idx, int64_t end, 
         s->nk = s->k + 1;
         return;
     }
-    for (l = p->h - 1; l >= 0 && p->pos[l] + 1 >= GS_SPINNER(p, p->node[l])->n; l--) {}
-    if (l < 0 || GS_SPINNER(p, p->node[l])->key[p->pos[l] + 1] != end) return;
+    for (l = p->h - 1; l >= 0 && p->pos[l] + 1 >= K_SPINNER(p, p->node[l])->n; l--) {}
+    if (l < 0 || K_SPINNER(p, p->node[l])->key[p->pos[l] + 1] != end) return;
     q->hd = p->hd;
     q->base = p->base;
     q->n = p->n;
@@ -1262,78 +1262,78 @@ static void gs_spc_near(gs_spcpath *p, gs_spcpath *q, int64_t idx, int64_t end, 
     memcpy(q->node, p->node, (size_t)(l + 1) * 8);
     memcpy(q->pos, p->pos, (size_t)(l + 1) * 8);
     for (q->pos[l]++; l < q->h; l++) {
-        int64_t c = GS_SPINNER(q, q->node[l])->child[q->pos[l]];
-        if (l + 1 < q->h ? GS_SPBADIN(q, c) : GS_SPBADLEAF(q, c)) gs_spc_corrupt(q);
+        int64_t c = K_SPINNER(q, q->node[l])->child[q->pos[l]];
+        if (l + 1 < q->h ? K_SPBADIN(q, c) : K_SPBADLEAF(q, c)) k_spc_corrupt(q);
         q->node[l + 1] = c;
         q->pos[l + 1] = 0;
     }
     s->np = q;
-    s->nl = GS_SPLEAF(q, q->node[q->h]);
+    s->nl = K_SPLEAF(q, q->node[q->h]);
     s->nk = 0;
 }
 
-static void gs_spc_release(gs_spcpath *p, gs_spcnear *s, int64_t idx, int64_t cnt) {
-    gs_spleaf *lf = s->lf, *nl = s->nl;
+static void k_spc_release(k_spcpath *p, k_spcnear *s, int64_t idx, int64_t cnt) {
+    k_spleaf *lf = s->lf, *nl = s->nl;
     int64_t k = s->k, nk = s->nk;
-    int prev = k >= 0 && GS_SPSUM(lf->idx[k], lf->cnt[k]) == idx;
+    int prev = k >= 0 && K_SPSUM(lf->idx[k], lf->cnt[k]) == idx;
     int next = nl && idx + cnt == nl->idx[nk];
     if (prev) {
-        int64_t c = lf->cnt[k], m = GS_SPSUM(GS_SPSUM(c, cnt), next ? nl->cnt[nk] : 0);
+        int64_t c = lf->cnt[k], m = K_SPSUM(K_SPSUM(c, cnt), next ? nl->cnt[nk] : 0);
         lf->cnt[k] = m;
-        if (next && nl == lf) gs_spc_close(p, lf, nk);
-        gs_spc_fix(p, p->h, c, m);
-        if (next && nl != lf) gs_spc_delete(s->np, nk);
+        if (next && nl == lf) k_spc_close(p, lf, nk);
+        k_spc_fix(p, p->h, c, m);
+        if (next && nl != lf) k_spc_delete(s->np, nk);
     } else if (next) {
         int64_t c = nl->cnt[nk];
         nl->idx[nk] = idx;
-        nl->cnt[nk] = GS_SPSUM(c, cnt);
-        gs_spc_fix(s->np, s->np->h, c, nl->cnt[nk]);
+        nl->cnt[nk] = K_SPSUM(c, cnt);
+        k_spc_fix(s->np, s->np->h, c, nl->cnt[nk]);
     } else {
-        gs_spc_insert(p, k + 1, idx, cnt);
+        k_spc_insert(p, k + 1, idx, cnt);
     }
 }
 
-GS_API void gs_slice_pool_free(gs_rref nodes, void *tree, int64_t idx, int64_t cnt,
-                               const gs_loc *at) {
-    gs_spcpath p, q;
-    gs_spcnear s;
+K_API void k_slice_pool_free(k_rref nodes, void *tree, int64_t idx, int64_t cnt,
+                               const k_loc *at) {
+    k_spcpath p, q;
+    k_spcnear s;
     if (cnt <= 0) return;
-    GS_SPSTART(&p, tree, nodes, at);
+    K_SPSTART(&p, tree, nodes, at);
     if (*p.n == 0) {
         /* Node 0 stays zero, the chain's end. */
-        memset(p.base, 0, GS_SPAN_NODE);
+        memset(p.base, 0, K_SPAN_NODE);
         *p.n = 1;
-        *p.top = p.base + GS_SPAN_NODE;
+        *p.top = p.base + K_SPAN_NODE;
         p.hd->chain = 0;
         p.hd->height = 0;
-        p.hd->root = gs_spc_newnode(&p);
+        p.hd->root = k_spc_newnode(&p);
     }
-    gs_spc_near(&p, &q, idx, idx + cnt, &s);
-    gs_spc_release(&p, &s, idx, cnt);
+    k_spc_near(&p, &q, idx, idx + cnt, &s);
+    k_spc_release(&p, &s, idx, cnt);
 }
 
-GS_API int64_t gs_slice_pool_regrow(gs_rref nodes, void *tree, int64_t len, int64_t idx,
-                                    int64_t ol, int64_t cnt, const gs_loc *at) {
-    gs_spcpath p, q;
-    gs_spcnear s;
+K_API int64_t k_slice_pool_regrow(k_rref nodes, void *tree, int64_t len, int64_t idx,
+                                    int64_t ol, int64_t cnt, const k_loc *at) {
+    k_spcpath p, q;
+    k_spcnear s;
     int64_t end = idx + ol;
     if (nodes.hdr->len == 0) {
-        gs_slice_pool_free(nodes, tree, idx, ol, at);
-        return gs_slice_pool_place(nodes, tree, len, cnt, at);
+        k_slice_pool_free(nodes, tree, idx, ol, at);
+        return k_slice_pool_place(nodes, tree, len, cnt, at);
     }
-    GS_SPSTART(&p, tree, nodes, at);
-    gs_spc_near(&p, &q, idx, end, &s);
+    K_SPSTART(&p, tree, nodes, at);
+    k_spc_near(&p, &q, idx, end, &s);
     if (s.nl && s.nl->idx[s.nk] == end &&
-        (s.nl->cnt[s.nk] >= cnt - ol || GS_SPSUM(end, s.nl->cnt[s.nk]) == len)) {
-        gs_spc_take(s.np, s.nk, cnt - ol);
+        (s.nl->cnt[s.nk] >= cnt - ol || K_SPSUM(end, s.nl->cnt[s.nk]) == len)) {
+        k_spc_take(s.np, s.nk, cnt - ol);
         return idx;
     }
-    gs_spc_release(&p, &s, idx, ol);
-    return gs_slice_pool_place(nodes, tree, len, cnt, at);
+    k_spc_release(&p, &s, idx, ol);
+    return k_slice_pool_place(nodes, tree, len, cnt, at);
 }
 
 /* slice_pool's trim: returns the complete pages inside every free span to
-   the OS (gs_discard_pages), which reads them back as zeros. `items` is the
+   the OS (k_discard_pages), which reads them back as zeros. `items` is the
    pool's array viewed as bytes and `elem` its element size, so the span
    (idx, cnt) covers bytes [idx * elem, (idx + cnt) * elem). Free spans never
    touch, since a free merges with its neighbours, so each span is whole: a
@@ -1342,46 +1342,46 @@ GS_API int64_t gs_slice_pool_regrow(gs_rref nodes, void *tree, int64_t len, int6
    The walk visits each node once, so a tree whose children lead back to
    nodes already seen is corrupt, as is a span outside the array; both abort
    before anything is discarded past them. Pages are discarded below the
-   array's stack top only, so gs_trim_memory's commit mark is not moved.
+   array's stack top only, so k_trim_memory's commit mark is not moved.
    0 means an OS request failed. */
-GS_API uint8_t gs_slice_pool_trim(gs_rref nodes, void *tree, sl_u8 items, int64_t elem,
-                                  const gs_loc *at) {
-    gs_spcpath p;
-    uintptr_t page = (uintptr_t)gs_page_size;
+K_API uint8_t k_slice_pool_trim(k_rref nodes, void *tree, sl_u8 items, int64_t elem,
+                                  const k_loc *at) {
+    k_spcpath p;
+    uintptr_t page = (uintptr_t)k_page_size;
     int64_t count, visits = 0, l = 0;
     int ok = 1;
     if (nodes.hdr->len == 0 || items.len <= 0 || elem <= 0 || page == 0) return 1;
     count = items.len / elem;
-    GS_SPSTART(&p, tree, nodes, at);
-    p.h = GS_SPCHEAD(&p)->height;
-    if (GS_SPBADH(p.h)) gs_spc_corrupt(&p);
-    p.node[0] = GS_SPCHEAD(&p)->root;
+    K_SPSTART(&p, tree, nodes, at);
+    p.h = K_SPCHEAD(&p)->height;
+    if (K_SPBADH(p.h)) k_spc_corrupt(&p);
+    p.node[0] = K_SPCHEAD(&p)->root;
     p.pos[0] = 0;
-    if (p.h ? GS_SPBADIN(&p, p.node[0]) : GS_SPBADLEAF(&p, p.node[0])) gs_spc_corrupt(&p);
+    if (p.h ? K_SPBADIN(&p, p.node[0]) : K_SPBADLEAF(&p, p.node[0])) k_spc_corrupt(&p);
     while (l >= 0) {
         if (l == p.h) {
-            gs_spleaf *lf = GS_SPLEAF(&p, p.node[l]);
-            if (++visits >= *p.n) gs_spc_corrupt(&p);
+            k_spleaf *lf = K_SPLEAF(&p, p.node[l]);
+            if (++visits >= *p.n) k_spc_corrupt(&p);
             for (int64_t k = 0; k < lf->n; k++) {
                 int64_t idx = lf->idx[k], cnt = lf->cnt[k];
-                if (idx < 0 || cnt <= 0 || idx > count || cnt > count - idx) gs_spc_corrupt(&p);
+                if (idx < 0 || cnt <= 0 || idx > count || cnt > count - idx) k_spc_corrupt(&p);
                 uintptr_t lo = (uintptr_t)items.data + (uintptr_t)(idx * elem);
                 uintptr_t hi = (uintptr_t)items.data + (uintptr_t)((idx + cnt) * elem);
                 uintptr_t start = (lo + page - 1) / page * page;
                 uintptr_t end = hi / page * page;
-                if (start < end && !gs_discard_pages(start, (size_t)(end - start))) ok = 0;
+                if (start < end && !k_discard_pages(start, (size_t)(end - start))) ok = 0;
             }
             l--;
             continue;
         }
-        gs_spinner *in = GS_SPINNER(&p, p.node[l]);
-        if (p.pos[l] == 0 && ++visits >= *p.n) gs_spc_corrupt(&p);
+        k_spinner *in = K_SPINNER(&p, p.node[l]);
+        if (p.pos[l] == 0 && ++visits >= *p.n) k_spc_corrupt(&p);
         if (p.pos[l] >= in->n) {
             l--;
             continue;
         }
         int64_t c = in->child[p.pos[l]++];
-        if (l + 1 < p.h ? GS_SPBADIN(&p, c) : GS_SPBADLEAF(&p, c)) gs_spc_corrupt(&p);
+        if (l + 1 < p.h ? K_SPBADIN(&p, c) : K_SPBADLEAF(&p, c)) k_spc_corrupt(&p);
         l++;
         p.node[l] = c;
         p.pos[l] = 0;

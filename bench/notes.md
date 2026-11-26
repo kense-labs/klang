@@ -12,9 +12,9 @@ was rebuilt in Release from `f6d31d0e`, with the benchmark source changes in
 this refresh and no optional native packages:
 
 ```powershell
-cmake -S . -B build-bench-refresh -DKLANG_BUILTIN_LIBS=
+cmake -S . -B build-bench-refresh -DK_BUILTIN_LIBS=
 cmake --build build-bench-refresh --config Release --parallel 1 -- /nodeReuse:false
-python bench/run_bench.py --exe build-bench-refresh/Release/klang.exe
+python bench/run_bench.py --exe build-bench-refresh/Release/k.exe
 ```
 
 The default measurement policy is unchanged: two warm-ups, then the best

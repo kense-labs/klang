@@ -17,12 +17,12 @@ function compilerPath(configured, folder) {
         const expanded = expand(configured, folder, '');
         return /[\\/]/.test(expanded) ? path.resolve(folder, expanded) : expanded;
     }
-    const name = process.platform === 'win32' ? 'klang.exe' : 'klang';
+    const name = process.platform === 'win32' ? 'k.exe' : 'k';
     for (const relative of [name, `build/Release/${name}`, `build/Debug/${name}`, `build/${name}`]) {
         const candidate = path.join(folder, relative);
         if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
     }
-    return 'klang';
+    return 'k';
 }
 
 function settings(vscode, uri, definition = {}, taskFolder) {
@@ -45,7 +45,7 @@ function settings(vscode, uri, definition = {}, taskFolder) {
 // asks for its errors and warnings as JSON on stdout (docs/implementation.md
 // §1), which a compiler without the flag rejects.
 function argumentsFor(action, config, options = {}) {
-    // `klang check` and `klang build` are verbs, which come first; the rest are flags.
+    // `k check` and `k build` are verbs, which come first; the rest are flags.
     const args = action === 'build' || action === 'check' ? [action] : [];
     if (options.diagnostics) args.push('--diagnostics', options.diagnostics);
     if (config.stdlib) args.push('--stdlib', config.stdlib);
@@ -67,7 +67,7 @@ function stdlibDirectories(config, env = process.env) {
             .flatMap(dir => names.map(name => path.resolve(dir, name)))
             .find(candidate => fs.existsSync(candidate)) || '';
     }
-    const dirs = [config.stdlib, env.KLANG_STDLIB].filter(Boolean)
+    const dirs = [config.stdlib, env.K_STDLIB].filter(Boolean)
         .map(dir => path.resolve(config.cwd, dir));
     if (executable) {
         for (let i = 0; i < 4; i++) {

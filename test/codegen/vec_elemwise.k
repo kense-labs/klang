@@ -1,13 +1,13 @@
 // Elementwise arithmetic (spec §6.1) on the shapes the C backend computes
-// as one vector where the C compiler has vector extensions (GS_VEC,
+// as one vector where the C compiler has vector extensions (K_VEC,
 // runtime.h): structs and fixed arrays of 2 to 16 floats of one width in 16,
 // 32 or 64 bytes with no padding. Lane by lane that must give exactly what
 // the member-by-member code gives, so every build prints the same: clang and
-// gcc with and without GS_VEC, MSVC and the JIT, which never vectorize. The
+// gcc with and without K_VEC, MSVC and the JIT, which never vectorize. The
 // shapes next to them that don't qualify (three doubles, mixed widths,
 // integers) run member by member everywhere. Simd functions do the same
 // arithmetic in their AVX2 and AVX-512 versions. The runner's clang_vec also
-// checks which shapes the generated C vectorizes and builds it with GS_VEC
+// checks which shapes the generated C vectorizes and builds it with K_VEC
 // on and off; the simd functions are what failed to compile on x86-64 Linux
 // and macOS when vectors crossed a call.
 

@@ -87,7 +87,7 @@ static const char *shaderc_display(const char *path, void *user) {
 }
 
 static const char *stage_name(int stage) {
-    return stage == GS_GFX_STAGE_VERTEX ? "vertex" : stage == GS_GFX_STAGE_FRAGMENT ? "fragment"
+    return stage == K_GFX_STAGE_VERTEX ? "vertex" : stage == K_GFX_STAGE_FRAGMENT ? "fragment"
                                                                                    : "compute";
 }
 
@@ -152,7 +152,7 @@ static char *check_bindings(const char *path, int stage, const CSPV_Reflection *
         ub[i].readonly = true;
     }
     char *err = NULL;
-    if (stage == GS_GFX_STAGE_COMPUTE) {
+    if (stage == K_GFX_STAGE_COMPUTE) {
         const char *rule = "SDL_GPU compute sets: 0 holds samplers, then read-only storage "
                            "textures, then read-only storage buffers; 1 read-write storage "
                            "textures, then read-write storage buffers; 2 uniform blocks";
@@ -170,8 +170,8 @@ static char *check_bindings(const char *path, int stage, const CSPV_Reflection *
         if (!err) err = check_class(path, stage, &uni, ub, nu, rule);
         return err;
     }
-    int rs = stage == GS_GFX_STAGE_VERTEX ? 0 : 2;
-    const char *rule = stage == GS_GFX_STAGE_VERTEX
+    int rs = stage == K_GFX_STAGE_VERTEX ? 0 : 2;
+    const char *rule = stage == K_GFX_STAGE_VERTEX
         ? "SDL_GPU vertex sets: 0 holds samplers, then storage textures, then storage "
           "buffers; 1 uniform blocks"
         : "SDL_GPU fragment sets: 2 holds samplers, then storage textures, then storage "
@@ -196,10 +196,10 @@ static char *check_bindings(const char *path, int stage, const CSPV_Reflection *
 /* The blob, per src/gfx_blob.h. */
 static unsigned char *write_blob(int stage, const CSPV_Result *r, size_t *size) {
     const CSPV_Reflection *rf = &r->reflection;
-    gs_gfx_blob_header h;
+    k_gfx_blob_header h;
     memset(&h, 0, sizeof h);
-    memcpy(h.magic, GS_GFX_BLOB_MAGIC, 4);
-    h.version = GS_GFX_BLOB_VERSION;
+    memcpy(h.magic, K_GFX_BLOB_MAGIC, 4);
+    h.version = K_GFX_BLOB_VERSION;
     h.stage = (uint8_t)stage;
     int ninputs = (int)asize(rf->inputs);
     h.num_inputs = (uint8_t)ninputs;
@@ -216,7 +216,7 @@ static unsigned char *write_blob(int stage, const CSPV_Result *r, size_t *size) 
     int nu = (int)asize(rf->uniform_blocks);
     h.num_uniform_buffers = (uint16_t)nu;
     size_t msl_len = strlen(r->msl), hlsl_len = strlen(r->hlsl);
-    size_t off = sizeof h + 4 * (size_t)nu + sizeof(gs_gfx_blob_input) * (size_t)ninputs;
+    size_t off = sizeof h + 4 * (size_t)nu + sizeof(k_gfx_blob_input) * (size_t)ninputs;
     off = (off + 3) & ~(size_t)3;
     h.spirv_offset = (uint32_t)off;
     h.spirv_size = (uint32_t)(r->word_count * 4);
@@ -240,7 +240,7 @@ static unsigned char *write_blob(int stage, const CSPV_Result *r, size_t *size) 
         p += 4;
     }
     for (int i = 0; i < ninputs; i++) {
-        gs_gfx_blob_input in;
+        k_gfx_blob_input in;
         in.location = (uint8_t)rf->inputs[i].location;
         in.type = (uint8_t)rf->inputs[i].type;
         memcpy(p, &in, sizeof in);
@@ -274,8 +274,8 @@ static char *check_inputs(const char *path, const CSPV_Reflection *rf) {
     return NULL;
 }
 
-gs_shaderc_result gs_shaderc_compile(const char *source, const char *path, int stage) {
-    gs_shaderc_result res;
+k_shaderc_result k_shaderc_compile(const char *source, const char *path, int stage) {
+    k_shaderc_result res;
     memset(&res, 0, sizeof res);
     shaderc_includes inc;
     memset(&inc, 0, sizeof inc);
@@ -293,8 +293,8 @@ gs_shaderc_result gs_shaderc_compile(const char *source, const char *path, int s
     opts.user = &inc;
     opts.emit_hlsl = true;
     opts.emit_msl = true;
-    CSPV_Stage cs = stage == GS_GFX_STAGE_VERTEX ? CSPV_STAGE_VERTEX
-                  : stage == GS_GFX_STAGE_FRAGMENT ? CSPV_STAGE_FRAGMENT : CSPV_STAGE_COMPUTE;
+    CSPV_Stage cs = stage == K_GFX_STAGE_VERTEX ? CSPV_STAGE_VERTEX
+                  : stage == K_GFX_STAGE_FRAGMENT ? CSPV_STAGE_FRAGMENT : CSPV_STAGE_COMPUTE;
     CSPV_Result r = cspv_compile_ex(source, cs, &opts);
     if (!r.success) {
         /* cute_spirv calls the file it was handed "shader". */
@@ -303,7 +303,7 @@ gs_shaderc_result gs_shaderc_compile(const char *source, const char *path, int s
         else res.error = shaderc_strdup(msg);
     } else {
         res.error = check_bindings(path, stage, &r.reflection);
-        if (!res.error && stage == GS_GFX_STAGE_VERTEX) res.error = check_inputs(path, &r.reflection);
+        if (!res.error && stage == K_GFX_STAGE_VERTEX) res.error = check_inputs(path, &r.reflection);
         if (!res.error) res.blob = write_blob(stage, &r, &res.size);
     }
     cspv_free(&r);
@@ -317,7 +317,7 @@ gs_shaderc_result gs_shaderc_compile(const char *source, const char *path, int s
     return res;
 }
 
-void gs_shaderc_free(gs_shaderc_result *r) {
+void k_shaderc_free(k_shaderc_result *r) {
     free(r->blob);
     free(r->error);
     r->blob = NULL;

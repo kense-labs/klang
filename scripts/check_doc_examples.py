@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compile every ```klang block of a markdown document with the compiler.
 
-    python scripts/check_doc_examples.py docs/reference.md [--run] [--exe build/klang] [-v]
+    python scripts/check_doc_examples.py docs/reference.md [--run] [--exe build/k] [-v]
 
 A block compiles as written or, failing that, wrapped: `import std;` in
 front, the block inside `fn main() { }`, or an empty `fn main() {}` after
@@ -38,7 +38,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def find_compiler():
-    exe = "klang.exe" if sys.platform == "win32" else "klang"
+    exe = "k.exe" if sys.platform == "win32" else "k"
     for d in ("build/Release", "build/RelWithDebInfo", "build", "build/Debug"):
         p = os.path.join(ROOT, d, exe)
         if os.path.exists(p):

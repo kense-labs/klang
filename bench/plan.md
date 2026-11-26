@@ -205,7 +205,7 @@ counter. Two compiler items and one language question follow:
 
 * **Skip the range check where the width covers the stack.** A `u32` offset
   is exact for any pool under 2 GB; the runtime reservation size is a
-  compile-time constant (`GS_STACK_RESERVE`), so the check can be emitted
+  compile-time constant (`K_STACK_RESERVE`), so the check can be emitted
   only when it exceeds the width. This is worth up to 11-12% here and
   nothing on the build-once rows (`bintrees` with `u64` links times the same
   as `u32`).
@@ -229,7 +229,7 @@ counter. Two compiler items and one language question follow:
 
 `calc` with `Num { v: i32 }` instead of `varint` runs in 487 ms against 548
 (-11%). The decoder is not the problem: a single-byte fast path added by
-hand to `gs_uleb_read` made the row *slower* (599 ms; the extra branch costs
+hand to `k_uleb_read` made the row *slower* (599 ms; the extra branch costs
 more than the loop it skips). The cost is that of a decode compared with a
 load, paid once per evaluated number. This has two consequences. First, the
 language guidance should say that `varint` is for values with a wide or

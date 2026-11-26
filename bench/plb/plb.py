@@ -45,7 +45,7 @@ import toolchain as tc  # noqa: E402
 IS_WINDOWS = os.name == "nt"
 # What a program's runtime links besides libm and threads: dlopen, in libdl on
 # Linux before glibc 2.34.
-KLANG_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
+K_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
 EXE = ".exe" if IS_WINDOWS else ""
 LANGS = ["klang", "rust", "c", "cpp"]
 
@@ -54,10 +54,10 @@ CFLAGS = ["-O3", "-fomit-frame-pointer", "-march=broadwell", "-w"] + \
     (["-fstrict-aliasing"] if IS_WINDOWS else [])
 CXXFLAGS = CFLAGS + ["-std=c++20"]
 OPENMP = ["-fopenmp"]
-KLANG_FLAGS = ["-O2"]
+K_FLAGS = ["-O2"]
 # The references are built for broadwell, and PLB's machines have no AVX-512,
-# so `simd fn` versions stop at AVX2 unless --cflags=-DGS_SIMD=2 asks for more.
-KLANG_CFLAGS = CFLAGS + ["-DGS_SIMD=1"]
+# so `simd fn` versions stop at AVX2 unless --cflags=-DK_SIMD=2 asks for more.
+K_CFLAGS = CFLAGS + ["-DK_SIMD=1"]
 
 
 def find_plb():
@@ -130,12 +130,12 @@ def openmp_libs():
     return [], None
 
 
-def klang_exe():
+def k_exe():
     for sub in ("Release", "", "RelWithDebInfo", "Debug"):
-        p = REPO / "build" / sub / ("klang" + EXE)
+        p = REPO / "build" / sub / ("k" + EXE)
         if p.exists():
             return p
-    sys.exit("no klang binary under build/")
+    sys.exit("no k binary under build/")
 
 
 def run(argv, cwd=None, env=None):
@@ -155,12 +155,12 @@ def build_klang(problem, src, args):
     exe = exe_path("klang", problem, src)
     exe.parent.mkdir(parents=True, exist_ok=True)
     cfile = exe.with_suffix(".c")
-    ok, out = run([args.k or klang_exe(), *KLANG_FLAGS, *args.klang_flags.split(), "--standalone",
+    ok, out = run([args.k or k_exe(), *K_FLAGS, *args.k_flags.split(), "--standalone",
                    "-o", cfile, HERE / problem / src])
     if not ok:
         return False, out
-    return run([cc, *KLANG_CFLAGS, *args.cflags.split(), cfile, "-o", exe] +
-               ([] if IS_WINDOWS else ["-lm", "-pthread"] + KLANG_LIBS))
+    return run([cc, *K_CFLAGS, *args.cflags.split(), cfile, "-o", exe] +
+               ([] if IS_WINDOWS else ["-lm", "-pthread"] + K_LIBS))
 
 
 def build_c(lang, problem, src, args):

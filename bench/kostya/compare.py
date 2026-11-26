@@ -37,11 +37,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 BUILD = HERE / "build"
-KLANG_SRC = HERE / "klang"
+K_SRC = HERE / "klang"
 IS_WINDOWS = os.name == "nt"
 # What a program's runtime links besides libm and threads: dlopen, in libdl on
 # Linux before glibc 2.34.
-KLANG_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
+K_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
 EXE = ".exe" if IS_WINDOWS else ""
 
 LANGS = ["klang", "rust", "cpp"]
@@ -87,12 +87,12 @@ def clang_tools():
     return cc, cxx
 
 
-def klang_exe():
+def k_exe():
     for sub in ("Release", "", "RelWithDebInfo", "Debug"):
-        p = REPO / "build" / sub / ("klang" + EXE)
+        p = REPO / "build" / sub / ("k" + EXE)
         if p.exists():
             return p
-    sys.exit("no klang binary under build/")
+    sys.exit("no k binary under build/")
 
 
 def run(argv, cwd=None, env=None, check=True):
@@ -107,8 +107,8 @@ def run(argv, cwd=None, env=None, check=True):
 # --- K ---------------------------------------------------------------------
 
 # The flags of klang/Makefile, which LangArena builds with.
-KLANG_FLAGS = ["-O2"]
-KLANG_CFLAGS = ["-O2", "-w"] + (["-fstrict-aliasing"] if os.name == "nt" else [])
+K_FLAGS = ["-O2"]
+K_CFLAGS = ["-O2", "-w"] + (["-fstrict-aliasing"] if os.name == "nt" else [])
 
 
 def build_klang(extra_klang=(), extra_cflags=(), tag="klang", entry="main.k", compiler=None, src=None):
@@ -117,10 +117,10 @@ def build_klang(extra_klang=(), extra_cflags=(), tag="klang", entry="main.k", co
     out.mkdir(parents=True, exist_ok=True)
     cfile = out / "benchmark.c"
     t0 = time.time()
-    run([compiler or klang_exe(), *KLANG_FLAGS, *extra_klang, "--standalone", "-o", cfile, Path(src or KLANG_SRC / "src") / entry])
+    run([compiler or k_exe(), *K_FLAGS, *extra_klang, "--standalone", "-o", cfile, Path(src or K_SRC / "src") / entry])
     t1 = time.time()
     exe = out / ("benchmark" + EXE)
-    run([cc, *KLANG_CFLAGS, *extra_cflags, cfile, "-o", exe] + ([] if IS_WINDOWS else ["-lm", "-pthread"] + KLANG_LIBS))
+    run([cc, *K_CFLAGS, *extra_cflags, cfile, "-o", exe] + ([] if IS_WINDOWS else ["-lm", "-pthread"] + K_LIBS))
     print(f"klang: {exe} (klang {t1 - t0:.1f}s, clang {time.time() - t1:.1f}s)")
     return exe
 
@@ -403,7 +403,7 @@ def main():
     if args.cmd == "build":
         for l in args.langs or LANGS:
             if l == "klang":
-                build_klang(args.klang_flags.split(), args.cflags.split(), args.tag, args.entry, args.k, args.src)
+                build_klang(args.k_flags.split(), args.cflags.split(), args.tag, args.entry, args.k, args.src)
             else:
                 {"rust": build_rust, "cpp": build_cpp}[l]()
     elif args.cmd == "test":

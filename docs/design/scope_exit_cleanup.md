@@ -383,7 +383,7 @@ the target.
 What can go wrong is **any long-distance return machinery running while a
 long-distance return is in flight**. Today nothing executes between a
 `return … from` and its catch except epilogues, and the propagation state
-relies on that: `gs_rf` is one thread-local flag, and the channels are per
+relies on that: `k_rf` is one thread-local flag, and the channels are per
 target. A defer body in an intermediate frame runs in exactly that window.
 
 A deferred body that performs or propagates a long-distance return would
@@ -392,15 +392,15 @@ inside the frame's `PropagateReturn`.
 
 A **contained** throw can also overwrite that flag. If a callee both throws and
 catches internally, its `hasrf` is false because it does not propagate. Its
-throw still writes `gs_rf`, and its catch clears it (`EmitRfCheck` sets `gs_rf =
+throw still writes `k_rf`, and its catch clears it (`EmitRfCheck` sets `k_rf =
 0` where propagation ends). The intermediate frame then finishes
-`PropagateReturn` with `gs_rf == 0`. Its caller sees no propagation and accepts
+`PropagateReturn` with `k_rf == 0`. Its caller sees no propagation and accepts
 the dummy return value as a real result, without an error. For example, `defer
 close(x)` would silently miscompile if `close` used `exception::try` three calls
 down.
 
 A callee that re-enters the target of the pending return could also overwrite
-that target's `gs_lret` and `gs_fval` channels if its inner return fires. For
+that target's `k_lret` and `k_fval` channels if its inner return fires. For
 these reasons, forbidding calls to propagating specializations is not enough.
 
 This is C++'s "destructors must not throw", and unlike C++ it can be a
@@ -417,12 +417,12 @@ compile-time rule, in one of two strengths:
   interaction needs no runtime state: nothing executes during propagation
   except epilogues, and defers are part of the epilogue. The drawback is
   that a cleanup cannot call code that uses exceptions internally.
-* **Save and restore.** Alternatively, each body runs with `gs_rf` saved,
+* **Save and restore.** Alternatively, each body runs with `k_rf` saved,
   cleared and restored around it, which admits contained try/throw with
   *other* targets, since their channels are distinct. It does not cover a
   body that re-enters the in-flight target, because the body would
   overwrite that target's channels. Covering that case needs either saving
-  that target's channels too (chosen at run time by `gs_rf`), or a check
+  that target's channels too (chosen at run time by `k_rf`), or a check
   that the targets the body can reach internally are disjoint from the
   targets that can pass through the frame. Escaping propagation stays
   forbidden under either strength, since it would start a `PropagateReturn`
@@ -499,7 +499,7 @@ The body is a block, checked as though written at the end of its scope:
 
 An `abort`, a failed `assert` or bounds check, `exit(code)` and a guard-page
 hit end the process, and the operating system reclaims files and GPU
-objects. A contained worker's abort returns to `gs_run_contained` through
+objects. A contained worker's abort returns to `k_run_contained` through
 `setjmp`/`longjmp`
 (`src/runtime/runtime_threads.h`), discarding the
 worker's frames without running anything, so §11.2's statement that

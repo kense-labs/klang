@@ -25,10 +25,10 @@ fn u32be(data: const u8[:], at: i64) -> u32 { (u16be(data, at) as u32 << 16) | u
 fn u64be(data: const u8[:], at: i64) -> u64 { (u32be(data, at) as u64 << 32) | u32be(data, at + 4) }
 
 // Floats keep their bits exactly, NaN payloads included.
-extern fn f32_of_bits(bits: u32) -> f32 = "gs_f32_from_bits";
-extern fn f64_of_bits(bits: u64) -> f64 = "gs_f64_from_bits";
-extern fn bits_of_f32(v: f32) -> u32 = "gs_f32_to_bits";
-extern fn bits_of_f64(v: f64) -> u64 = "gs_f64_to_bits";
+extern fn f32_of_bits(bits: u32) -> f32 = "k_f32_from_bits";
+extern fn f64_of_bits(bits: u64) -> f64 = "k_f64_from_bits";
+extern fn bits_of_f32(v: f32) -> u32 = "k_f32_to_bits";
+extern fn bits_of_f64(v: f64) -> u64 = "k_f64_to_bits";
 
 fn read_u8(data: const u8[:], at: i64) -> u8, bool {
     if !range_ok(data, at, 1) { return 0, false; }

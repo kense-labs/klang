@@ -1,6 +1,6 @@
 // A program with C of its own: the sidecar pkg_own_c.build names the C file
-// and a define (docs/design/packages.md §4.7, §5.1). klang build compiles
-// and links it; klang run builds it into a library the in-process run
+// and a define (docs/design/packages.md §4.7, §5.1). k build compiles
+// and links it; k run builds it into a library the in-process run
 // loads, and the extern fns reach it either way.
 import std;
 

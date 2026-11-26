@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # cleanly into a plain /MT program.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 
-add_executable(klang
+add_executable(k
     src/main.cpp
     src/process.cpp
     src/version.cpp
@@ -85,30 +85,30 @@ add_executable(klang
 # the same encoding as K strings. Windows 10 1903+ applies this before
 # the C runtime constructs argv; setlocale() in main would be too late.
 if(MSVC)
-    target_sources(klang PRIVATE src/klang.manifest)
+    target_sources(k PRIVATE src/klang.manifest)
 elseif(WIN32)
     enable_language(RC)
-    target_sources(klang PRIVATE src/klang.rc)
+    target_sources(k PRIVATE src/klang.rc)
     set_property(SOURCE src/klang.rc APPEND PROPERTY OBJECT_DEPENDS
                  "${CMAKE_CURRENT_SOURCE_DIR}/src/klang.manifest")
 endif()
 
-# The compiler's version (src/version.cpp): KLANG_VERSION where given, as a
+# The compiler's version (src/version.cpp): K_VERSION where given, as a
 # release gives its tag, else `git describe` of this tree at each build.
-set(KLANG_VERSION "" CACHE STRING "The compiler's version; empty for git describe")
-set(klang_version_h "${CMAKE_CURRENT_BINARY_DIR}/version/klang_version.h")
-add_custom_target(klang_version
-    COMMAND "${CMAKE_COMMAND}" "-DSRC=${CMAKE_CURRENT_SOURCE_DIR}" "-DOUT=${klang_version_h}"
-            "-DVERSION=${KLANG_VERSION}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake"
-    BYPRODUCTS "${klang_version_h}")
-add_dependencies(klang klang_version)
-target_include_directories(klang PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/version")
+set(K_VERSION "" CACHE STRING "The compiler's version; empty for git describe")
+set(k_version_h "${CMAKE_CURRENT_BINARY_DIR}/version/k_version.h")
+add_custom_target(k_version
+    COMMAND "${CMAKE_COMMAND}" "-DSRC=${CMAKE_CURRENT_SOURCE_DIR}" "-DOUT=${k_version_h}"
+            "-DVERSION=${K_VERSION}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake"
+    BYPRODUCTS "${k_version_h}")
+add_dependencies(k k_version)
+target_include_directories(k PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/version")
 
 # The compile runs on a thread of its own, with a larger stack (main.cpp).
 find_package(Threads REQUIRED)
-target_link_libraries(klang PRIVATE Threads::Threads)
+target_link_libraries(k PRIVATE Threads::Threads)
 # The library the process runner (process.cpp) is built on.
-target_include_directories(klang PRIVATE third_party/subprocess)
+target_include_directories(k PRIVATE third_party/subprocess)
 
 # A program run in-process runs on the main thread (main.cpp), whose stack the
 # executable sets: 64 MB reserved, as for the compile thread, where Windows
@@ -117,42 +117,42 @@ target_include_directories(klang PRIVATE third_party/subprocess)
 # without a size of its own (SDL's, a GPU driver's). A Linux main thread's
 # stack comes from the RLIMIT_STACK the process starts with (`ulimit -s`,
 # commonly 8 MB), which no link option sets.
-set(klang_main_stack 67108864)
+set(k_main_stack 67108864)
 if(MSVC)
-    target_link_options(klang PRIVATE "/STACK:${klang_main_stack}")
+    target_link_options(k PRIVATE "/STACK:${k_main_stack}")
 elseif(MINGW)
     # Statically link the runtime to avoid shipping libgcc, libstdc++, and libwinpthread DLLs.
-    target_link_options(klang PRIVATE "LINKER:--stack,${klang_main_stack}" -static -static-libgcc -static-libstdc++)
+    target_link_options(k PRIVATE "LINKER:--stack,${k_main_stack}" -static -static-libgcc -static-libstdc++)
 elseif(APPLE)
-    math(EXPR klang_main_stack_hex "${klang_main_stack}" OUTPUT_FORMAT HEXADECIMAL)
-    target_link_options(klang PRIVATE "LINKER:-stack_size,${klang_main_stack_hex}")
+    math(EXPR k_main_stack_hex "${k_main_stack}" OUTPUT_FORMAT HEXADECIMAL)
+    target_link_options(k PRIVATE "LINKER:-stack_size,${k_main_stack_hex}")
 endif()
 
 # The shader compiler behind embed_shader: third-party C (third_party/
 # cute_spirv), always built, so a gfx program typechecks and emits the same C
 # with or without SDL.
-add_library(klang_shaderc STATIC src/shaderc.c src/shaderc.h src/gfx_blob.h)
-target_include_directories(klang_shaderc PRIVATE third_party/cute_spirv)
+add_library(k_shaderc STATIC src/shaderc.c src/shaderc.h src/gfx_blob.h)
+target_include_directories(k_shaderc PRIVATE third_party/cute_spirv)
 if(MSVC)
     # ckit.h uses typeof and C11 atomics, which MSVC has only in its latest C
     # mode. /W0 as for TinyCC: third-party warnings are not ours to act on.
-    target_compile_options(klang_shaderc PRIVATE /W0 /std:clatest /experimental:c11atomics)
+    target_compile_options(k_shaderc PRIVATE /W0 /std:clatest /experimental:c11atomics)
 else()
-    set_target_properties(klang_shaderc PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
-    target_compile_options(klang_shaderc PRIVATE -w)
+    set_target_properties(k_shaderc PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
+    target_compile_options(k_shaderc PRIVATE -w)
 endif()
-target_link_libraries(klang PRIVATE klang_shaderc)
+target_link_libraries(k PRIVATE k_shaderc)
 
 # The in-process C backend: TinyCC, vendored under third_party/tinycc and
 # built into every compiler (cmake/libtcc.cmake).
 include(cmake/libtcc.cmake)
-target_link_libraries(klang PRIVATE libtcc)
-add_dependencies(klang tcc_runtime)
+target_link_libraries(k PRIVATE libtcc)
+add_dependencies(k tcc_runtime)
 
 # `value` as a C string literal in `out`. Paths reach the compiler as such
 # literals in generated headers rather than as -D definitions, which CMake
 # drops when they hold a '#' (a checkout under ~/#projects, say).
-function(klang_c_string out value)
+function(k_c_string out value)
     string(REPLACE "\\" "\\\\" value "${value}")
     string(REPLACE "\"" "\\\"" value "${value}")
     set(${out} "\"${value}\"" PARENT_SCOPE)
@@ -160,17 +160,17 @@ endfunction()
 
 # A packager sets this to where it installs tcclib/, so the binary names no
 # build directory. A tcclib/ beside the compiler still wins (src/jit.h).
-set(KLANG_TCC_LIB_PATH "${TCC_STAGE}" CACHE PATH "TinyCC's runtime directory")
+set(K_TCC_LIB_PATH "${TCC_STAGE}" CACHE PATH "TinyCC's runtime directory")
 # Likewise where it installs stdlib/. The compiler looks there after the
 # directories around its executable (StdlibDirs in src/main.cpp); empty, it
 # names no such directory.
-set(KLANG_STDLIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/stdlib" CACHE PATH "The standard library's directory")
-klang_c_string(klang_tcc_lib_path "${KLANG_TCC_LIB_PATH}")
-klang_c_string(klang_stdlib_path "${KLANG_STDLIB_PATH}")
+set(K_STDLIB_PATH "${CMAKE_CURRENT_SOURCE_DIR}/stdlib" CACHE PATH "The standard library's directory")
+k_c_string(k_tcc_lib_path "${K_TCC_LIB_PATH}")
+k_c_string(k_stdlib_path "${K_STDLIB_PATH}")
 file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/generated/build_paths.h" CONTENT
-     "// Generated by CMakeLists.txt: the paths this compiler was configured with.\n#pragma once\n\n#define KLANG_TCC_LIB_PATH @klang_tcc_lib_path@\n#define KLANG_STDLIB_PATH @klang_stdlib_path@\n"
+     "// Generated by CMakeLists.txt: the paths this compiler was configured with.\n#pragma once\n\n#define K_TCC_LIB_PATH @k_tcc_lib_path@\n#define K_STDLIB_PATH @k_stdlib_path@\n"
      @ONLY)
-target_include_directories(klang PRIVATE "${CMAKE_BINARY_DIR}/generated")
+target_include_directories(k PRIVATE "${CMAKE_BINARY_DIR}/generated")
 
 # C headers included explicitly by a program see the same small host interface
 # as generated C. These paths precede TinyCC's own compiler headers.
@@ -184,59 +184,59 @@ set(jit_symbols "")
 foreach(header runtime.h runtime_ext.h)
     set(path "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/${header}")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
-    file(STRINGS "${path}" declarations REGEX "^GS_API ")
+    file(STRINGS "${path}" declarations REGEX "^K_API ")
     foreach(declaration IN LISTS declarations)
-        if(declaration MATCHES "(gs_[A-Za-z0-9_]+)\\(")
-            string(APPEND jit_symbols "GS_JIT_SYMBOL(${CMAKE_MATCH_1})\n")
+        if(declaration MATCHES "(k_[A-Za-z0-9_]+)\\(")
+            string(APPEND jit_symbols "K_JIT_SYMBOL(${CMAKE_MATCH_1})\n")
         endif()
     endforeach()
 endforeach()
 file(CONFIGURE OUTPUT "${CMAKE_BINARY_DIR}/jit_symbols.inc" CONTENT "${jit_symbols}" @ONLY)
-target_sources(klang PRIVATE src/jit_runtime.c src/jit_runtime.h)
-target_include_directories(klang PRIVATE "${CMAKE_BINARY_DIR}")
-set_property(TARGET klang PROPERTY C_STANDARD 11)
+target_sources(k PRIVATE src/jit_runtime.c src/jit_runtime.h)
+target_include_directories(k PRIVATE "${CMAKE_BINARY_DIR}")
+set_property(TARGET k PROPERTY C_STANDARD 11)
 
-# The blessed packages KLANG_BUILTIN_LIBS names (src/blessed.txt; `all`, or
+# The blessed packages K_BUILTIN_LIBS names (src/blessed.txt; `all`, or
 # a list of their names), compiled into the compiler (cmake/package.cmake),
 # so that their programs run with nothing else installed. Empty by default:
-# the compiler builds alone, and a program importing one of them has it
-# fetched and built into KLANG_HOME on first use.
-set(KLANG_BUILTIN_LIBS "" CACHE STRING
+# the compiler builds alone, and a program importing one of them builds its
+# native part into K_HOME on first use.
+set(K_BUILTIN_LIBS "" CACHE STRING
     "Blessed packages to compile into the compiler: all, or a list of their names")
 include(cmake/package.cmake)
-klang_builtin_packages("${KLANG_BUILTIN_LIBS}")
-if(MSVC AND TARGET goose_gfx)
+k_builtin_packages("${K_BUILTIN_LIBS}")
+if(MSVC AND TARGET k_gfx)
     # The system DLLs static SDL brings into klang with the gfx package:
     # delay-loaded, so that a compiler run which never opens a window does
     # not load them.
     foreach(dll IN ITEMS user32 gdi32 winmm imm32 ole32 oleaut32 version setupapi shell32)
-        target_link_options(klang PRIVATE "/DELAYLOAD:${dll}.dll")
+        target_link_options(k PRIVATE "/DELAYLOAD:${dll}.dll")
     endforeach()
-    target_link_libraries(klang PRIVATE delayimp)
+    target_link_libraries(k PRIVATE delayimp)
 endif()
 
 if(MSVC)
     # /bigobj: the compiler is one translation unit of header-inline
     # functions, past the object format's default COMDAT section limit.
-    target_compile_options(klang PRIVATE /W4 /permissive- /utf-8 /EHsc /bigobj)
-    target_compile_definitions(klang PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(k PRIVATE /W4 /permissive- /utf-8 /EHsc /bigobj)
+    target_compile_definitions(k PRIVATE _CRT_SECURE_NO_WARNINGS)
 else()
     # -Wmissing-field-initializers (in -Wextra) fires on every aggregate
     # initialised with a prefix of its fields, which is deliberate throughout:
     # the rest are value-initialised.
-    target_compile_options(klang PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+    target_compile_options(k PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 endif()
 
-option(KLANG_BUILD_LSP_TESTS "Build deterministic language server tests" OFF)
-if(KLANG_BUILD_LSP_TESTS)
-    get_target_property(klang_lsp_sources klang SOURCES)
-    list(REMOVE_ITEM klang_lsp_sources src/main.cpp)
-    add_executable(klang_lsp_test test/lsp_server.cpp ${klang_lsp_sources})
+option(K_BUILD_LSP_TESTS "Build deterministic language server tests" OFF)
+if(K_BUILD_LSP_TESTS)
+    get_target_property(k_lsp_sources k SOURCES)
+    list(REMOVE_ITEM k_lsp_sources src/main.cpp)
+    add_executable(k_lsp_test test/lsp_server.cpp ${k_lsp_sources})
     foreach(prop INCLUDE_DIRECTORIES COMPILE_DEFINITIONS COMPILE_OPTIONS LINK_OPTIONS LINK_LIBRARIES)
-        set_property(TARGET klang_lsp_test PROPERTY ${prop} "$<TARGET_PROPERTY:klang,${prop}>")
+        set_property(TARGET k_lsp_test PROPERTY ${prop} "$<TARGET_PROPERTY:k,${prop}>")
     endforeach()
-    add_dependencies(klang_lsp_test tcc_runtime)
+    add_dependencies(k_lsp_test tcc_runtime)
     enable_testing()
-    add_test(NAME lsp_call_hierarchy COMMAND klang_lsp_test
+    add_test(NAME lsp_call_hierarchy COMMAND k_lsp_test
         "${CMAKE_CURRENT_SOURCE_DIR}/stdlib" "${CMAKE_CURRENT_BINARY_DIR}/lsp_calls.k")
 endif()

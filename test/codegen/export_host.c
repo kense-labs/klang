@@ -1,7 +1,7 @@
 /* The C host of export.k, built by run_tests.py with the C the compiler
-   writes for the program (--header): klang_init runs main, and then each
+   writes for the program (--header): k_init runs main, and then each
    export is called through its wrapper, the way C calls it. With the
-   argument "early", one is called before klang_init, which is a runtime
+   argument "early", one is called before k_init, which is a runtime
    error. */
 #include "export.h"
 #include <stdio.h>
@@ -17,11 +17,11 @@ int main(int argc, char **argv) {
         puts("not reached");
         return 0;
     }
-    klang_init(argc, argv);
-    gs_i64 len = 0;
+    k_init(argc, argv);
+    k_i64 len = 0;
     const uint8_t *hello = hello_world(&len);
     printf("c: %.*s %d\n", (int)len, (const char *)hello, (int)c_add(20, 22));
-    gs_i64 xs[4] = { 3, 1, 4, 1 };
+    k_i64 xs[4] = { 3, 1, 4, 1 };
     sl_i64 all = { xs, 4 }, mid = { xs + 1, 2 };
     printf("c: %lld %lld\n", (long long)c_weigh(all, 1), (long long)c_weigh(mid, 0));
     Wide_g w;
@@ -32,7 +32,7 @@ int main(int argc, char **argv) {
     w.a_g = 3;
     w.b_g = 4;
     printf("c: %lld\n", (long long)c_peek_wide(w));
-    klang_exit();
+    k_exit();
     puts("host done");
     return 0;
 }

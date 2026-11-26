@@ -6,7 +6,7 @@ coverage the suite promises to maintain. `main.k` imports the other thirteen
 modules. Only the compiler sources live here; the exploratory probes, reports,
 and standalone build/test scripts are not part of the fixture.
 
-The implementation was written from `docs/klang_spec.md`,
+The implementation was written from `docs/k_spec.md`,
 `docs/implementation.md`, K library interfaces/tests, and black-box host
 behavior, without inspecting the C++ implementation under `src/`. Its embedded
 C runtime is independent. It covers enough of the language to compile itself:
@@ -17,7 +17,7 @@ acceptance or rejection as the language's expected behavior.
 The normal suite runs this fixture automatically. To run just this regression:
 
 ```sh
-python test/run_tests.py --klang-in-klang-only --exe build/Release/klang.exe --cc native
+python test/run_tests.py --k-in-k-only --exe build/Release/k.exe --cc native
 ```
 
 Use the appropriate `--exe` path for your build. The test uses the suite's
@@ -42,7 +42,7 @@ stage. `--no-jit` omits the JIT comparison; `--nocgen` retains host checking and
 JIT self-compilation when available, but explicitly skips the native chain.
 
 Generated files and per-stage logs are kept in
-`build/gen/<profile>/klang_in_klang/O<level>/`. Each command must succeed and each
+`build/gen/<profile>/k_in_k/O<level>/`. Each command must succeed and each
 emission must produce nonempty C; stale outputs cannot satisfy a stage. Compiler
 executables receive a 64 MiB stack budget where the platform permits it. The
 runner reports stage-specific failures, including timeouts and sanitizer

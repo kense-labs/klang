@@ -9,9 +9,9 @@ const { compilerPath } = require('../src/config');
 const { runCompiler, parseDiagnostics, parseJsonDiagnostics } = require('../src/diagnostics');
 
 const root = path.resolve(__dirname, '../..');
-const compiler = process.env.KLANG_TEST_COMPILER || compilerPath('', root);
+const compiler = process.env.K_TEST_COMPILER || compilerPath('', root);
 const available = fs.existsSync(compiler);
-const options = { skip: available ? false : 'Build K or set KLANG_TEST_COMPILER to run compiler integration tests.' };
+const options = { skip: available ? false : 'Build K or set K_TEST_COMPILER to run compiler integration tests.' };
 const config = file => ({ compiler, cwd: root, file: path.resolve(root, file), stdlib: path.join(root, 'stdlib'), timeout: 15000 });
 // A check's diagnostics as the extension reads them: the data of a compiler
 // with --diagnostics json, or the text of one without.

@@ -7,7 +7,7 @@
 A single-header library for starting a process with a working directory and
 environment, reading its output, and waiting for its exit code. It supports
 Windows, Linux, and macOS. `src/process.cpp` uses it for the compiler's process
-runner, which starts the C compiler, cmake, and git for `goose build` and
+runner, which starts the C compiler, cmake, and git for `k build` and
 packages.
 
 License: public domain (the Unlicense); the full text is at the top of the

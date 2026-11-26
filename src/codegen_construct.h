@@ -37,8 +37,8 @@ inline void CodeGen::StoreWhole(const string &p, TypeExpr *t, const string &x) {
     }
     auto w = T();
     L(sz == 8 ? "uint64_t " : sz == 4 ? "uint32_t " : "uint16_t ", w, ";");
-    L("GS_MEMCPY(&", w, ", &", v, ", ", sz, ");");
-    L("GS_MEMCPY(", p, ", &", w, ", ", sz, ");");
+    L("K_MEMCPY(&", w, ", &", v, ", ", sz, ");");
+    L("K_MEMCPY(", p, ", &", w, ", ", sz, ");");
 }
 
 // Whether StoreWhole stores a value of type t as one integer of its width.
@@ -53,13 +53,13 @@ inline void CodeGen::EmitLenCheck(IntStorage ls, const string &n) {
     if (ls == IS_VARINT || IntSize(ls) == 8) return;
     auto max = (1ull << (IntSize(ls) * 8)) - 1;
     L("if ((uint64_t)(", n, ") > ", max,
-      "ull) gs_panic(\"array length exceeds storage range\");");
+      "ull) k_panic(\"array length exceeds storage range\");");
 }
 
 inline void CodeGen::EmitLenStore(const string &stk, IntStorage ls, const string &n) {
     EmitLenCheck(ls, n);
     if (ls == IS_VARINT) {
-        Bump(stk, cat("gs_uleb_write(", Top(stk), ", (uint64_t)(", n, "))"));
+        Bump(stk, cat("k_uleb_write(", Top(stk), ", (uint64_t)(", n, "))"));
     } else {
         L("*(", IntCT(ls), " *)", Top(stk), " = (", IntCT(ls), ")(", n, ");");
         Bump(stk, cat(IntSize(ls)));
@@ -82,8 +82,8 @@ inline void CodeGen::EmitArrayCount(const string &stk, TypeExpr *at, const strin
         case A_LIMITED: {   // Runtime capacity: chosen as the initial length (v1).
             if (check) EmitLenCheck(IS_U32, n);
             auto x = check ? cat("(uint32_t)", n) : n;
-            L("*(gs_u32 *)", Top(stk), " = ", x, ";");
-            L("*(gs_u32 *)(", Top(stk), " + 4) = ", x, ";");
+            L("*(k_u32 *)", Top(stk), " = ", x, ";");
+            L("*(k_u32 *)(", Top(stk), " + 4) = ", x, ";");
             Bump(stk, "8");
             break;
         }
@@ -96,17 +96,17 @@ inline void CodeGen::EmitArrayCount(const string &stk, TypeExpr *at, const strin
 
 // A varint field or element (§3.6): the i64 value `x`, zigzag-encoded.
 inline void CodeGen::EmitVarintStore(const string &stk, const string &x) {
-    Bump(stk, cat("gs_zig_write(", Top(stk), ", ", x, ")"));
+    Bump(stk, cat("k_zig_write(", Top(stk), ", ", x, ")"));
 }
 
 // The range check a store of `off` into a relative slot of width `w`
 // needs (§3.9). The self-relative form is signed and bounded by the span
 // of the root array; the `in pool` form is unsigned and bounded by the
 // pool, so its width covers 2^N - 1 bytes of one. Either way a root on a
-// data stack is inside one reservation of GS_STACK_RESERVE bytes (guard
+// data stack is inside one reservation of K_STACK_RESERVE bytes (guard
 // region behind it, so nothing past it is ever written), and a fixed root
 // is at most `relrootmax`. The check is emitted only where one of those
-// exceeds the width; GS_STACK_RESERVE is a C macro, so that half of the
+// exceeds the width; K_STACK_RESERVE is a C macro, so that half of the
 // test is left to the C preprocessor.
 //
 // `inroot` says the slot address is its real one inside the root array,
@@ -116,16 +116,16 @@ inline void CodeGen::EmitRelRangeCheck(TypeExpr *rt, const string &off, Line ln,
     auto bits = IntSize(w) * 8;
     if (bits >= 64) return;
     if (rt->ref->pool) {
-        L("#if GS_STACK_RESERVE >= (1ull << ", bits, ")");
-        L("if ((uint64_t)", off, " > ", (1ull << bits) - 1, "ull) gs_abort(GS_E_RELOFF, ",
+        L("#if K_STACK_RESERVE >= (1ull << ", bits, ")");
+        L("if ((uint64_t)", off, " > ", (1ull << bits) - 1, "ull) k_abort(K_E_RELOFF, ",
           LocArgs(ln), ");");
         L("#endif");
         return;
     }
     auto guarded = inroot && relrootmax <= (1ll << (bits - 1));
-    if (guarded) L("#if GS_STACK_RESERVE > (1ull << ", bits - 1, ")");
+    if (guarded) L("#if K_STACK_RESERVE > (1ull << ", bits - 1, ")");
     L("if (", off, " < -(1LL << ", bits - 1, ") || ", off, " >= (1LL << ",
-      bits - 1, ")) gs_abort(GS_E_RELOFF, ",
+      bits - 1, ")) k_abort(K_E_RELOFF, ",
       LocArgs(ln), ");");
     if (guarded) L("#endif");
 }
@@ -178,7 +178,7 @@ inline string CodeGen::RelOffset(TypeExpr *rt, const string &org, const string &
     else
         L("int64_t ", off, " = (int64_t)(", addr, " - (", org, "));");
     if (rt->ref->optional && !rt->ref->pool && !f.apart)
-        L("if (", f.nonnull ? string() : cat(addr, " && "), "!", off, ") gs_abort(GS_E_RELNULL, ",
+        L("if (", f.nonnull ? string() : cat(addr, " && "), "!", off, ") k_abort(K_E_RELNULL, ",
           LocArgs(ln), ");");
     return off;
 }
@@ -203,8 +203,8 @@ inline void CodeGen::EmitRelStore(const string &stk, TypeExpr *rt, const string 
     if (w == IS_VARINT) {
         assert(!IsResz(rt->ref->sub));
         auto off = RelOffset(rt, RelOrigin(rt, fa), rv, ln, f);
-        Bump(stk, rt->ref->pool ? cat("gs_uleb_write(", fa, ", (uint64_t)", off, ")")
-                                : cat("gs_zig_write(", fa, ", ", off, ")"));
+        Bump(stk, rt->ref->pool ? cat("k_uleb_write(", fa, ", (uint64_t)", off, ")")
+                                : cat("k_zig_write(", fa, ", ", off, ")"));
     } else {
         EmitRelStoreAt(fa, rt, rv, ln, true, f);
         Bump(stk, cat(IntSize(w)));
@@ -345,7 +345,7 @@ inline void CodeGen::EmitCopyElems(const string &stk, TypeExpr *elem, const stri
         ind++;
         auto sz = T();
         L("int64_t ", sz, " = ", SizeX(elem, p), ";");
-        L("GS_MEMCPY(", Top(stk), ", ", p, ", (size_t)", sz, ");");
+        L("K_MEMCPY(", Top(stk), ", ", p, ", (size_t)", sz, ");");
         Bump(stk, sz);
         L(p, " += ", sz, ";");
         ind--;
@@ -497,7 +497,7 @@ inline void CodeGen::GenConstruct(Node *n, const string &stk, TypeExpr *want, co
             L("*", Top(stk), " = 0;");
             Bump(stk, "1");
         } else {
-            L("GS_MEMZERO(", Top(stk), ", ", FixedSize(et), ");");
+            L("K_MEMZERO(", Top(stk), ", ", FixedSize(et), ");");
             Bump(stk, cat(FixedSize(et)));
         }
         return;
@@ -507,7 +507,7 @@ inline void CodeGen::GenConstruct(Node *n, const string &stk, TypeExpr *want, co
         assert(et->kind == TY_ARRAY);
         EmitArrayCount(stk, et, lenlv, cat(s->val.size()), false);
         if (!s->val.empty()) {
-            L("GS_MEMCPY(", Top(stk), ", ", StrRaw(s->val), ", ", s->val.size(), ");");
+            L("K_MEMCPY(", Top(stk), ", ", StrRaw(s->val), ", ", s->val.size(), ");");
             Bump(stk, cat(s->val.size()));
         }
         return;
@@ -585,7 +585,7 @@ inline void CodeGen::ConstructFromLoc(Loc lv, TypeExpr *et, const string &stk,
         assert(!lv.val);
         auto sz = T();
         L("int64_t ", sz, " = ", SizeX(et, lv.s), ";");
-        L("GS_MEMCPY(", Top(stk), ", ", lv.s, ", (size_t)", sz, ");");
+        L("K_MEMCPY(", Top(stk), ", ", lv.s, ", (size_t)", sz, ");");
         Bump(stk, sz);
         return;
     }
@@ -813,7 +813,7 @@ inline void CodeGen::EmitRzCopy(Loc lv, TypeExpr *et, const string &stk, const s
     auto len = T();
     L("int64_t ", len, " = ", lv.lenlv, ";");
     if (prefix) {
-        L("GS_MEMCPY(", Top(stk), ", ", lv.s, ", ", prefix, ");");
+        L("K_MEMCPY(", Top(stk), ", ", lv.s, ", ", prefix, ");");
         Bump(stk, cat(prefix));
     }
     EmitCopyElems(stk, elem, cat("(", lv.s, ") + ", prefix), len);
@@ -832,7 +832,7 @@ inline void CodeGen::FoBytes(TypeExpr *t, const string &obj, const string &p, bo
         auto at = off ? cat("(", p, " + ", off, ")") : p;
         if (fields[i].ispad) {
             if (fields[i].padsize <= 0) continue;
-            if (tobytes) L("GS_MEMZERO(", at, ", ", fields[i].padsize, ");");
+            if (tobytes) L("K_MEMZERO(", at, ", ", fields[i].padsize, ");");
             off += fields[i].padsize;
             continue;
         }
@@ -924,7 +924,7 @@ inline void CodeGen::GenVarEnumFromLoc(Loc lv, TypeExpr *et, const string &stk) 
         if (!lv.val) {
             auto sz = T();
             L("int64_t ", sz, " = ", SizeX(lv.t, lv.s), ";");
-            L("GS_MEMCPY(", Top(stk), ", ", lv.s, ", (size_t)", sz, ");");
+            L("K_MEMCPY(", Top(stk), ", ", lv.s, ", (size_t)", sz, ");");
             Bump(stk, sz);
         } else {
             EmitValStore(stk, lv.t, lv.s);
@@ -941,7 +941,7 @@ inline void CodeGen::GenVarEnumFromLoc(Loc lv, TypeExpr *et, const string &stk) 
         L("case ", TagConst(ei, (int)vi), ":");
         ind++;
         if (psz) {
-            L("GS_MEMCPY(", Top(stk), ", &", sv, ".u.v_",
+            L("K_MEMCPY(", Top(stk), ", &", sv, ".u.v_",
               Sanitize(ei->en->variants[vi].name), ", ", psz, ");");
             Bump(stk, cat(psz));
         }
@@ -1004,7 +1004,7 @@ inline void CodeGen::FixedLitAtStk(Node *n, const string &stk) {
     auto et = n->exprtype;
     auto Gap = [&](int64_t bytes) {
         if (bytes <= 0) return;
-        L("GS_MEMZERO(", Top(stk), ", ", bytes, ");");
+        L("K_MEMZERO(", Top(stk), ", ", bytes, ");");
         Bump(stk, cat(bytes));
     };
     // `fieldoff` is the field's byte offset within the value, which is
@@ -1171,7 +1171,7 @@ inline void CodeGen::StructLitAt(StructLit *sl, const string &base, bool inroot)
             auto path = cat(b, ".", Sanitize(fields[i].name));
             if (!init) {   // Omitted optional: null.
                 assert(ft->kind == TY_REF);
-                L("GS_MEMZERO(&", path, ", sizeof(", path, "));");
+                L("K_MEMZERO(&", path, ", sizeof(", path, "));");
                 continue;
             }
             if (IsRelRef(ft)) {
@@ -1192,7 +1192,7 @@ inline void CodeGen::StructLitAt(StructLit *sl, const string &base, bool inroot)
         auto si = SI(et);
         // Nothing writes the C object of a struct or a variant without
         // fields, and copying one nothing wrote is undefined.
-        if (LastRealField(si->st->fields) < 0) L("GS_MEMZERO(&", base, ", sizeof(", base, "));");
+        if (LastRealField(si->st->fields) < 0) L("K_MEMZERO(&", base, ", sizeof(", base, "));");
         fieldset(base, si->st->fields, si->ftypes, StructLayout(si), 0);
         return;
     }
@@ -1200,7 +1200,7 @@ inline void CodeGen::StructLitAt(StructLit *sl, const string &base, bool inroot)
         auto ei = EIVar(et);
         auto vi = ei->en->VariantIndex(et->var->variant);
         if (LastRealField(ei->en->variants[vi].fields) < 0)
-            L("GS_MEMZERO(&", base, ", sizeof(", base, "));");
+            L("K_MEMZERO(&", base, ", sizeof(", base, "));");
         fieldset(base, ei->en->variants[vi].fields, ei->vftypes[vi], VariantLayout(ei, vi), 0);
         return;
     }
@@ -1234,9 +1234,9 @@ inline void CodeGen::GenArrayLit(ArrayLit *al, const string &stk, const string &
         auto t = T();
         L("int64_t ", t, " = ", cv, ";");
         L("if (", t, " < 0 || ", t, " > (int64_t)UINT32_MAX) "
-          "gs_abort(GS_E_CAPRANGE, ", LocArgs(al->line), ");");
-        L("*(gs_u32 *)", Top(stk), " = (uint32_t)", t, ";");
-        L("*(gs_u32 *)(", Top(stk), " + 4) = 0;");
+          "k_abort(K_E_CAPRANGE, ", LocArgs(al->line), ");");
+        L("*(k_u32 *)", Top(stk), " = (uint32_t)", t, ";");
+        L("*(k_u32 *)(", Top(stk), " + 4) = 0;");
         Bump(stk, cat("8 + ", t, " * ", FixedSize(elem)));
         return;
     }
@@ -1348,7 +1348,7 @@ inline void CodeGen::GenFrameObjLit(StructLit *sl, StructInst *si, const string 
         }
         if (!init || Is<NullLit>(init)) {
             assert(ft->kind == TY_REF && ft->ref->optional);
-            L("GS_MEMZERO(&", flv, ", sizeof(", flv, "));");
+            L("K_MEMZERO(&", flv, ", sizeof(", flv, "));");
             continue;
         }
         // Only the `in pool` form can be a frame object's field (C.2), so
@@ -1368,7 +1368,7 @@ inline void CodeGen::GenFieldInits(StructLit *sl, const vector<Field> &fields,
     for (size_t i = 0; i < fields.size(); i++) {
         if (fields[i].ispad) {
             auto n = fields[i].padsize > 0 ? fields[i].padsize : 0;
-            if (n) { L("GS_MEMZERO(", Top(stk), ", ", n, ");"); Bump(stk, cat(n)); }
+            if (n) { L("K_MEMZERO(", Top(stk), ", ", n, ");"); Bump(stk, cat(n)); }
             continue;
         }
         auto init = sl->InitFor((int)i);
@@ -1377,7 +1377,7 @@ inline void CodeGen::GenFieldInits(StructLit *sl, const vector<Field> &fields,
             // Relative-reference slot: store from the plain reference.
             if (!init) {
                 if (ft->ref->lenstorage == IS_VARINT) { L("*", Top(stk), " = 0;"); Bump(stk, "1"); }
-                else { L("GS_MEMZERO(", Top(stk), ", ", IntSize((IntStorage)ft->ref->lenstorage), ");");
+                else { L("K_MEMZERO(", Top(stk), ", ", IntSize((IntStorage)ft->ref->lenstorage), ");");
                        Bump(stk, cat(IntSize((IntStorage)ft->ref->lenstorage))); }
                 continue;
             }
@@ -1390,7 +1390,7 @@ inline void CodeGen::GenFieldInits(StructLit *sl, const vector<Field> &fields,
         if (!init) {
             // Omitted optional: null (checked by TC that a default exists otherwise).
             assert(ft->kind == TY_REF && ft->ref->optional);
-            L("GS_MEMZERO(", Top(stk), ", ", FixedSize(ft), ");");
+            L("K_MEMZERO(", Top(stk), ", ", FixedSize(ft), ");");
             Bump(stk, cat(FixedSize(ft)));
             continue;
         }

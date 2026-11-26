@@ -1,4 +1,4 @@
-// runtime-define: GS_DEBUG=1
+// runtime-define: K_DEBUG=1
 // A member's negation overflows as a scalar `-` does (§6.1, §6.2): a debug
 // build aborts at the line of the negation.
 struct Pair { lo: i32, hi: i32 }

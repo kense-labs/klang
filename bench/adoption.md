@@ -384,7 +384,7 @@ returning references, which is every parser.
 
 ## 2.9 `opt/relref-rangecheck` -- skip the relative-reference range check
 
-**What.** The store-time range check is emitted under `#if GS_STACK_RESERVE
+**What.** The store-time range check is emitted under `#if K_STACK_RESERVE
 > (1ull << (bits-1))` and only when no fixed-size root in the program is
 wider than the width, so a `u32` link on a stack under 2 GB is stored
 without a check. Spec 3.9 and 9.3 note the condition, and the branch adds a
@@ -573,7 +573,7 @@ first three are fixed on master (the third on 2.1's branch, the other two on
 
 * `CodeGen::IntStr` emitted `INT32_MIN` as the unsuffixed `-2147483648`,
   which MSVC's C front end types as unsigned (C90 literal rules), so every
-  checked `as i32` aborted in a `GS_DEBUG=1` build and an `i64` literal at
+  checked `as i32` aborted in a `K_DEBUG=1` build and an `i64` literal at
   that value printed positive in release (found by 2.2 and 3.1). It is now
   `(-2147483647 - 1)`, the form `INT64_MIN` already used.
 * Struct literals with relative-reference fields were sometimes constructed in a

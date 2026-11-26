@@ -1,4 +1,4 @@
-// runtime-define: GS_DEBUG=1
+// runtime-define: K_DEBUG=1
 // A checked `as` of an infinity names it as print does (§3.7), on every
 // backend and C library.
 fn main() {

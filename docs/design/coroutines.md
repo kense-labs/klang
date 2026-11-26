@@ -59,6 +59,9 @@ driven by one builtin, and scheduled by whatever library the program
 chooses. Section 4 is the design, section 6 the alternatives considered
 for each part, section 8 the order to build it in.
 
+The language-level proposal specifies `async fn`, explicit `await`, task
+ownership and cancellation. [First-class async functions and decorators](async_and_decorators.md)
+
 ## 0. Summary
 
 * **Stackless, by necessity.** A K function's locals live on the native
@@ -220,7 +223,7 @@ with no coloring. For K it is ruled out, not just unattractive:
 * **A fiber would need data stacks of its own.** A K activation's
   nonfixed locals live on data stacks, so a fiber that may own a `u8[>..]`
   anywhere in its call tree needs a block of N′ stacks, as a thread program
-  does (§11.2). Each stack is a reservation of `GS_STACK_RESERVE` bytes
+  does (§11.2). Each stack is a reservation of `K_STACK_RESERVE` bytes
   (2 GB by default) plus a guard gap, and N′ is the program's count
   (implementation.md §7). The address-space budget (32 TB, §10.4) that
   already caps `hardware_threads()` would cap fibers at a few thousand at
@@ -911,23 +914,23 @@ the top of the function, implementation.md §6.7). Sketch for a body with
 one yield that keeps `n` live:
 
 ```c
-typedef struct serve_g { uint32_t c_g; uint8_t gs_tag; int64_t n_g; } serve_g;
+typedef struct serve_g { uint32_t c_g; uint8_t k_tag; int64_t n_g; } serve_g;
 
-static bool serve_resume(serve_g *f, Event_g ev, Wait_g *out, int64_t gs_sp) {
+static bool serve_resume(serve_g *f, Event_g ev, Wait_g *out, int64_t k_sp) {
     int64_t n;
-    switch (f->gs_tag) {
+    switch (f->k_tag) {
         case 0: goto L0;
         case 1: n = f->n_g; goto L1;             // reload what is live after yield 1
-        default: gs_fail_finished();
+        default: k_fail_finished();
     }
 L0: for (;;) {
         n = net_recv(…);
         while (n == AGAIN) {
-            f->n_g = n; f->gs_tag = 1;           // save what is live after the yield
+            f->n_g = n; f->k_tag = 1;           // save what is live after the yield
             *out = (Wait_g){ .tag = READABLE, .fd = … };
             return true;                         // yield
         L1:
-            if (ev.tag != READY) { f->gs_tag = DONE; return false; }
+            if (ev.tag != READY) { f->k_tag = DONE; return false; }
             n = net_recv(…);
         }
         …
@@ -950,7 +953,7 @@ L0: for (;;) {
   or compiled as its own resume function called from the caller's segment
   with its own tag in a nested frame struct. The optimizer chooses as it
   chooses inlining today (implementation.md §4).
-* **Data stacks.** The resume function takes `gs_sp` like any function and
+* **Data stacks.** The resume function takes `k_sp` like any function and
   builds its between-yield temporaries above the resumer's watermark; by
   R1 and R2 nothing of the coroutine's is on a data stack at a yield, so a
   yield restores nothing. `NoStackAcrossCycleCall`'s assertion applies to
@@ -960,7 +963,7 @@ L0: for (;;) {
   existing policy. No thread-local, no runtime function, no table.
 * **The `as` check** (4.3) sits in the switch case of a yield that has
   one, before the reload: `case 1: if (ev.tag != READY && ev.tag !=
-  HANGUP) gs_fail_resume(…);`, a mask test for a longer list. It is one
+  HANGUP) k_fail_resume(…);`, a mask test for a longer list. It is one
   compare and branch on a path that already dispatches on the tag, and for
   a single variant it replaces the test the body would otherwise make. The
   abort names the `resume`'s location as other builtins' aborts do, and the
@@ -1124,7 +1127,7 @@ Each part of section 4 had alternatives. The recommendation is marked.
 **6.1 Stackless (recommended) / stackful / dynamic stacks.** Stackless is
 forced (2.3). Stackful is ruled out by the data-stack model. *Dynamic
 stacks* (§11.3, a task owning a block of data stacks, switched by setting
-`gs_stks`) would lift R1 for a bounded number of heavyweight tasks and is
+`k_stks`) would lift R1 for a bounded number of heavyweight tasks and is
 the community sketch's suggestion for later; it costs address space per
 task and a stack switch per resume, and it should be an opt-in on the
 declaration (`coro fn … with stacks`), never the default. Not in v1.
@@ -1347,7 +1350,7 @@ the relaxation of 6.4, by §3.9's values with self-relative references.
    copy-in/copy-out at the segment boundaries, the `as` test in each
    yield's case (4.12); splicing of called
    coroutines first (it needs no second tag), the nested form after, chosen
-   by the optimizer's inlining policy; `gs_sp` and the watermark
+   by the optimizer's inlining policy; `k_sp` and the watermark
    discipline unchanged. `--frames` listing each frame's size and hoisted
    locals, and the LSP's hover showing the same.
 5. **Tests.** A corpus entry per rule (each error message), the patrol and
@@ -1399,20 +1402,20 @@ the relaxation of 6.4, by §3.9's values with self-relative references.
 ## References
 
 Spec and implementation sections referred to above:
-[§1.2 memory model](../klang_spec.md#12-memory-model),
-[§1.3 the stack invariant](../klang_spec.md#13-the-stack-invariant),
-[§3.11 index types](../klang_spec.md#311-index-and-bound-types),
-[§4.3 in-place construction](../klang_spec.md#43-the-in-place-construction-guarantee),
-[§5.4 reusable arrays](../klang_spec.md#54-reusable-arrays-safe-allocation-escape-hatch),
-[§7.6 static function values](../klang_spec.md#76-static-function-values),
-[§7.8 recursion](../klang_spec.md#78-recursion),
-[§7.9 `return … from`](../klang_spec.md#79-return--from-long-distance-return),
-[§8.1 `match`](../klang_spec.md#81-match),
-[§8.2 case functions](../klang_spec.md#82-case-functions-match-as-an-overload-set),
-[§9.2 roots](../klang_spec.md#92-roots-and-the-depth-check),
-[§10.3 stack assignment](../klang_spec.md#103-stack-assignment-deterministic-recipe),
-[§11.2 concurrency](../klang_spec.md#112-concurrency),
-[§11.3 dynamic stacks](../klang_spec.md#113-dynamic-stacks-future);
+[§1.2 memory model](../k_spec.md#12-memory-model),
+[§1.3 the stack invariant](../k_spec.md#13-the-stack-invariant),
+[§3.11 index types](../k_spec.md#311-index-and-bound-types),
+[§4.3 in-place construction](../k_spec.md#43-the-in-place-construction-guarantee),
+[§5.4 reusable arrays](../k_spec.md#54-reusable-arrays-safe-allocation-escape-hatch),
+[§7.6 static function values](../k_spec.md#76-static-function-values),
+[§7.8 recursion](../k_spec.md#78-recursion),
+[§7.9 `return … from`](../k_spec.md#79-return--from-long-distance-return),
+[§8.1 `match`](../k_spec.md#81-match),
+[§8.2 case functions](../k_spec.md#82-case-functions-match-as-an-overload-set),
+[§9.2 roots](../k_spec.md#92-roots-and-the-depth-check),
+[§10.3 stack assignment](../k_spec.md#103-stack-assignment-deterministic-recipe),
+[§11.2 concurrency](../k_spec.md#112-concurrency),
+[§11.3 dynamic stacks](../k_spec.md#113-dynamic-stacks-future);
 [implementation.md §3.11 recursion](../implementation.md#311-recursion),
 [§6.2 stack assignment](../implementation.md#62-stack-assignment),
 [§6.6 calls and `return from`](../implementation.md#66-calls-dispatch-function-values-return-from),

@@ -10,9 +10,9 @@
 #include <string.h>
 
 #ifdef __clang__
-#define KLANG_NOTIFY_CC "clang"
+#define K_NOTIFY_CC "clang"
 #else
-#define KLANG_NOTIFY_CC "gcc"
+#define K_NOTIFY_CC "gcc"
 #endif
 
 #ifdef _WIN32
@@ -22,7 +22,7 @@
 #include <process.h>
 #pragma comment(lib, "ws2_32.lib")
 
-static void klang_notify_send(const char *msg) {
+static void k_notify_send(const char *msg) {
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return;
     SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -39,26 +39,26 @@ static void klang_notify_send(const char *msg) {
     WSACleanup();
 }
 
-static int klang_notify_pid(void) { return _getpid(); }
+static int k_notify_pid(void) { return _getpid(); }
 
 #else
 
 #include <unistd.h>
 #include <libnotify.h>
 
-static void klang_notify_send(const char *msg) { notify(msg); }
+static void k_notify_send(const char *msg) { notify(msg); }
 
-static int klang_notify_pid(void) { return (int)getpid(); }
+static int k_notify_pid(void) { return (int)getpid(); }
 
 #endif
 
 /* "K/<C compiler><variant>\t<pid>": the name of the test, as the other
    languages' tests name theirs ("C/clang", "Rust (Serde Typed)"). */
-void klang_notify_start(sl_u8 variant) {
+void k_notify_start(sl_u8 variant) {
     char msg[96];
-    snprintf(msg, sizeof msg, "K/%s%.*s\t%d", KLANG_NOTIFY_CC, (int)variant.len,
-             (const char *)variant.data, klang_notify_pid());
-    klang_notify_send(msg);
+    snprintf(msg, sizeof msg, "K/%s%.*s\t%d", K_NOTIFY_CC, (int)variant.len,
+             (const char *)variant.data, k_notify_pid());
+    k_notify_send(msg);
 }
 
-void klang_notify_stop(void) { klang_notify_send("stop"); }
+void k_notify_stop(void) { k_notify_send("stop"); }

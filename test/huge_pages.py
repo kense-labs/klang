@@ -61,6 +61,6 @@ def check_huge_pages(exe, base):
         r = subprocess.run([str(exe), "build", "-o", str(app), str(source)], cwd=root,
                            capture_output=True, text=True, errors="replace", timeout=300)
         if r.returncode != 0:
-            raise RuntimeError(f"huge pages: klang build:\n{r.stdout}{r.stderr}")
+            raise RuntimeError(f"huge pages: k build:\n{r.stdout}{r.stderr}")
         check_program(app)
     return None

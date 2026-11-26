@@ -4,14 +4,14 @@ const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { compilerPath, absolute } = require('./config');
 
-// Whether a compiler serves an editor: `klang lsp --probe` prints the
+// Whether a compiler serves an editor: `k lsp --probe` prints the
 // protocol version it serves and exits with 0, where one without the verb
 // fails on it. Resolves to the version, or undefined.
 function probe(compiler, cwd, spawn = execFile) {
     return new Promise(resolve => {
         spawn(compiler, ['lsp', '--probe'], { cwd, timeout: 10000, windowsHide: true, encoding: 'utf8', shell: false },
             (error, stdout) => {
-                const match = !error && /^klang lsp (\S+)/.exec(String(stdout || ''));
+                const match = !error && /^(?:k|klang) lsp (\S+)/.exec(String(stdout || ''));
                 resolve(match ? match[1] : undefined);
             });
     });

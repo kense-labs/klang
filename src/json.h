@@ -2,7 +2,7 @@
 // a package's link line (native.h). Enough of JSON for that: objects,
 // arrays, strings with their escapes, numbers, true, false and null. And a
 // string with its escapes, for what the compiler writes as JSON: the
-// diagnostics `--diagnostics json` prints (main.cpp), `klang toolchain
+// diagnostics `--diagnostics json` prints (main.cpp), `k toolchain
 // --json` (toolchain.h) and the language server's messages (lsp_rpc.h).
 #pragma once
 

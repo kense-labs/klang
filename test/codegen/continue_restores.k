@@ -1,4 +1,4 @@
-// runtime-define: GS_STACK_RESERVE=4194304
+// runtime-define: K_STACK_RESERVE=4194304
 // A continue leaves the loop body through restores of its own, for exactly
 // the locals declared before it: a local declared after it never ran, so
 // its base holds nothing to restore. Ordinary fallthrough still restores

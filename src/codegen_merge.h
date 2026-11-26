@@ -77,14 +77,14 @@ inline void CodeGen::MergeSpecs() {
     // (num) the number of the candidate target `unit`. A function's names
     // are taken with Unique, which no local, type or global takes, and a
     // struct member's name follows `.` or `->`. A number is the K of a
-    // channel gs_lret_K_J, gs_fdst_K_J or gs_fval_K_J (FromChannels), or the
-    // operand gs_rf is compared with or set to (EmitRfCheck,
+    // channel k_lret_K_J, k_fdst_K_J or k_fval_K_J (FromChannels), or the
+    // operand k_rf is compared with or set to (EmitRfCheck,
     // PropagateReturn). Literals and comments hold none.
     auto scan = [&](string_view s, auto f) {
         auto number = [&](size_t at, size_t len) {
             size_t id = 0;
             for (auto c : s.substr(at, len)) id = id * 10 + (size_t)(c - '0');
-            if (!id) return;   // gs_rf = 0: nothing in flight.
+            if (!id) return;   // k_rf = 0: nothing in flight.
             if (id >= rfunits.size()) Fail(Line {}, cat("internal: unknown target number ", id));
             if (rfunits[id] >= 0) f(at, len, rfunits[id], 0, true);
         };
@@ -115,12 +115,17 @@ inline void CodeGen::MergeSpecs() {
             if (b && (s[b - 1] == '.' || (s[b - 1] == '>' && b > 1 && s[b - 2] == '-'))) continue;
             if (auto it = names.find(id); it != names.end()) {
                 f(b, id.size(), it->second.first, it->second.second, false);
-            } else if (id.starts_with("gs_lret_") || id.starts_with("gs_fdst_") ||
-                       id.starts_with("gs_fval_")) {
-                auto k = digits(id, 8);
-                if (k && 9 + k < id.size() && id[8 + k] == '_' && digits(id, 9 + k) == id.size() - 9 - k)
-                    number(b + 8, k);
-            } else if (id == "gs_rf") {
+            } else if (id.starts_with("k_lret_") || id.starts_with("k_fdst_") ||
+                       id.starts_with("k_fval_")) {
+                constexpr auto start = string_view("k_lret_").size();
+                static_assert(start == string_view("k_fdst_").size() &&
+                              start == string_view("k_fval_").size());
+                auto k = digits(id, start);
+                auto next = start + k + 1;
+                if (k && next < id.size() && id[next - 1] == '_' &&
+                    digits(id, next) == id.size() - next)
+                    number(b + start, k);
+            } else if (id == "k_rf") {
                 auto j = i;
                 while (j < s.size() && s[j] == ' ') j++;
                 auto op = j;
@@ -181,7 +186,7 @@ inline void CodeGen::MergeSpecs() {
         group = std::move(next);
         ngroups = (int)ids.size();
     }
-    // A frame a return to t passes compares gs_rf with its own number where
+    // A frame a return to t passes compares k_rf with its own number where
     // it catches returns too, and would catch t's once t's number is its
     // own; the checker keeps every such frame out of t's group (see above).
     for (auto u : cands) {

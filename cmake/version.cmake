@@ -1,5 +1,5 @@
-# Writes OUT, a header defining KLANG_VERSION: the version given (the
-# KLANG_VERSION cache variable, which a release sets to its tag), or else
+# Writes OUT, a header defining K_VERSION: the version given (the
+# K_VERSION cache variable, which a release sets to its tag), or else
 # what `git describe` says of the source tree SRC, or "unknown" outside a
 # git checkout. Run on every build; the header is rewritten only when the
 # version changes, so only src/version.cpp is compiled again.
@@ -12,7 +12,7 @@ if(NOT VERSION)
         set(VERSION "unknown")
     endif()
 endif()
-set(text "#define KLANG_VERSION \"${VERSION}\"\n")
+set(text "#define K_VERSION \"${VERSION}\"\n")
 set(old "")
 if(EXISTS "${OUT}")
     file(READ "${OUT}" old)

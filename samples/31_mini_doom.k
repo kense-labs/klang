@@ -3,9 +3,9 @@
 // font and sound effects. This is an independent, deliberately small game;
 // it is not a source port and does not reproduce Doom's simulation exactly.
 //
-//   klang samples/31_mini_doom.k
-//   klang samples/31_mini_doom.k -- --frames 30
-//   klang samples/31_mini_doom.k -- --wad path/to/freedoom1-e1m1.wad
+//   k samples/31_mini_doom.k
+//   k samples/31_mini_doom.k -- --frames 30
+//   k samples/31_mini_doom.k -- --wad path/to/freedoom1-e1m1.wad
 //
 // WASD walks, Shift runs, mouse or Left/Right turns, E or Space uses doors
 // and switches. Left mouse or Ctrl fires. 1 selects fists, 2 the pistol,

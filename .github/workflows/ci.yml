@@ -1,5 +1,5 @@
 # Builds the compiler and runs the whole suite -- parse, roundtrip, typecheck,
-# error tests, K/native C at -O0 and -O2, targeted GS_DEBUG=1 tests, a
+# error tests, K/native C at -O0 and -O2, targeted K_DEBUG=1 tests, a
 # second C-front-end probe, the in-process TinyCC backend, and samples -- on
 # all three desktop platforms.
 # One additional Linux profile instruments the compiler and generated C;
@@ -49,7 +49,7 @@ jobs:
 
     steps:
       # The gfx and physics packages are fetched from their own repositories
-      # by the configure below (KLANG_BUILTIN_LIBS), submodules and all.
+      # by the configure below (K_BUILTIN_LIBS) with pinned native dependencies.
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -75,20 +75,20 @@ jobs:
       # is what the Visual Studio generator reads; passing both builds Debug
       # (asserts on) everywhere.
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DKLANG_BUILTIN_LIBS=all
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DK_BUILTIN_LIBS=all
 
       - name: Build
         run: cmake --build build --config Debug
 
-      # The samples and the standard library are kept as klang format
+      # The samples and the standard library are kept as k format
       # writes them. On Linux only: a Windows checkout may have \r\n line
       # breaks, which the formatter would report in every file.
       - name: Check formatting
         if: runner.os == 'Linux'
-        run: build/klang format --check samples stdlib
+        run: build/k format --check samples stdlib
 
       - name: Test
-        run: python test/run_tests.py --exe build/${{ runner.os == 'Windows' && 'Debug/klang.exe' || 'klang' }} --profile baseline --cc native --require-clang
+        run: python test/run_tests.py --exe build/${{ runner.os == 'Windows' && 'Debug/k.exe' || 'k' }} --profile baseline --cc native --require-clang
 
       - uses: actions/setup-node@v4
         with:
@@ -100,7 +100,7 @@ jobs:
       - name: Test the VS Code extension
         working-directory: vscode
         env:
-          KLANG_TEST_COMPILER: ${{ github.workspace }}/build/${{ runner.os == 'Windows' && 'Debug/klang.exe' || 'klang' }}
+          K_TEST_COMPILER: ${{ github.workspace }}/build/${{ runner.os == 'Windows' && 'Debug/k.exe' || 'k' }}
         run: |
           npm ci --no-audit --no-fund
           npm test
@@ -139,4 +139,4 @@ jobs:
         run: cmake --build build-sanitize --parallel 2
 
       - name: Test compiler, generated C, runtime lifecycle and samples
-        run: python test/run_tests.py --exe build-sanitize/klang --profile sanitize --cc clang
+        run: python test/run_tests.py --exe build-sanitize/k --profile sanitize --cc clang

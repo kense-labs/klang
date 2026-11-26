@@ -43,7 +43,7 @@ BUILD = HERE / "build"
 IS_WINDOWS = os.name == "nt"
 # What a program's runtime links besides libm and threads: dlopen, in libdl on
 # Linux before glibc 2.34.
-KLANG_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
+K_LIBS = ["-ldl"] if sys.platform.startswith("linux") else []
 EXE = ".exe" if IS_WINDOWS else ""
 
 LANGS = ["klang", "c", "cpp", "rust"]
@@ -116,12 +116,12 @@ def clang_tools():
     return cc, cxx
 
 
-def klang_exe():
+def k_exe():
     for sub in ("Release", "", "RelWithDebInfo", "Debug"):
-        p = REPO / "build" / sub / ("klang" + EXE)
+        p = REPO / "build" / sub / ("k" + EXE)
         if p.exists():
             return p
-    sys.exit("no klang binary under build/")
+    sys.exit("no k binary under build/")
 
 
 def run(argv, cwd=None, env=None, check=True):
@@ -142,14 +142,14 @@ CPP_FLAGS = ["-std=c++23", "-O3", "-ffast-math", "-march=native", "-w"]
 LIBM = [] if IS_WINDOWS else ["-lm"]
 
 
-def build_klang(bench, native, compiler=None, tag=None, klang_flags=("-O2",)):
+def build_klang(bench, native, compiler=None, tag=None, k_flags=("-O2",)):
     cc, _ = clang_tools()
     out = BUILD / (tag or ("klang-native" if native else "klang"))
     out.mkdir(parents=True, exist_ok=True)
     cfile = out / f"{bench}.c"
-    run([compiler or klang_exe(), *klang_flags, "--standalone", "-o", cfile, HERE / bench / "klang" / "run.k"])
+    run([compiler or k_exe(), *k_flags, "--standalone", "-o", cfile, HERE / bench / "klang" / "run.k"])
     flags = C_FLAGS + (["-march=native"] if native else [])
-    run([cc, *flags, cfile, "-o", out / (bench + EXE)] + ([] if IS_WINDOWS else ["-lm", "-pthread"] + KLANG_LIBS))
+    run([cc, *flags, cfile, "-o", out / (bench + EXE)] + ([] if IS_WINDOWS else ["-lm", "-pthread"] + K_LIBS))
 
 
 def build_c(bench, native):

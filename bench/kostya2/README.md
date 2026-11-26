@@ -224,13 +224,13 @@ suite keeps each language's tests (`brainfuck/bf.k`, `base64/test.k`,
 * `common/commands.mk`, where `-w` keeps warnings about the generated C's
   unused runtime helpers and temporaries out of the build log:
   ```make
-  KLANG_BUILD =		klang -O2 --standalone --include notify.h -o $@.c $^ && clang $(CLANG_FLAGS) -w -std=c23 -I../common/klang -o $@ $@.c $(LIBNOTIFY_FLAGS) -lm -pthread
+  K_BUILD =		k -O2 --standalone --include notify.h -o $@.c $^ && clang $(CLANG_FLAGS) -w -std=c23 -I../common/klang -o $@ $@.c $(LIBNOTIFY_FLAGS) -lm -pthread
   ```
 * in each test's `Makefile`, its binary in `executables` and a rule, for
   example in `brainfuck/Makefile`:
   ```make
   target/bin_klang: bf.k | target libnotify
-	$(KLANG_BUILD)
+	$(K_BUILD)
   ```
   (`target/base64_klang`, `target/json_klang` and `target/json_dom_klang`,
   `target/matmul_klang`, `target/primes_klang` likewise).
@@ -240,11 +240,11 @@ suite keeps each language's tests (`brainfuck/bf.k`, `base64/test.k`,
   ARG KLANG=<a klang commit>
   RUN git clone -q https://github.com/kense-labs/klang \
       && git -C klang checkout -q "$KLANG" \
-      && CXX=clang++ cmake -S klang -B klang/build -DCMAKE_BUILD_TYPE=Release \
-      && cmake --build klang/build --target klang -j
+      && CXX=clang++ cmake -S k -B klang/build -DCMAKE_BUILD_TYPE=Release \
+      && cmake --build klang/build --target k -j
   ENV PATH="/root/bin/klang/build/:${PATH}"
   ```
 * `docker/versions.rb`:
   ```ruby
-  'K' => -> { `git -C /root/bin/klang log -1 --format='%h %cs'` },
+  'K' => -> { `git -C /root/bin/k log -1 --format='%h %cs'` },
   ```

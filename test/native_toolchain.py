@@ -1,6 +1,6 @@
-"""One C toolchain for a whole build: `klang build` of a program using a CMake
+"""One C toolchain for a whole build: `k build` of a program using a CMake
 package builds the package, the runtime object and the executable with the
-toolchain `klang toolchain` reports, and a JIT `klang run` builds the package
+toolchain `k toolchain` reports, and a JIT `k run` builds the package
 with it too. On Windows, building a CMake package imports Visual Studio's
 environment, which puts cl on PATH partway through; so cl starts off it here,
 as it would in a plain shell."""
@@ -26,8 +26,8 @@ def check_native_toolchain(exe, base, *, jit):
         shutil.copytree(HERE / "packages" / "pkgs" / "cmk", root / "pkgs" / "cmk")
         source = shutil.copy2(HERE / "packages" / "pkg_cmake_lib.k", root)
         home = root / "home"
-        env = {k: v for k, v in os.environ.items() if k != "KLANG_CC"}
-        env["KLANG_HOME"] = str(home)
+        env = {k: v for k, v in os.environ.items() if k != "K_CC"}
+        env["K_HOME"] = str(home)
         if tc.IS_WINDOWS:
             env["PATH"] = os.pathsep.join(
                 d for d in env.get("PATH", "").split(os.pathsep)
@@ -46,7 +46,7 @@ def check_native_toolchain(exe, base, *, jit):
         try:
             info = json.loads(out)
         except ValueError:
-            raise RuntimeError(f"native toolchain: klang toolchain --json:\n{out}{err}")
+            raise RuntimeError(f"native toolchain: k toolchain --json:\n{out}{err}")
         if not info.get("cc"):
             return "no C compiler"
         if not info.get("cmake"):
@@ -59,22 +59,22 @@ def check_native_toolchain(exe, base, *, jit):
 
         app = root / ("app" + tc.EXE_SUFFIX)
         code, out, err = run([exe, "build", "-o", app, source])
-        require(code == 0, f"klang build:\n{out}{err}")
+        require(code == 0, f"k build:\n{out}{err}")
         code, out, err = run([app])
         require(code == 0 and out.split() == ["12", "-15"], f"the built program:\n{out}{err}")
         packages = ids("build/pkg/local/*/*")
         runtimes = ids("build/runtime/*/*", strip_config=True)
         require(packages == want and runtimes == want,
-                f"klang build used toolchains {sorted(packages)} for the package and "
-                f"{sorted(runtimes)} for the runtime, where klang toolchain reports "
+                f"k build used toolchains {sorted(packages)} for the package and "
+                f"{sorted(runtimes)} for the runtime, where k toolchain reports "
                 f"{sorted(want)}")
         if jit:
             code, out, err = run([exe, "run", source])
-            require(code == 0 and out.split() == ["12", "-15"], f"klang run:\n{out}{err}")
+            require(code == 0 and out.split() == ["12", "-15"], f"k run:\n{out}{err}")
             packages = ids("build/pkg/local/*/*")
             require(packages == want,
-                    f"klang run used toolchains {sorted(packages - want)} for the package, "
-                    f"where klang toolchain reports {sorted(want)}")
+                    f"k run used toolchains {sorted(packages - want)} for the package, "
+                    f"where k toolchain reports {sorted(want)}")
     return None
 
 
@@ -95,7 +95,7 @@ def check_cmake_response_files(exe, base):
         source = shutil.copy2(HERE / "packages" / "pkg_cmake_lib.k", root)
         app = root / ("app" + tc.EXE_SUFFIX)
         for name in ("home", "home with spaces"):
-            env = dict(os.environ, KLANG_HOME=str(root / name))
+            env = dict(os.environ, K_HOME=str(root / name))
             for argv, want in (([exe, "build", "--cc", cc, "-o", app, source], None),
                                ([app], ["12", "-15"])):
                 result = subprocess.run([str(a) for a in argv], cwd=root, env=env,

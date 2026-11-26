@@ -52,7 +52,7 @@ but were more sensitive to background activity than process cycles.
 ## Reproduce
 
 ```text
-python bench/slice_pool.py --exe build/Release/klang.exe --levels 1 2 --calls natural --widths 1 16 --compilers clang tcc jit --reps 7 --warmups 2 --affinity 0xffff0000 --previous-library <old>/slice_pool.k --out build/slice-pool-bench-final
+python bench/slice_pool.py --exe build/Release/k.exe --levels 1 2 --calls natural --widths 1 16 --compilers clang tcc jit --reps 7 --warmups 2 --affinity 0xffff0000 --previous-library <old>/slice_pool.k --out build/slice-pool-bench-final
 ```
 
 `<old>` holds `stdlib/slice_pool.k` and `stdlib/slice_pool_internal.k`
@@ -60,7 +60,7 @@ from `06a6300f`. The harness saves K/C snapshots, logs, checksums,
 compiler and library fingerprints, sizes and all samples under `--out`. The
 checked-in [current results](slice_pool_results.json) contain this matrix.
 `--levels 0` is also supported. `--calls natural` leaves the emitted C
-unchanged; `boundary` adds `GS_NOINLINE` to the native `exercise` function,
+unchanged; `boundary` adds `K_NOINLINE` to the native `exercise` function,
 while `inline` requests inlining. JIT always uses the compiler's unmodified
 output. TinyCC is discovered beside the K build or on PATH. MSVC is
 available via `--compilers msvc`; timings here use Clang, standalone TinyCC
@@ -76,7 +76,7 @@ compiles as written. At O2 the resize loop runs about 60 cycles per step
 more than the builtin's under both. Of those, the checks the tree copy makes
 take about 1.5% of the run under TinyCC. Three 16-byte slice copies that
 inlining `realloc_slice` and `finish` binds as parameters take about 12
-million of 58 million cycles. Snapshotting the `gs_rref` argument, writing
+million of 58 million cycles. Snapshotting the `k_rref` argument, writing
 back cached tops around the call, and the library's own bounds and span
 checks take about 1% each. Calling the tree through a wrapper made no
 measurable difference. JIT totals also pay for compiling the inlined library
