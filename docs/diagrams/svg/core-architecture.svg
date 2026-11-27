@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="736" viewBox="0 0 1000 736" role="img" aria-labelledby="title description">
+  <title id="title">K core architecture</title>
+  <desc id="description">K source and tools enter the language compiler. A C backend feeds TinyCC or a native toolchain and the generated program uses the K target runtime. The Cordis graph selects optional services from a project lock.</desc>
+  <rect width="1000" height="736" rx="14" fill="#F8F6F0"/>
+  <g font-family="Menlo, SFMono-Regular, Consolas, monospace">
+    <rect x="36" y="24" width="928" height="42" rx="8" fill="#141413" stroke="none" stroke-width="1.15"/>
+    <text x="54" y="51" fill="#FDFCF9" font-size="20" text-anchor="start" font-weight="700">K · CORE ARCHITECTURE</text>
+    <text x="36" y="92" fill="#645F56" font-size="15" text-anchor="start">Language semantics, target runtime and Cordis composition</text>
+    <g>
+    <rect x="36" y="115" width="296" height="72" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="184.0" y="145.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Program inputs</text>
+    <text x="184.0" y="167.0" fill="#645F56" font-size="14.5" text-anchor="middle">.k files · imports · stdlib</text>
+    </g>
+    <g>
+    <rect x="352" y="115" width="296" height="72" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="500.0" y="145.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Tooling entry points</text>
+    <text x="500.0" y="167.0" fill="#645F56" font-size="14.5" text-anchor="middle">k CLI · editor / LSP</text>
+    </g>
+    <g>
+    <rect x="668" y="115" width="296" height="72" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="816.0" y="145.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Project selection</text>
+    <text x="816.0" y="167.0" fill="#645F56" font-size="14.5" text-anchor="middle">manifest · lock · input digests</text>
+    </g>
+    <path d="M184 187V222" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="180,215 184,222 188,215" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M500 187V222" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="496,215 500,222 504,215" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M816 187V222" fill="none" stroke="#394DF2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+    <polyline points="812,215 816,222 820,215" fill="none" stroke="#394DF2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="36" y="222" width="596" height="208" rx="8" fill="#FDFCF9" stroke="#141413" stroke-width="1.15"/>
+    <rect x="660" y="222" width="304" height="208" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="54" y="253" fill="#141413" font-size="17" text-anchor="start" font-weight="700">K COMPILER CORE</text>
+    <text x="678" y="253" fill="#141413" font-size="17" text-anchor="start" font-weight="700">CORDIS MICROKERNEL</text>
+    <g>
+    <rect x="53" y="277" width="170" height="98" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="138.0" y="309.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">Load &amp; parse</text>
+    <text x="138.0" y="331.0" fill="#645F56" font-size="14" text-anchor="middle">source graph</text>
+    <text x="138.0" y="353.0" fill="#645F56" font-size="14" text-anchor="middle">tokens · AST</text>
+    </g>
+    <g>
+    <rect x="249" y="277" width="170" height="98" rx="8" fill="#141413" stroke="#141413" stroke-width="1.15"/>
+    <text x="334.0" y="309.0" fill="#FDFCF9" font-size="15" text-anchor="middle" font-weight="700">Check semantics</text>
+    <text x="334.0" y="331.0" fill="#FDFCF9" font-size="14" text-anchor="middle">types · ownership</text>
+    <text x="334.0" y="353.0" fill="#FDFCF9" font-size="14" text-anchor="middle">lifetimes · async</text>
+    </g>
+    <g>
+    <rect x="445" y="277" width="170" height="98" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="530.0" y="309.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">Generate C</text>
+    <text x="530.0" y="331.0" fill="#645F56" font-size="14" text-anchor="middle">optimize · BCE</text>
+    <text x="530.0" y="353.0" fill="#645F56" font-size="14" text-anchor="middle">layout · emission</text>
+    </g>
+    <path d="M223 326H245" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="238,330 245,326 238,322" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M419 326H441" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="434,330 441,326 434,322" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="334" y="403" fill="#645F56" font-size="14" text-anchor="middle">Checked specializations feed both execution paths</text>
+    <g>
+    <rect x="677" y="277" width="270" height="98" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="812.0" y="309.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">Resolve · verify · activate</text>
+    <text x="812.0" y="331.0" fill="#645F56" font-size="14" text-anchor="middle">ABI · dependencies · grants</text>
+    <text x="812.0" y="353.0" fill="#645F56" font-size="14" text-anchor="middle">pin provider generations</text>
+    </g>
+    <text x="812" y="403" fill="#645F56" font-size="14" text-anchor="middle">Project-scoped service contracts</text>
+    <path d="M334 430V458M177 458H491" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M177 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="173,479 177,486 181,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M491 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="487,479 491,486 495,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M812 430V486" fill="none" stroke="#394DF2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+    <polyline points="808,479 812,486 816,479" fill="none" stroke="#394DF2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="36" y="486" width="282" height="78" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="177.0" y="519.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Native C toolchain</text>
+    <text x="177.0" y="541.0" fill="#645F56" font-size="14.5" text-anchor="middle">k build → executable</text>
+    </g>
+    <g>
+    <rect x="350" y="486" width="282" height="78" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="491.0" y="519.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">TinyCC / libtcc</text>
+    <text x="491.0" y="541.0" fill="#645F56" font-size="14.5" text-anchor="middle">k run → in-process execution</text>
+    </g>
+    <path d="M177 564V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="173,585 177,592 181,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M491 564V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="487,585 491,592 495,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="36" y="592" width="596" height="80" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="334.0" y="626.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">K target runtime</text>
+    <text x="334.0" y="648.0" fill="#645F56" font-size="14.5" text-anchor="middle">data stacks · task frames · workers · C ABI</text>
+    </g>
+    <g>
+    <rect x="660" y="486" width="304" height="186" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="812.0" y="540.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Optional providers</text>
+    <text x="812.0" y="562.0" fill="#645F56" font-size="14" text-anchor="middle">LSP / build diagnostics</text>
+    <text x="812.0" y="584.0" fill="#645F56" font-size="14" text-anchor="middle">Python / TypeScript guests</text>
+    <text x="812.0" y="606.0" fill="#645F56" font-size="14" text-anchor="middle">TypeScript project service</text>
+    <text x="812.0" y="628.0" fill="#645F56" font-size="14" text-anchor="middle">TCP streams / CPU inference</text>
+    </g>
+    <rect x="36" y="684" width="928" height="38" rx="8" fill="#394DF2" stroke="none" stroke-width="1.15"/>
+    <text x="500.0" y="708" fill="#FDFCF9" font-size="14" text-anchor="middle">K checks the program. Cordis composes the services selected for its host.</text>
+  </g>
+</svg>

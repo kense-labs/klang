@@ -32,6 +32,7 @@ ROOT = os.path.dirname(os.path.dirname(SITE))
 # Markdown pages, as (source relative to the repository, output page).
 PAGES = []
 PAGES.append(("README.md", "index.html"))
+PAGES.append(("README.zh-CN.md", "README.zh-CN.html"))
 PAGES.append(("docs/index.md", "docs/index.html"))
 for src in sorted(glob.glob(os.path.join(ROOT, "docs", "*.md"))):
     name = os.path.basename(src)
@@ -54,6 +55,9 @@ SOURCES = sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
 SOURCES.append("LICENSE")
 COPIES = sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
                 for p in glob.glob(os.path.join(ROOT, "docs", "logo", "*.png")))
+for pattern in ("*.png", "svg/*.svg"):
+    COPIES += sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
+                     for p in glob.glob(os.path.join(ROOT, "docs", "diagrams", pattern)))
 COPIES.extend(("LICENSE-APACHE", "NOTICE", "vscode/klang-language.vsix"))
 # The raw results the benchmark reports link to.
 COPIES += sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
@@ -107,6 +111,8 @@ def build_page(src_rel, out_rel, out_dir, pandoc_exe):
             "--metadata", "pagetitle=" + title_of(text, os.path.basename(src_rel)),
             "--variable", "root=" + root,
             "--variable", "source=" + src_rel]
+    if src_rel == "README.zh-CN.md":
+        args += ["--metadata", "lang=zh-CN"]
     pandoc(args, pandoc_exe, src=src, out=out)
 
 

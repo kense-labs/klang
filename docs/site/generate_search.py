@@ -11,6 +11,7 @@ SITE = os.path.dirname(os.path.abspath(__file__))
 # Copy logic from build.py
 pages = []
 pages.append(("README.md", "index.html"))
+pages.append(("README.zh-CN.md", "README.zh-CN.html"))
 pages.append(("docs/index.md", "docs/index.html"))
 for src in sorted(glob.glob(os.path.join(ROOT, "docs", "*.md"))):
     name = os.path.basename(src)
