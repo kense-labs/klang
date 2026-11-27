@@ -10,6 +10,7 @@ inline string BuildInputPath(const string &path) {
     auto absolute = filesystem::absolute(filesystem::path(path), ec);
     return ec ? path : absolute.string();
 }
+#endif
 
 // Give ld a private output on the destination filesystem. After publishing
 // it, the stamp may describe only this file, even if another program
@@ -41,6 +42,7 @@ struct PendingExecutable {
     }
 };
 
+#ifdef __APPLE__
 struct ExecutableCache {
     string dir;
     string key;

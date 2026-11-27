@@ -164,6 +164,15 @@ are being implemented.
   it and assert one serial output line. Check for host libc dependencies.
   Run this smoke test independently of hosted I/O and use it to validate
   target layout before implementing interrupts and drivers.
+- **WebAssembly.** The WASI Preview 1 command target builds and runs checked
+  K programs with 32-bit layout and address-stable data stacks. Plain C
+  package sources compile and link with the selected WASI toolchain, using
+  target- and toolchain-separated package caches. Exercise optional browser
+  and component-model hosts next; worker threads, dynamic externs, and CMake
+  and builtin native packages remain unsupported. Measure fixed-stack
+  capacity and the cost of growth checks on workloads that exceed the
+  introductory examples.
+  [WebAssembly target](design/wasm.md#wasi-command-target)
 
 ### Verification commands
 

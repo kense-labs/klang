@@ -22,6 +22,7 @@ typedef struct { uint8_t *data; int64_t len; } sl_u8;
    the header's count grows. */
 static void k_bld_append(k_rref b, const void *p, int64_t n) {
     if (n <= 0) return;
+    k_stack_check(b.stk->top, (uint64_t)n);
     memcpy(b.stk->top, p, (size_t)n);
     b.stk->top += n;
     b.hdr->len += n;

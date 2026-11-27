@@ -50,6 +50,7 @@ inline bool CodeGen::SimpleText(Call *c, TypeExpr *t) {
 }
 
 inline void CodeGen::RenderLit(Loc &out, const string &text) {
+    Room(out.stk, cat(text.size()));
     L("K_MEMCPY(", Top(out.stk), ", ", StrRaw(text), ", ", text.size(), ");");
     Bump(out.stk, cat(text.size()));
     L(out.lenlv, " += ", text.size(), ";");
@@ -58,6 +59,7 @@ inline void CodeGen::RenderLit(Loc &out, const string &text) {
 // nexpr writes at the builder's top and yields the byte count.
 inline void CodeGen::RenderN(Loc &out, const string &nexpr) {
     auto n = T();
+    if (!nexpr.starts_with("k_fmt_quoted(")) Room(out.stk, "K_FMT_MAX");
     L("int64_t ", n, " = ", nexpr, ";");
     Bump(out.stk, n);
     L(out.lenlv, " += ", n, ";");
@@ -141,11 +143,13 @@ inline void CodeGen::RenderLoc(Loc &out, Loc lv, TypeExpr *t, bool nested, Call 
             auto v = ArrayView(lv);
             if (IsU8(elem)) {
                 if (nested) {
+                    ArrayRoom(out.stk, v.len, 2, 2);
                     RenderN(out, cat("k_fmt_quoted(", Top(out.stk), ", (const uint8_t *)(",
                                      v.elems, "), ", v.len, ")"));
                 } else {
                     auto n = T();
                     L("int64_t ", n, " = ", v.len, ";");
+                    Room(out.stk, n);
                     L(CopyFn(), "(", Top(out.stk), ", (const uint8_t *)(", v.elems,
                       "), (size_t)", n, ");");
                     Bump(out.stk, n);
@@ -520,7 +524,9 @@ inline void CodeGen::EmitFormatInto(Loc lv, Node *a, Line ln, Call *c) {
         L("uint8_t ", src, "[K_FMT_MAX];");
         L("int64_t ", n, " = ", FmtCall(a, src), ";");
     } else {
-        L("int64_t ", n, " = ", FmtCall(a, Top(lv.stk)), ";");
+        auto format = FmtCall(a, Top(lv.stk));
+        Room(lv.stk, "K_FMT_MAX");
+        L("int64_t ", n, " = ", format, ";");
     }
     // Bytes to copy -- a limited array's, under its capacity check, or a
     // rendered or array source into a resizable -- append like any others.
@@ -566,14 +572,18 @@ inline vector<string> CodeGen::EmitStr(Call *c, vector<Node *> &an, Dst d0, Line
         if (!SimpleText(context, t)) {
             auto b = RenderToTemp(a, context);
             L("int64_t ", n, " = ", b.hdr, ".len;");
+            Room(stk, n);
             L("K_MEMCPY(", Top(stk), ", ", b.hdr, ".base, (size_t)", n, ");");
         } else if (t->kind == TY_ARRAY || t->kind == TY_SLICE) {
             auto se = GenSrcElems(a);
             L("int64_t ", n, " = ", se.n, ";");
+            Room(stk, n);
             L(CopyFn(), "(", Top(stk), ", (const uint8_t *)(", se.elems, "), (size_t)",
               n, ");");
         } else {
-            L("int64_t ", n, " = ", FmtCall(a, Top(stk)), ";");
+            auto format = FmtCall(a, Top(stk));
+            Room(stk, "K_FMT_MAX");
+            L("int64_t ", n, " = ", format, ";");
         }
         Bump(stk, n);
         L(cnt, " += ", n, ";");

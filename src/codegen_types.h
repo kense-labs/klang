@@ -243,7 +243,7 @@ inline const char *CodeGen::RelCT(TypeExpr *rt) {
 inline CodeGen::Layout CodeGen::LayoutFields(const vector<Field> &fields,
                                              const vector<TypeExpr *> &ftypes) {
     Layout lo;
-    lo.size = PackedFieldBytes(fields, ftypes, [&](TypeExpr *t) { return FixedSize(t); },
+    lo.size = PackedFieldBytes(fields, ftypes, ast.pointer_bytes, [&](TypeExpr *t) { return FixedSize(t); },
                                [&](int64_t offset) { lo.offs.push_back(offset); });
     return lo;
 }
@@ -263,7 +263,7 @@ inline const CodeGen::Layout &CodeGen::VariantLayout(EnumInst *ei, int vi) {
 }
 
 inline int64_t CodeGen::FixedSize(TypeExpr *t) {
-    return FixedStorageBytes(t, [&](TypeArray *a) { return ArrSize(a); },
+    return FixedStorageBytes(t, ast.pointer_bytes, [&](TypeArray *a) { return ArrSize(a); },
                             [&](TypeExpr *p) { return IsResz(p); }, [&](TypeExpr *part) {
         if (part->kind == TY_STRUCT) return max<int64_t>(1, StructLayout(SI(part)).size);
         if (part->kind == TY_VARIANT) {

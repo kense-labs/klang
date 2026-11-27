@@ -78,6 +78,16 @@ R"KRT(#ifndef K_EMBEDDED_JIT
 #endif
 
 )KRT"
+R"KRT(#if defined(__wasi__) && !defined(K_TARGET_WASI)
+#error "Generate the C for WASI with k build --target wasm32-wasip1"
+#endif
+#ifdef K_TARGET_WASI
+#if !defined(__wasi__) || !defined(__wasm32__)
+#error "The generated program requires a wasm32 WASI toolchain"
+#endif
+#endif
+
+)KRT"
 R"KRT(/* K values can start at any byte, including scalars reached through a
    reference or slice. GCC and Clang must retain that alignment on the
    pointee type, even after taking a packed member's address. MSVC and
@@ -145,11 +155,22 @@ R"KRT(/* Configuration; all overridable from the compile command line. */
 #ifndef K_MAX_STACKS
 #define K_MAX_STACKS 1024
 #endif
+#define K_WASI_STACK_RESERVE (8ull << 20)
+#define K_WASI_STACK_BUDGET (4ull << 30)
 #ifndef K_STACK_RESERVE
+#ifndef __wasi__
 #define K_STACK_RESERVE (2048ull << 20)  /* Address space reserved per stack. */
+#else
+#define K_STACK_RESERVE K_WASI_STACK_RESERVE
+#endif
 #endif
 #ifndef K_STACK_GAP
 #define K_STACK_GAP (1ull << 20)   /* Unmapped tail so runaway growth aborts. */
+#endif
+#ifdef __wasi__
+#if K_STACK_RESERVE > 2147483647ull
+#error "WASI data stacks must fit in a signed 32-bit pointer difference"
+#endif
 #endif
 /* The address space the program means to spend on data stack regions over
    every thread program at once, which is what caps hardware_threads()
@@ -157,7 +178,11 @@ R"KRT(/* Configuration; all overridable from the compile command line. */
    worker's. Not enforced at reservation; what the platform refuses is
    retried smaller (k_reserve_region). */
 #ifndef K_STACK_BUDGET
+#ifndef __wasi__
 #define K_STACK_BUDGET (32ull << 40)
+#else
+#define K_STACK_BUDGET K_WASI_STACK_BUDGET
+#endif
 #endif
 #ifndef K_STACK_STATS
 #define K_STACK_STATS 0    /* 1: each thread program reports its stack use as it ends. */
@@ -264,6 +289,12 @@ K_API K_NORETURN void k_runtime_exit(int64_t code);
 /* Growth from the data stack whose top is `at` that no region could hold,
    reported as the fault handler reports an overrun into the guard gap. */
 K_API K_NORETURN void k_stack_overflow(const void *at);
+#ifdef __wasi__
+static void k_stack_check(const void *at, uint64_t n);
+static void k_stack_check_array(const void *at, uint64_t count, uint64_t width, uint64_t prefix);
+#else
+#define k_stack_check(at, n) ((void)0)
+#endif
 K_API K_NORETURN void k_idxfail(int64_t i, int64_t n, const char *file, int line);
 K_API K_NORETURN void k_divfail(const char *file, int line);
 K_API K_NORETURN void k_divovf(const char *file, int line);
@@ -1435,8 +1466,9 @@ R"KRT(/* Ends the process with `code`, its streams flushed: exit() and every
 static K_NORETURN void k_end(int code);
 
 )KRT"
-R"KRT(#include <setjmp.h>
-#include <stdarg.h>
+R"KRT(#include <stdarg.h>
+#if K_NEED_THREADS
+#include <setjmp.h>
 /* No abort is raised in a signal handler, so the jump leaves the signal
    state alone. */
 #ifdef _WIN32
@@ -1445,6 +1477,7 @@ R"KRT(#include <setjmp.h>
 #else
 #define k_setjmp(b)  _setjmp(b)
 #define k_longjmp    _longjmp
+#endif
 #endif
 
 )KRT"
@@ -1456,12 +1489,14 @@ R"KRT(K_API K_NORETURN void k_panic(const char *msg) {
 )KRT"
 R"KRT(/* Where an abort in a contained worker returns to (k_run_contained), and
    the message it leaves there for thread_wait; NULL on every other thread. */
+#if K_NEED_THREADS
 typedef struct {
     jmp_buf jump;
     uint8_t *msg;
     int64_t len;
 } k_contained;
 static K_TLS k_contained *k_contain;
+#endif
 
 )KRT"
 R"KRT(/* The end of a failed check or abort(msg) (§9.3), whose message is `len`
@@ -1476,7 +1511,9 @@ static K_NORETURN void k_fail(const void *msg, int64_t len, const char *file, in
     int64_t loc = file ? snprintf(NULL, 0, " (%s:%d)\n", file, line) : 1;
     uint8_t *text = (uint8_t *)malloc((size_t)(pre + len + loc + 1));
     if (!text) {
+        #if K_NEED_THREADS
         if (k_contain) k_panic("out of memory recording an aborted thread");
+        #endif
         fputs(lead, stderr);
         fwrite(msg, 1, (size_t)len, stderr);
         if (file) fprintf(stderr, " (%s:%d)\n", file, line);
@@ -1487,12 +1524,14 @@ static K_NORETURN void k_fail(const void *msg, int64_t len, const char *file, in
     if (len) memcpy(text + pre, msg, (size_t)len);
     if (file) snprintf((char *)text + pre + len, (size_t)loc + 1, " (%s:%d)\n", file, line);
     else memcpy(text + pre + len, "\n", 2);
+    #if K_NEED_THREADS
     if (k_contain) {
         memmove(text, text + pre, (size_t)(len + loc - 1));
         k_contain->msg = text;
         k_contain->len = len + loc - 1;
         k_longjmp(k_contain->jump, 1);
     }
+    #endif
     fwrite(text, 1, (size_t)(pre + len + loc), stderr);
     free(text);
     k_end(1);
@@ -1709,8 +1748,12 @@ static size_t k_overflow_text(char *buf, const k_region *r) {
         p = k_size(p, k_region_reserve);
         p = k_text(p, " when the platform ran out of address space)");
     }
+#ifdef __wasi__
+    p = k_text(p, "; increase --stack-reserve within the WASM memory budget\n");
+#else
     p = k_text(p, "; --stack-reserve or -DK_STACK_RESERVE raises the reservation, "
                    "up to 256 TB\n");
+#endif
     return (size_t)(p - buf);
 }
 
@@ -1724,6 +1767,21 @@ R"KRT(K_API K_NORETURN void k_stack_overflow(const void *at) {
     }
     k_panic("data stack overflow");
 }
+
+)KRT"
+R"KRT(#ifdef __wasi__
+static void k_stack_check(const void *at, uint64_t n) {
+    if (!n) return;
+    const k_region *r = k_find_region(at);
+    if (!r || n > r->usable - ((uintptr_t)at - (uintptr_t)r->base)) k_stack_overflow(at);
+}
+
+)KRT"
+R"KRT(static void k_stack_check_array(const void *at, uint64_t count, uint64_t width, uint64_t prefix) {
+    if (width && count > (UINT64_MAX - prefix) / width) k_stack_overflow(at);
+    k_stack_check(at, prefix + count * width);
+}
+#endif
 
 )KRT"
 R"KRT(/* The calling thread program's registry, empty, as it starts. */
@@ -1921,6 +1979,23 @@ static int k_end_first(void) {
 static K_NORETURN void k_park(void) {
     for (;;) Sleep(INFINITE);
 }
+
+)KRT"
+R"KRT(#elif defined(__wasi__)
+
+)KRT"
+R"KRT(/* WASI linear memory has no protected gaps. Each allocation stays at its
+   original address, and checked growth handles the logical end. */
+static size_t k_os_page_size(void) { return 1; }
+static const size_t k_page_size = 1;
+static void k_regions_init(void) {}
+static void k_native_stack_init(void) {}
+static void k_native_stack_free(void) {}
+static void k_fault_uninstall(void) {}
+static uint8_t *k_os_reserve(size_t usable, size_t size) { (void)usable; return (uint8_t *)malloc(size); }
+static void k_release_region(const k_region *r) { free(r->base); }
+static int k_end_first(void) { return 1; }
+static K_NORETURN void k_park(void) { abort(); }
 
 )KRT"
 R"KRT(#else  /* posix */
@@ -2213,7 +2288,10 @@ R"KRT(/* Returns the pages [start, start + len) of one region to the OS, which
    (k_trim_memory says why). k_trim_memory and slice_pool's trim
    (k_slice_pool_trim) share it. 0 means the OS refused. */
 static int k_discard_pages(uintptr_t start, size_t len) {
-#ifdef _WIN32
+#if defined(__wasi__)
+    (void)start; (void)len;
+    return 0;
+#elif defined(_WIN32)
     return VirtualFree((void *)start, len, MEM_DECOMMIT) != 0;
 #elif defined(__APPLE__)
     return mmap((void *)start, len, PROT_READ | PROT_WRITE,
@@ -2330,6 +2408,7 @@ R"KRT(static int64_t k_sp_newnode(k_sppath *p) {
         K_SPHEAD(p)->chain = K_SPLEAF(p, i)->link;
         return i;
     }
+    k_stack_check(*p->top, K_SPAN_NODE);
     *p->top += K_SPAN_NODE;
     return (*p->n)++;
 }
@@ -2766,6 +2845,7 @@ K_API void k_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx, i
     if (*n == 0) {
         k_sphead *hd = (k_sphead *)base;
         *n = 1;
+        k_stack_check(base, K_SPAN_NODE);
         *top = base + K_SPAN_NODE;
         hd->chain = 0;
         hd->height = 0;
@@ -3203,7 +3283,14 @@ R"KRT(K_API void k_rt_start(int argc, char **argv, uint64_t reserve, uint64_t ga
     reserve -= reserve % k_region_page;
     if (!reserve) k_panic("the data stack reservation (K_STACK_RESERVE) is less than a page");
     k_region_usable = k_region_reserve = (size_t)reserve;
+    #ifdef __wasi__
+    /* Keep the exact end recognizable by k_find_region, including for a
+       zero-byte allocation immediately before the next attempted write. */
+    (void)gap;
+    k_region_gap = 1;
+    #else
     k_region_gap = (size_t)gap;
+    #endif
     k_stack_budget = budget;
     k_mainregions = mainregions;
     k_workerregions = workerregions;
@@ -3574,7 +3661,9 @@ R"KRT(/* hardware_threads() sizes worker pools, and a program that spawns none m
    still ask; it needs nothing below. It reports no more workers than the
    data stack budget holds beside the main program (k_rt_start), so a pool
    sized by it never runs the program out of address space. */
-#ifdef _WIN32
+#ifdef __wasi__
+static int64_t k_os_threads(void) { return 1; }
+#elif defined(_WIN32)
 /* The CPUs the process may run on, which `start /affinity` or a job object
    can make fewer than the machine has. */
 static int64_t k_os_threads(void) {
@@ -4234,6 +4323,7 @@ R"KRT(/* Appends n bytes to the u8[>..] a builder reference points at: the
    the header's count grows. */
 static void k_bld_append(k_rref b, const void *p, int64_t n) {
     if (n <= 0) return;
+    k_stack_check(b.stk->top, (uint64_t)n);
     memcpy(b.stk->top, p, (size_t)n);
     b.stk->top += n;
     b.hdr->len += n;
@@ -4618,7 +4708,9 @@ R"KRT(#include <time.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <dirent.h>
+#ifndef __wasi__
 #include <dlfcn.h>
+#endif
 #include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -4656,7 +4748,7 @@ typedef char k_os_char;
 R"KRT(/* The native form of a path, or of an environment variable's name, in buf
    (K_OS_PATH_MAX characters): its length, or -1 where it is refused. */
 static int k_os_native(sl_u8 s, k_os_char *buf) {
-    if (s.len >= K_OS_PATH_MAX || (s.len > 0 && memchr(s.data, 0, (size_t)s.len)))
+    if (s.len <= 0 || s.len >= K_OS_PATH_MAX || memchr(s.data, 0, (size_t)s.len))
         return -1;
     int n = (int)s.len;
 #ifdef _WIN32
@@ -5009,10 +5101,11 @@ K_API uint8_t k_os_write_file_atomic(sl_u8 path, sl_u8 data) {
             if (errno == EEXIST) continue;
             return 0;
         }
-        /* The permissions of the file it replaces, which write_file leaves
-           as they are, rather than the umask's. */
+        /* Preserve the destination's mode on systems that expose it. */
+#ifndef __wasi__
         struct stat st;
         if (stat(p, &st) == 0) ok = fchmod(fd, st.st_mode & 0777) == 0;
+#endif
         while (ok && left > 0) {
             ssize_t w = write(fd, d, left > (1 << 30) ? (size_t)1 << 30 : (size_t)left);
             if (w < 0 && errno == EINTR) continue;
@@ -5396,6 +5489,10 @@ static int k_dl_spelling(const k_dllib *lib, char *buf) {
 )KRT"
 R"KRT(K_API void k_dl_bind(const k_dllib *libs, int64_t nlibs, const k_dlbind *binds,
                        int64_t nbinds) {
+#ifdef __wasi__
+    (void)libs; (void)nlibs; (void)binds; (void)nbinds;
+    k_panic("dynamic libraries are unavailable on WASI Preview 1");
+#else
     for (int64_t l = 0; l < nlibs; l++) {
         char spelling[K_OS_PATH_MAX], msg[K_OS_PATH_MAX + 512];
         if (!k_dl_spelling(&libs[l], spelling)) {
@@ -5447,6 +5544,7 @@ R"KRT(K_API void k_dl_bind(const k_dllib *libs, int64_t nlibs, const k_dlbind *b
             *binds[b].slot = f;
         }
     }
+#endif
 }
 
 )KRT"
@@ -5723,6 +5821,7 @@ R"KRT(static int64_t k_spc_newnode(k_spcpath *p) {
         K_SPCHEAD(p)->chain = K_SPLEAF(p, i)->link;
         return i;
     }
+    k_stack_check(*p->top, K_SPAN_NODE);
     i = (*p->n)++;
     memset(K_SPLEAF(p, i), 0, K_SPAN_NODE);
     *p->top += K_SPAN_NODE;
@@ -6122,6 +6221,7 @@ R"KRT(K_API void k_slice_pool_free(k_rref nodes, void *tree, int64_t idx, int64_
     K_SPSTART(&p, tree, nodes, at);
     if (*p.n == 0) {
         /* Node 0 stays zero, the chain's end. */
+        k_stack_check(p.base, K_SPAN_NODE);
         memset(p.base, 0, K_SPAN_NODE);
         *p.n = 1;
         *p.top = p.base + K_SPAN_NODE;

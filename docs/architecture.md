@@ -107,6 +107,7 @@ after the request has been cancelled.
 | Freestanding | Boot a RISC-V QEMU image, write to its serial console, and handle a timer interrupt | Static components, fixed startup storage, optional page-backed storage, explicit layout and memory-order rules. |
 | Hosted native | Serve an inference workload with bounded I/O and interchangeable CPU and GPU providers | Event loop, typed file and device handles, cancellation, backpressure, sandboxed extensions, and observability. |
 | Hosted TypeScript | Run an existing TypeScript CLI against its locked dependencies | An optional Cordis profile selects the TypeScript transform, JavaScript engine, Node.js compatibility services and host capabilities. |
+| WASI Preview 1 | Compile and run a K command as a `.wasm` module | 32-bit layout, fixed address-stable data stacks, cooperative tasks, and host-granted WASI resources. [WebAssembly target](design/wasm.md#wasi-command-target) |
 
 The core toolchain installs once. A project declares the providers it needs
 and each target links or loads that selection. JavaScript engines, Python,

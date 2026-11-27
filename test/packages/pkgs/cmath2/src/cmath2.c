@@ -1,4 +1,11 @@
 #include "cmath2.h"
+#include <stddef.h>
+
+_Static_assert(offsetof(cmath2_ints, len) == sizeof(void *), "K slices are packed");
+_Static_assert(sizeof(cmath2_ints) == sizeof(void *) + sizeof(int64_t), "K slice size");
+#ifdef __wasi__
+_Static_assert(sizeof(void *) == 4, "the WASI fixture uses 32-bit pointers");
+#endif
 
 int32_t cmath2_square(int32_t x) { return x * x; }
 

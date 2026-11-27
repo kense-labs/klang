@@ -13,6 +13,7 @@ namespace klang {
 inline void CodeGen::EmitValStore(const string &stk, TypeExpr *t, const string &x) {
     auto sz = FixedSize(t);
     if (sz == 0) { L("(void)(", x, ");"); return; }
+    Room(stk, cat(sz));
     StoreWhole(Top(stk), t, x);
     Bump(stk, cat(sz));
 }
@@ -59,8 +60,10 @@ inline void CodeGen::EmitLenCheck(IntStorage ls, const string &n) {
 inline void CodeGen::EmitLenStore(const string &stk, IntStorage ls, const string &n) {
     EmitLenCheck(ls, n);
     if (ls == IS_VARINT) {
+        Room(stk, "10");
         Bump(stk, cat("k_uleb_write(", Top(stk), ", (uint64_t)(", n, "))"));
     } else {
+        Room(stk, cat(IntSize(ls)));
         L("*(", IntCT(ls), " *)", Top(stk), " = (", IntCT(ls), ")(", n, ");");
         Bump(stk, cat(IntSize(ls)));
     }
@@ -82,6 +85,7 @@ inline void CodeGen::EmitArrayCount(const string &stk, TypeExpr *at, const strin
         case A_LIMITED: {   // Runtime capacity: chosen as the initial length (v1).
             if (check) EmitLenCheck(IS_U32, n);
             auto x = check ? cat("(uint32_t)", n) : n;
+            Room(stk, "8");
             L("*(k_u32 *)", Top(stk), " = ", x, ";");
             L("*(k_u32 *)(", Top(stk), " + 4) = ", x, ";");
             Bump(stk, "8");
@@ -96,6 +100,7 @@ inline void CodeGen::EmitArrayCount(const string &stk, TypeExpr *at, const strin
 
 // A varint field or element (§3.6): the i64 value `x`, zigzag-encoded.
 inline void CodeGen::EmitVarintStore(const string &stk, const string &x) {
+    Room(stk, "10");
     Bump(stk, cat("k_zig_write(", Top(stk), ", ", x, ")"));
 }
 
@@ -203,9 +208,11 @@ inline void CodeGen::EmitRelStore(const string &stk, TypeExpr *rt, const string 
     if (w == IS_VARINT) {
         assert(!IsResz(rt->ref->sub));
         auto off = RelOffset(rt, RelOrigin(rt, fa), rv, ln, f);
+        Room(stk, "10");
         Bump(stk, rt->ref->pool ? cat("k_uleb_write(", fa, ", (uint64_t)", off, ")")
                                 : cat("k_zig_write(", fa, ", ", off, ")"));
     } else {
+        Room(stk, cat(IntSize(w)));
         EmitRelStoreAt(fa, rt, rv, ln, true, f);
         Bump(stk, cat(IntSize(w)));
     }
@@ -242,6 +249,7 @@ inline void CodeGen::EmitRelSelfAt(const string &fa, TypeExpr *rt, int64_t field
 }
 
 inline void CodeGen::EmitRelSelfStore(const string &stk, TypeExpr *rt, int64_t fieldoff, Line ln) {
+    Room(stk, cat(IntSize((IntStorage)rt->ref->lenstorage)));
     EmitRelSelfAt(Top(stk), rt, fieldoff, ln);
     Bump(stk, cat(IntSize((IntStorage)rt->ref->lenstorage)));
 }
@@ -336,6 +344,7 @@ inline void CodeGen::EmitCopyElems(const string &stk, TypeExpr *elem, const stri
                                    const string &n) {
     if (IsFix(elem)) {
         auto esz = FixedSize(elem);
+        ArrayRoom(stk, n, esz);
         L(CopyFn(), "(", Top(stk), ", ", src, ", (size_t)((", n, ") * ", esz, "));");
         Bump(stk, cat("(", n, ") * ", esz));
     } else {
@@ -345,6 +354,7 @@ inline void CodeGen::EmitCopyElems(const string &stk, TypeExpr *elem, const stri
         ind++;
         auto sz = T();
         L("int64_t ", sz, " = ", SizeX(elem, p), ";");
+        Room(stk, sz);
         L("K_MEMCPY(", Top(stk), ", ", p, ", (size_t)", sz, ");");
         Bump(stk, sz);
         L(p, " += ", sz, ";");
@@ -495,9 +505,11 @@ inline void CodeGen::GenConstruct(Node *n, const string &stk, TypeExpr *want, co
         // The zero value of an optional field.
         assert(et->kind == TY_REF);
         if (et->ref->lenstorage == IS_VARINT) {
+            Room(stk, "1");
             L("*", Top(stk), " = 0;");
             Bump(stk, "1");
         } else {
+            Room(stk, cat(FixedSize(et)));
             L("K_MEMZERO(", Top(stk), ", ", FixedSize(et), ");");
             Bump(stk, cat(FixedSize(et)));
         }
@@ -508,6 +520,7 @@ inline void CodeGen::GenConstruct(Node *n, const string &stk, TypeExpr *want, co
         assert(et->kind == TY_ARRAY);
         EmitArrayCount(stk, et, lenlv, cat(s->val.size()), false);
         if (!s->val.empty()) {
+            Room(stk, cat(s->val.size()));
             L("K_MEMCPY(", Top(stk), ", ", StrRaw(s->val), ", ", s->val.size(), ");");
             Bump(stk, cat(s->val.size()));
         }
@@ -586,6 +599,7 @@ inline void CodeGen::ConstructFromLoc(Loc lv, TypeExpr *et, const string &stk,
         assert(!lv.val);
         auto sz = T();
         L("int64_t ", sz, " = ", SizeX(et, lv.s), ";");
+        Room(stk, sz);
         L("K_MEMCPY(", Top(stk), ", ", lv.s, ", (size_t)", sz, ");");
         Bump(stk, sz);
         return;
@@ -814,6 +828,7 @@ inline void CodeGen::EmitRzCopy(Loc lv, TypeExpr *et, const string &stk, const s
     auto len = T();
     L("int64_t ", len, " = ", lv.lenlv, ";");
     if (prefix) {
+        Room(stk, cat(prefix));
         L("K_MEMCPY(", Top(stk), ", ", lv.s, ", ", prefix, ");");
         Bump(stk, cat(prefix));
     }
@@ -925,6 +940,7 @@ inline void CodeGen::GenVarEnumFromLoc(Loc lv, TypeExpr *et, const string &stk) 
         if (!lv.val) {
             auto sz = T();
             L("int64_t ", sz, " = ", SizeX(lv.t, lv.s), ";");
+            Room(stk, sz);
             L("K_MEMCPY(", Top(stk), ", ", lv.s, ", (size_t)", sz, ");");
             Bump(stk, sz);
         } else {
@@ -942,6 +958,7 @@ inline void CodeGen::GenVarEnumFromLoc(Loc lv, TypeExpr *et, const string &stk) 
         L("case ", TagConst(ei, (int)vi), ":");
         ind++;
         if (psz) {
+            Room(stk, cat(psz));
             L("K_MEMCPY(", Top(stk), ", &", sv, ".u.v_",
               Sanitize(ei->en->variants[vi].name), ", ", psz, ");");
             Bump(stk, cat(psz));
@@ -1005,6 +1022,7 @@ inline void CodeGen::FixedLitAtStk(Node *n, const string &stk) {
     auto et = n->exprtype;
     auto Gap = [&](int64_t bytes) {
         if (bytes <= 0) return;
+        Room(stk, cat(bytes));
         L("K_MEMZERO(", Top(stk), ", ", bytes, ");");
         Bump(stk, cat(bytes));
     };
@@ -1216,6 +1234,7 @@ inline void CodeGen::StructLitAt(StructLit *sl, const string &base, bool inroot)
 }
 
 inline void CodeGen::EmitValStoreTag(const string &stk, IntStorage ts, const string &x) {
+    Room(stk, cat(IntSize(ts)));
     L("*(", IntCT(ts), " *)", Top(stk), " = (", IntCT(ts), ")(", x, ");");
     Bump(stk, cat(IntSize(ts)));
 }
@@ -1236,6 +1255,7 @@ inline void CodeGen::GenArrayLit(ArrayLit *al, const string &stk, const string &
         L("int64_t ", t, " = ", cv, ";");
         L("if (", t, " < 0 || ", t, " > (int64_t)UINT32_MAX) "
           "k_abort(K_E_CAPRANGE, ", LocArgs(al->line), ");");
+        ArrayRoom(stk, t, FixedSize(elem), 8);
         L("*(k_u32 *)", Top(stk), " = (uint32_t)", t, ";");
         L("*(k_u32 *)(", Top(stk), " + 4) = 0;");
         Bump(stk, cat("8 + ", t, " * ", FixedSize(elem)));
@@ -1369,7 +1389,11 @@ inline void CodeGen::GenFieldInits(StructLit *sl, const vector<Field> &fields,
     for (size_t i = 0; i < fields.size(); i++) {
         if (fields[i].ispad) {
             auto n = fields[i].padsize > 0 ? fields[i].padsize : 0;
-            if (n) { L("K_MEMZERO(", Top(stk), ", ", n, ");"); Bump(stk, cat(n)); }
+            if (n) {
+                Room(stk, cat(n));
+                L("K_MEMZERO(", Top(stk), ", ", n, ");");
+                Bump(stk, cat(n));
+            }
             continue;
         }
         auto init = sl->InitFor((int)i);
@@ -1377,9 +1401,11 @@ inline void CodeGen::GenFieldInits(StructLit *sl, const vector<Field> &fields,
         if (IsRelRef(ft)) {
             // Relative-reference slot: store from the plain reference.
             if (!init) {
-                if (ft->ref->lenstorage == IS_VARINT) { L("*", Top(stk), " = 0;"); Bump(stk, "1"); }
-                else { L("K_MEMZERO(", Top(stk), ", ", IntSize((IntStorage)ft->ref->lenstorage), ");");
-                       Bump(stk, cat(IntSize((IntStorage)ft->ref->lenstorage))); }
+                auto size = ft->ref->lenstorage == IS_VARINT ? 1 : IntSize((IntStorage)ft->ref->lenstorage);
+                Room(stk, cat(size));
+                if (ft->ref->lenstorage == IS_VARINT) L("*", Top(stk), " = 0;");
+                else L("K_MEMZERO(", Top(stk), ", ", size, ");");
+                Bump(stk, cat(size));
                 continue;
             }
             // A `self` field points at the value this literal is building,
@@ -1391,6 +1417,7 @@ inline void CodeGen::GenFieldInits(StructLit *sl, const vector<Field> &fields,
         if (!init) {
             // Omitted optional: null (checked by TC that a default exists otherwise).
             assert(ft->kind == TY_REF && ft->ref->optional);
+            Room(stk, cat(FixedSize(ft)));
             L("K_MEMZERO(", Top(stk), ", ", FixedSize(ft), ");");
             Bump(stk, cat(FixedSize(ft)));
             continue;

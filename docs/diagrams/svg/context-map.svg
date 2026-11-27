@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="681" viewBox="0 0 1000 681" role="img" aria-labelledby="title description">
   <title id="title">K dependencies and context map</title>
-  <desc id="description">The CLI coordinates analysis and builds. The LSP creates offline analysis snapshots. The optional source driver generates ordinary K, while the separate TypeScript runner uses Cordis and QuickJS. Hosts use the shared Cordis lifecycle for selected services.</desc>
+  <desc id="description">The CLI coordinates analysis and builds. A WASI host runs the compiled WebAssembly command and supplies host capabilities. The LSP creates offline analysis snapshots. Optional hosts use the Cordis lifecycle for selected services.</desc>
   <rect width="1000" height="681" rx="14" fill="#F8F6F0"/>
   <g font-family="Menlo, SFMono-Regular, Consolas, monospace">
     <rect x="36" y="24" width="928" height="42" rx="8" fill="#141413" stroke="none" stroke-width="1.15"/>
@@ -34,7 +34,7 @@
     <rect x="36" y="247" width="296" height="96" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
     <text x="184.0" y="278.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Build &amp; packages</text>
     <text x="184.0" y="300.0" fill="#645F56" font-size="14.5" text-anchor="middle">package roots · native inputs</text>
-    <text x="184.0" y="322.0" fill="#645F56" font-size="14.5" text-anchor="middle">toolchain selection · cache</text>
+    <text x="184.0" y="322.0" fill="#645F56" font-size="14.5" text-anchor="middle">target · toolchain · cache</text>
     </g>
     <g>
     <rect x="352" y="247" width="296" height="96" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
@@ -64,13 +64,13 @@
     <g>
     <rect x="36" y="418" width="296" height="96" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
     <text x="184.0" y="449.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Execution &amp; artifacts</text>
-    <text x="184.0" y="471.0" fill="#645F56" font-size="14.5" text-anchor="middle">native executable / C output</text>
-    <text x="184.0" y="493.0" fill="#645F56" font-size="14.5" text-anchor="middle">or JIT execution</text>
+    <text x="184.0" y="471.0" fill="#645F56" font-size="14.5" text-anchor="middle">native executable · WASI .wasm</text>
+    <text x="184.0" y="493.0" fill="#645F56" font-size="14.5" text-anchor="middle">generated C · TinyCC run</text>
     </g>
     <g>
     <rect x="352" y="418" width="296" height="96" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
     <text x="500.0" y="449.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Target runtime</text>
-    <text x="500.0" y="471.0" fill="#645F56" font-size="14.5" text-anchor="middle">storage · tasks · C ABI</text>
+    <text x="500.0" y="471.0" fill="#645F56" font-size="14.5" text-anchor="middle">native or WASI runtime</text>
     <text x="500.0" y="493.0" fill="#645F56" font-size="14.5" text-anchor="middle">emitted / linked with program</text>
     </g>
     <g>
@@ -81,12 +81,20 @@
     </g>
     <path d="M352 472H336" fill="none" stroke="#645F56" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="2 5"/>
     <polyline points="343,468 336,472 343,476" fill="none" stroke="#645F56" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M820 514V543H500V571" fill="none" stroke="#394DF2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
-    <polyline points="496,564 500,571 504,564" fill="none" stroke="#394DF2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M184 514V543H263V571" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="259,564 263,571 267,564" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="223" y="535" fill="#645F56" font-size="13" text-anchor="middle">.wasm</text>
+    <path d="M816 514V543H737V571" fill="none" stroke="#394DF2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+    <polyline points="733,564 737,571 741,564" fill="none" stroke="#394DF2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     <g>
-    <rect x="36" y="571" width="928" height="66" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
-    <text x="500.0" y="598.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">Host adapter boundaries</text>
-    <text x="500.0" y="620.0" fill="#645F56" font-size="14" text-anchor="middle">source transform → ordinary K · runtime providers → versioned C calls</text>
+    <rect x="36" y="571" width="454" height="66" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="263.0" y="598.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">WASI Preview 1 host</text>
+    <text x="263.0" y="620.0" fill="#645F56" font-size="14" text-anchor="middle">args · streams · clocks · preopened dirs</text>
+    </g>
+    <g>
+    <rect x="510" y="571" width="454" height="66" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="737.0" y="598.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">Cordis host adapters</text>
+    <text x="737.0" y="620.0" fill="#645F56" font-size="14" text-anchor="middle">source transforms · versioned C ABI</text>
     </g>
     <path d="M36 657H66" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
     <polyline points="59,661 66,657 59,653" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>

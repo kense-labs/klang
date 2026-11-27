@@ -3,6 +3,7 @@
 <details>
 <summary>Table of contents</summary>
 
+- [WASI command target](#wasi-command-target)
 - [1. The problem](#1-the-problem)
 - [2. What every option needs: growth checks](#2-what-every-option-needs-growth-checks)
 - [3. Fixed partitions](#3-fixed-partitions)
@@ -14,10 +15,39 @@
 
 </details>
 
-This is a proposal and is not implemented. Spec §10.4 says that platforms
-without address-space reservation fall back to "index-based references +
-bounds-checked growth", and leaves the details open (open issue 15). This
-note works them out. Its cost figures are estimates, not measurements.
+## WASI command target
+
+[![The WASI build path, from K source through the C backend to a WebAssembly command module and its host.](../diagrams/webassembly-target.png)](../diagrams/svg/webassembly-target.svg)
+
+`k build --target wasm32-wasip1` produces a WebAssembly command module with
+a WASI Preview 1 entry point. The compiler checks the K program with the
+32-bit target layout, emits C as a build intermediate, and calls WASI SDK
+Clang and its linker. Run the `.wasm` in a WASI runtime.
+[Build commands](../command_line.md#webassembly-executables) ·
+[WASI SDK](https://github.com/WebAssembly/wasi-sdk) ·
+[Wasmtime CLI](https://docs.wasmtime.dev/cli.html)
+
+The current target uses the fixed partitions in §3. Each stack receives an
+address-stable allocation in linear memory. The compiler and C runtime
+check growth before writing beyond its capacity, including when a loop
+caches its stack top. `--stack-reserve` changes the initial reservation
+from 8 MiB per region. Allocation failure may reduce a region's capacity.
+When growth reaches that capacity, K reports a data-stack overflow.
+
+Pure K code and cooperative tasks use the same source language and
+checker. WASI provides arguments, standard streams, clocks, and access to
+directories preopened by the runtime. Plain C sources declared by package
+sidecars compile with the selected WASI Clang and link into the command
+module. The existing native-package response files and cache are reused,
+with target and toolchain identity separating native and WASI objects.
+The C declarations must match K's packed aggregates and 32-bit pointers.
+The target still needs worker threads, dynamic externs, CMake and builtin
+native packages, and browser and component-model profiles. WASI Preview 1
+does not expose page discard, so operations that would discard memory
+report failure.
+
+The following sections compare alternatives for improving capacity and
+supporting additional targets. Their unmeasured cost figures are estimates.
 
 ## 1. The problem
 

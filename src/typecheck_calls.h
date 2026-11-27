@@ -96,12 +96,12 @@ inline void TypeCheck::ValidateCallableSignature(TypeExpr *type, Line line) {
 }
 
 inline int64_t TypeCheck::CallableEnvironmentBytes(TypeExpr *type) {
-    return FixedStorageBytes(type, [&](TypeArray *a) { return ArraySize(a); },
+    return FixedStorageBytes(type, ast.pointer_bytes, [&](TypeArray *a) { return ArraySize(a); },
                             [&](TypeExpr *p) { return ClassOf(p) == SC_RESIZABLE; },
                             [&](TypeExpr *t) {
         int64_t payload = 0;
         for (const auto &run : FieldRuns(t))
-            payload = max(payload, PackedFieldBytes(*run.fields, *run.ftypes,
+            payload = max(payload, PackedFieldBytes(*run.fields, *run.ftypes, ast.pointer_bytes,
                 [&](TypeExpr *field) { return CallableEnvironmentBytes(field); }, [](int64_t) {}));
         if (t->kind == TY_STRUCT) return max<int64_t>(1, payload);
         if (t->kind == TY_ENUM)

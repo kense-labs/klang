@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="736" viewBox="0 0 1000 736" role="img" aria-labelledby="title description">
   <title id="title">K core architecture</title>
-  <desc id="description">K source and tools enter the language compiler. A C backend feeds TinyCC or a native toolchain and the generated program uses the K target runtime. The Cordis graph selects optional services from a project lock.</desc>
+  <desc id="description">The K compiler emits C for native executables, WASI Preview 1 command modules, and TinyCC execution. Each path uses the K runtime appropriate to its target. Cordis selects optional services from a project lock.</desc>
   <rect width="1000" height="736" rx="14" fill="#F8F6F0"/>
   <g font-family="Menlo, SFMono-Regular, Consolas, monospace">
     <rect x="36" y="24" width="928" height="42" rx="8" fill="#141413" stroke="none" stroke-width="1.15"/>
@@ -54,7 +54,7 @@
     <polyline points="238,330 245,326 238,322" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M419 326H441" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
     <polyline points="434,330 441,326 434,322" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="334" y="403" fill="#645F56" font-size="14" text-anchor="middle">Checked specializations feed both execution paths</text>
+    <text x="334" y="403" fill="#645F56" font-size="14" text-anchor="middle">Shared K frontend · target-specific layouts and checks</text>
     <g>
     <rect x="677" y="277" width="270" height="98" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
     <text x="812.0" y="309.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">Resolve · verify · activate</text>
@@ -62,39 +62,52 @@
     <text x="812.0" y="353.0" fill="#645F56" font-size="14" text-anchor="middle">pin provider generations</text>
     </g>
     <text x="812" y="403" fill="#645F56" font-size="14" text-anchor="middle">Project-scoped service contracts</text>
-    <path d="M334 430V458M177 458H491" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M177 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <polyline points="173,479 177,486 181,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M491 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <polyline points="487,479 491,486 495,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M334 430V458M132 458H536" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M132 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="128,479 132,486 136,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M132 568V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="128,585 132,592 136,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M334 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="330,479 334,486 338,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M334 568V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="330,585 334,592 338,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M536 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="532,479 536,486 540,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M536 568V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="532,585 536,592 540,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M812 430V486" fill="none" stroke="#394DF2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
     <polyline points="808,479 812,486 816,479" fill="none" stroke="#394DF2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     <g>
-    <rect x="36" y="486" width="282" height="78" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
-    <text x="177.0" y="519.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Native C toolchain</text>
-    <text x="177.0" y="541.0" fill="#645F56" font-size="14.5" text-anchor="middle">k build → executable</text>
+    <rect x="36" y="486" width="192" height="82" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="132.0" y="510.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">Native C toolchain</text>
+    <text x="132.0" y="532.0" fill="#645F56" font-size="13" text-anchor="middle">k build</text>
+    <text x="132.0" y="554.0" fill="#645F56" font-size="13" text-anchor="middle">native executable</text>
     </g>
     <g>
-    <rect x="350" y="486" width="282" height="78" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
-    <text x="491.0" y="519.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">TinyCC / libtcc</text>
-    <text x="491.0" y="541.0" fill="#645F56" font-size="14.5" text-anchor="middle">k run → in-process execution</text>
+    <rect x="238" y="486" width="192" height="82" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="334.0" y="510.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">WASI SDK Clang</text>
+    <text x="334.0" y="532.0" fill="#645F56" font-size="13" text-anchor="middle">k build → .wasm</text>
+    <text x="334.0" y="554.0" fill="#645F56" font-size="13" text-anchor="middle">Preview 1 command</text>
     </g>
-    <path d="M177 564V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <polyline points="173,585 177,592 181,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M491 564V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <polyline points="487,585 491,592 495,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="440" y="486" width="192" height="82" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="536.0" y="510.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">TinyCC / libtcc</text>
+    <text x="536.0" y="532.0" fill="#645F56" font-size="13" text-anchor="middle">k run</text>
+    <text x="536.0" y="554.0" fill="#645F56" font-size="13" text-anchor="middle">in-process execution</text>
+    </g>
     <g>
     <rect x="36" y="592" width="596" height="80" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
-    <text x="334.0" y="626.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">K target runtime</text>
-    <text x="334.0" y="648.0" fill="#645F56" font-size="14.5" text-anchor="middle">data stacks · task frames · workers · C ABI</text>
+    <text x="334.0" y="615.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">K target runtime</text>
+    <text x="334.0" y="637.0" fill="#645F56" font-size="14.5" text-anchor="middle">data stacks · task frames · C ABI</text>
+    <text x="334.0" y="659.0" fill="#645F56" font-size="14.5" text-anchor="middle">WASI checks stack growth · workers on native targets</text>
     </g>
     <g>
     <rect x="660" y="486" width="304" height="186" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
     <text x="812.0" y="540.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">Optional providers</text>
     <text x="812.0" y="562.0" fill="#645F56" font-size="14" text-anchor="middle">LSP / build diagnostics</text>
     <text x="812.0" y="584.0" fill="#645F56" font-size="14" text-anchor="middle">Python / TypeScript guests</text>
-    <text x="812.0" y="606.0" fill="#645F56" font-size="14" text-anchor="middle">TypeScript project service</text>
-    <text x="812.0" y="628.0" fill="#645F56" font-size="14" text-anchor="middle">TCP streams / CPU inference</text>
+    <text x="812.0" y="606.0" fill="#645F56" font-size="14" text-anchor="middle">TS projects · Node.js roadmap</text>
+    <text x="812.0" y="628.0" fill="#645F56" font-size="14" text-anchor="middle">TCP streams · ONNX gateway</text>
     </g>
     <rect x="36" y="684" width="928" height="38" rx="8" fill="#394DF2" stroke="none" stroke-width="1.15"/>
     <text x="500.0" y="708" fill="#FDFCF9" font-size="14" text-anchor="middle">K checks the program. Cordis composes the services selected for its host.</text>

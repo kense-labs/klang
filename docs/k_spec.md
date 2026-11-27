@@ -4568,8 +4568,9 @@ across all thread programs together (32 TB by default here), and this
 budget bounds `hardware_threads()` (§11.2). A region that the platform
 refuses may be reserved smaller; nothing that the implementation elides
 depends on a region's reserved size. Platforms without address-space
-reservation (wasm today) fall back to index-based references and
-bounds-checked growth, with reduced performance.
+reservation must preserve reference stability and check growth before
+writing. The WASI command target uses fixed, address-stable regions in
+linear memory. [WebAssembly target](design/wasm.md#wasi-command-target)
 
 **The 48-bit size limit.** A data stack reserves **at most 2^48 bytes**.
 Consequently, in every conforming implementation:
@@ -4583,8 +4584,9 @@ Consequently, in every conforming implementation:
 
 This limit allows up to 256 TB in one value while leaving headroom for
 arithmetic the compiler can reason about. The guard region after each
-reservation already turns an attempt to exceed it into a safe abort (§9.3),
-so no growth operation needs a separate check for this limit. A fixed
+reservation turns an attempt to exceed it into a safe abort (§9.3) on
+targets with protected address space. Targets such as WASI check remaining
+capacity before growth. A fixed
 array's size is a constant checked at compile time. Implementations may
 impose a *smaller* limit (wasm32 is inherently capped at 2^32); they may not
 raise it, so a program's meaning never depends on the target having more.
@@ -5169,8 +5171,9 @@ its resolution is described.
     say which versions it wants (an AVX-512 version is not faster for
     every loop).
 13. **Labels for `break`** — if early-out patterns demand them.
-15. **Wasm fallback** — index-based reference representation details
-    (`docs/design/wasm.md` compares the options).
+15. **Resizable Wasm regions** — the current WASI target uses fixed regions.
+    The design compares larger fixed partitions and relocating regions.
+    [WebAssembly target](design/wasm.md)
 16. **Relative-reference region tracking** — copies of values containing
     *self-relative* references are currently rejected outright (§3.9; the
     `in pool` form already copies); track the region an offset ranges over so

@@ -7,7 +7,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <dirent.h>
+#ifndef __wasi__
 #include <dlfcn.h>
+#endif
 #include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -42,7 +44,7 @@ typedef char k_os_char;
 /* The native form of a path, or of an environment variable's name, in buf
    (K_OS_PATH_MAX characters): its length, or -1 where it is refused. */
 static int k_os_native(sl_u8 s, k_os_char *buf) {
-    if (s.len >= K_OS_PATH_MAX || (s.len > 0 && memchr(s.data, 0, (size_t)s.len)))
+    if (s.len <= 0 || s.len >= K_OS_PATH_MAX || memchr(s.data, 0, (size_t)s.len))
         return -1;
     int n = (int)s.len;
 #ifdef _WIN32
@@ -372,10 +374,11 @@ K_API uint8_t k_os_write_file_atomic(sl_u8 path, sl_u8 data) {
             if (errno == EEXIST) continue;
             return 0;
         }
-        /* The permissions of the file it replaces, which write_file leaves
-           as they are, rather than the umask's. */
+        /* Preserve the destination's mode on systems that expose it. */
+#ifndef __wasi__
         struct stat st;
         if (stat(p, &st) == 0) ok = fchmod(fd, st.st_mode & 0777) == 0;
+#endif
         while (ok && left > 0) {
             ssize_t w = write(fd, d, left > (1 << 30) ? (size_t)1 << 30 : (size_t)left);
             if (w < 0 && errno == EINTR) continue;
@@ -737,6 +740,10 @@ static int k_dl_spelling(const k_dllib *lib, char *buf) {
 
 K_API void k_dl_bind(const k_dllib *libs, int64_t nlibs, const k_dlbind *binds,
                        int64_t nbinds) {
+#ifdef __wasi__
+    (void)libs; (void)nlibs; (void)binds; (void)nbinds;
+    k_panic("dynamic libraries are unavailable on WASI Preview 1");
+#else
     for (int64_t l = 0; l < nlibs; l++) {
         char spelling[K_OS_PATH_MAX], msg[K_OS_PATH_MAX + 512];
         if (!k_dl_spelling(&libs[l], spelling)) {
@@ -788,6 +795,7 @@ K_API void k_dl_bind(const k_dllib *libs, int64_t nlibs, const k_dlbind *binds,
             *binds[b].slot = f;
         }
     }
+#endif
 }
 
 K_API void k_os_arg(int64_t i, k_rref out) {
@@ -1046,6 +1054,7 @@ static int64_t k_spc_newnode(k_spcpath *p) {
         K_SPCHEAD(p)->chain = K_SPLEAF(p, i)->link;
         return i;
     }
+    k_stack_check(*p->top, K_SPAN_NODE);
     i = (*p->n)++;
     memset(K_SPLEAF(p, i), 0, K_SPAN_NODE);
     *p->top += K_SPAN_NODE;
@@ -1426,6 +1435,7 @@ K_API void k_slice_pool_free(k_rref nodes, void *tree, int64_t idx, int64_t cnt,
     K_SPSTART(&p, tree, nodes, at);
     if (*p.n == 0) {
         /* Node 0 stays zero, the chain's end. */
+        k_stack_check(p.base, K_SPAN_NODE);
         memset(p.base, 0, K_SPAN_NODE);
         *p.n = 1;
         *p.top = p.base + K_SPAN_NODE;

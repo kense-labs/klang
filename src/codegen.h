@@ -180,6 +180,7 @@ struct CodeGen {
     bool usesthreads = false;
     bool library = false;
     bool sharedlibrary = false;
+    bool checked_data_stacks = false;
     // Measurement only, and unsound: emit the whole `return ... from`
     // machinery but none of the post-call discriminant checks, so a program
     // that never takes a long-distance return still prints the right answer
@@ -1164,7 +1165,23 @@ struct CodeGen {
     // top, bumping it. All branches of value-producing control constructs
     // construct to the same destination; calls pass the stack down.
 
-    void Bump(const string &stk, const string &n) { L(TopW(stk), " += ", n, ";"); }
+    void Room(const string &stk, const string &n) {
+        if (checked_data_stacks) L("k_stack_check(", Top(stk), ", (uint64_t)(", n, "));");
+    }
+    void ArrayRoom(const string &stk, const string &count, int64_t width, int prefix = 0) {
+        if (checked_data_stacks)
+            L("k_stack_check_array(", Top(stk), ", (uint64_t)(", count, "), ", width, ", ", prefix, ");");
+    }
+    void Bump(const string &stk, const string &n) {
+        if (checked_data_stacks) {
+            auto bytes = T();
+            L("uint64_t ", bytes, " = (uint64_t)(", n, ");");
+            Room(stk, bytes);
+            L(TopW(stk), " += ", bytes, ";");
+        } else {
+            L(TopW(stk), " += ", n, ";");
+        }
+    }
 
     void EmitValStore(const string &stk, TypeExpr *t, const string &x);
     void StoreWhole(const string &p, TypeExpr *t, const string &x);
@@ -1704,9 +1721,9 @@ struct CodeGen {
     // A function the extern support declares gets no prototype here.
     CodeGen(Ast &_ast, string_view runtime_ext_text,
             bool _norfcheck = false, bool _library = false, bool _sharedlibrary = false,
-            int64_t _maxstacks = 0, bool _noelide = false)
+            int64_t _maxstacks = 0, bool _noelide = false, bool _checked_data_stacks = false)
         : ast(_ast), library(_library), sharedlibrary(_sharedlibrary),
-          norfcheck(_norfcheck), noelide(_noelide), maxstacks(_maxstacks) {
+          checked_data_stacks(_checked_data_stacks), norfcheck(_norfcheck), noelide(_noelide), maxstacks(_maxstacks) {
         for (auto t : ast.alltypes)
             if (t->kind == TY_REF && t->ref->pool) poolglobals.insert(t->ref->pool);
         ComputeRelRootMax();

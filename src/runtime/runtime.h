@@ -59,6 +59,15 @@
 #include <math.h>
 #endif
 
+#if defined(__wasi__) && !defined(K_TARGET_WASI)
+#error "Generate the C for WASI with k build --target wasm32-wasip1"
+#endif
+#ifdef K_TARGET_WASI
+#if !defined(__wasi__) || !defined(__wasm32__)
+#error "The generated program requires a wasm32 WASI toolchain"
+#endif
+#endif
+
 /* K values can start at any byte, including scalars reached through a
    reference or slice. GCC and Clang must retain that alignment on the
    pointee type, even after taking a packed member's address. MSVC and
@@ -122,11 +131,22 @@ typedef double k_f64 K_ALIGN1;
 #ifndef K_MAX_STACKS
 #define K_MAX_STACKS 1024
 #endif
+#define K_WASI_STACK_RESERVE (8ull << 20)
+#define K_WASI_STACK_BUDGET (4ull << 30)
 #ifndef K_STACK_RESERVE
+#ifndef __wasi__
 #define K_STACK_RESERVE (2048ull << 20)  /* Address space reserved per stack. */
+#else
+#define K_STACK_RESERVE K_WASI_STACK_RESERVE
+#endif
 #endif
 #ifndef K_STACK_GAP
 #define K_STACK_GAP (1ull << 20)   /* Unmapped tail so runaway growth aborts. */
+#endif
+#ifdef __wasi__
+#if K_STACK_RESERVE > 2147483647ull
+#error "WASI data stacks must fit in a signed 32-bit pointer difference"
+#endif
 #endif
 /* The address space the program means to spend on data stack regions over
    every thread program at once, which is what caps hardware_threads()
@@ -134,7 +154,11 @@ typedef double k_f64 K_ALIGN1;
    worker's. Not enforced at reservation; what the platform refuses is
    retried smaller (k_reserve_region). */
 #ifndef K_STACK_BUDGET
+#ifndef __wasi__
 #define K_STACK_BUDGET (32ull << 40)
+#else
+#define K_STACK_BUDGET K_WASI_STACK_BUDGET
+#endif
 #endif
 #ifndef K_STACK_STATS
 #define K_STACK_STATS 0    /* 1: each thread program reports its stack use as it ends. */
@@ -233,6 +257,12 @@ K_API K_NORETURN void k_runtime_exit(int64_t code);
 /* Growth from the data stack whose top is `at` that no region could hold,
    reported as the fault handler reports an overrun into the guard gap. */
 K_API K_NORETURN void k_stack_overflow(const void *at);
+#ifdef __wasi__
+static void k_stack_check(const void *at, uint64_t n);
+static void k_stack_check_array(const void *at, uint64_t count, uint64_t width, uint64_t prefix);
+#else
+#define k_stack_check(at, n) ((void)0)
+#endif
 K_API K_NORETURN void k_idxfail(int64_t i, int64_t n, const char *file, int line);
 K_API K_NORETURN void k_divfail(const char *file, int line);
 K_API K_NORETURN void k_divovf(const char *file, int line);

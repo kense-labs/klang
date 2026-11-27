@@ -122,9 +122,9 @@ inline string FmtSize(uint64_t bytes) {
 inline void CodeGen::StackReport(FILE *out, const StackConfig &cfg) {
     auto per = cfg.reserve + cfg.gap;
     uint64_t total = per ? cfg.budget / per : 0;
-    fprintf(out, "data stacks: %s reserved per stack, %s guard gap, %s budget: %llu regions, "
-                 "K_MAX_STACKS %lld\n",
-            FmtSize(cfg.reserve).c_str(), FmtSize(cfg.gap).c_str(), FmtSize(cfg.budget).c_str(),
+    auto bounds = checked_data_stacks ? string("checked growth") : cat(FmtSize(cfg.gap), " guard gap");
+    fprintf(out, "data stacks: %s reserved per stack, %s, %s budget: %llu regions, K_MAX_STACKS %lld\n",
+            FmtSize(cfg.reserve).c_str(), bounds.c_str(), FmtSize(cfg.budget).c_str(),
             (unsigned long long)total, (long long)cfg.maxstacks);
     // One program's line; what it comes to is what k_rt_init is told.
     auto describe = [&](const string &what, int64_t stacks, int regions, const char *extra) {

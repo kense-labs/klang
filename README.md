@@ -9,12 +9,14 @@ English · [简体中文](README.zh-CN.md)
 
 [Architecture](#core-architecture) · [Modules](#module-architecture) ·
 [Build](#build-from-source) · [Run a program](#run-a-program) ·
+[WebAssembly](#build-a-webassembly-executable) ·
 [Roadmap](docs/roadmap.md)
 
 K is a memory-safe systems programming language with checked reference
 lifetimes and explicit control over storage. It stores growable values on
 address-stable data stacks and reclaims their storage at scope exit. K
-compiles to C. Its command-line tool is `k`, and source files use `.k`.
+uses a C backend to build native and WASI WebAssembly executables. Its
+command-line tool is `k`, and source files use `.k`.
 
 The long-term goal is to make K a first choice for operating system
 components, cloud services, and AI infrastructure. The first production target
@@ -23,28 +25,33 @@ profile for Node.js compatibility are on the roadmap.
 
 ## Core architecture
 
-[![K core architecture. Source files and tools feed the K compiler, which emits C for native builds or TinyCC. Cordis selects optional services from a project lock.](docs/diagrams/core-architecture.png)](docs/diagrams/svg/core-architecture.svg)
+[![K core architecture. The compiler has three execution paths for native builds, WASI command modules, and in-process TinyCC. Cordis selects optional services from a project lock.](docs/diagrams/core-architecture.png)](docs/diagrams/svg/core-architecture.svg)
 
 The compiler owns K's syntax, types, lifetimes, and checked program representation.
-Native builds and the TinyCC execution path share the checked-specialization pipeline
-and consume its C output. The target runtime supplies data-stack storage, task frames,
-worker queues, and the C ABI.
+Native builds, WASI command builds, and TinyCC execution share the checker and
+use C generated for the selected target. The K runtime supplies data-stack storage,
+task frames, and the C ABI. Native builds also support worker threads and typed queues.
 
 Cordis is K's primary design principle. Each host selects services through versioned
 interfaces. A checked lock ties a selected graph to provider versions and tracked
 inputs. The host can link providers statically or load them dynamically according to
-its supported contracts. [Architecture notes](docs/architecture.md) ·
+its supported contracts. CPython and QuickJS/TypeScript adapters, the TypeScript and
+future Node.js compatibility profiles, and the ONNX inference gateway are optional
+Cordis components with their own build targets and verified graphs. They are not
+dependencies of the K compiler or target runtime. [Architecture notes](docs/architecture.md) ·
 [Cordis design](docs/design/cordis_microkernel.md)
 
 ## Dependencies and context map
 
-[![K dependency map. The CLI and editor share the loader and checker, build tooling prepares artifacts, and optional hosts compose Cordis services.](docs/diagrams/context-map.png)](docs/diagrams/svg/context-map.svg)
+[![K dependency map. The CLI and editor share the loader and checker. A WASI host runs WebAssembly build artifacts. Optional hosts compose Cordis services.](docs/diagrams/context-map.png)](docs/diagrams/svg/context-map.svg)
 
 Solid arrows show calls or compiler artifacts. Dashed indigo arrows show Cordis
 selection and service interfaces. Dotted gray arrows show runtime support shared
 with the generated program. The editor overlays unsaved documents and resolves
 packages offline. The optional source driver feeds generated K through the normal
 compiler entry point. The standalone TypeScript runner uses its own Cordis graph.
+A WASI host runs WebAssembly command modules and grants access to resources
+such as preopened directories.
 [Subsystem boundaries](docs/architecture.md#domain-boundaries-in-the-code)
 
 ## Module architecture
@@ -72,7 +79,7 @@ passes use. [Type checker](docs/implementation.md#3-the-typechecker) ·
 
 ### Optimization and C backend
 
-[![The backend. Optimize checked bodies, prove bounds, emit C, and select the native C compiler or TinyCC.](docs/diagrams/c-backend.png)](docs/diagrams/svg/c-backend.svg)
+[![The backend. Optimize checked bodies, prove bounds, emit C, and select native C, WASI SDK, or TinyCC.](docs/diagrams/c-backend.png)](docs/diagrams/svg/c-backend.svg)
 
 Optimization operates on checked specializations. Bounds-check elimination uses
 control-flow and aliasing facts. The emitter produces C layouts, calls, and
@@ -80,9 +87,25 @@ task state machines, retaining runtime checks where the proof is insufficient.
 [Compiler pipeline](docs/implementation.md#1-pipeline) ·
 [Bounds-check elimination](docs/implementation.md#5-bounds-check-elimination)
 
+### WebAssembly target
+
+[![WebAssembly target. K checks the program with a 32-bit layout, generates C with checked stack growth, and calls WASI SDK Clang and its linker. The resulting .wasm exports _start and runs in a WASI Preview 1 host.](docs/diagrams/webassembly-target.png)](docs/diagrams/svg/webassembly-target.svg)
+
+`k build --target wasm32-wasip1` builds a `.wasm` command module with the K
+runtime linked in. Its fixed data-stack regions remain address-stable in linear
+memory. The compiler and runtime check available space before stack writes.
+The target supports cooperative `async` tasks, standard streams, arguments,
+clocks, and file access through preopened directories. Plain C sources declared
+by package `.build` files compile with the same WASI toolchain and link into the
+module; package caches are separated by target and toolchain. Worker threads,
+dynamic `extern` libraries, CMake and builtin native packages, browser integration,
+and component-model hosts remain roadmap work.
+[WebAssembly design](docs/design/wasm.md#wasi-command-target) ·
+[WASI integration tests](docs/testing.md#wasi-command-target)
+
 ### Target runtime
 
-[![Target runtime. Data stacks hold growable values, task frames manage suspension and cleanup, and isolated workers communicate through typed queues.](docs/diagrams/target-runtime.png)](docs/diagrams/svg/target-runtime.svg)
+[![Target runtime. Data stacks hold growable values, task frames manage suspension and cleanup, and native workers communicate through typed queues.](docs/diagrams/target-runtime.png)](docs/diagrams/svg/target-runtime.svg)
 
 Growable local values use address-stable data stacks that can rewind at scope exit.
 Task frames preserve the state needed by `await` and run cleanup on cancellation.
@@ -102,11 +125,12 @@ loaded through a dynamic `extern` declaration.
 
 ### CLI, builds, and packages
 
-[![Toolchain. The CLI dispatches commands, resolves package inputs, and selects native build and cache operations.](docs/diagrams/toolchain.png)](docs/diagrams/svg/toolchain.svg)
+[![Toolchain. The CLI dispatches commands, resolves package inputs, and selects native or WASI builds.](docs/diagrams/toolchain.png)](docs/diagrams/svg/toolchain.svg)
 
 `k` checks, runs, builds, and formats programs, resolves packages, and inspects
 Cordis graphs. Package resolution supplies local or cached Git roots and native
-build metadata. Managed artifacts are keyed by build inputs and can be pruned.
+build metadata. `--target` selects native or WASI builds. Managed artifacts
+are keyed by build inputs, target and toolchain, and can be pruned.
 [Command line](docs/command_line.md) · [Packages](docs/packages.md)
 
 ### Language server
@@ -136,7 +160,9 @@ A failed replacement preserves the active generation.
 The optional `k-cordis-source` driver transforms fenced `using` blocks into ordinary
 K and typed calls to CPython or QuickJS. The separate `k-cordis-ts` runner selects
 the TypeScript frontend and QuickJS through Cordis and executes local ESM with
-top-level `await`. Node.js API and npm project compatibility are roadmap work.
+top-level `await`. These adapters and runners are separate build options, not core
+compiler dependencies. Node.js API and npm project compatibility remain roadmap
+work for an optional Cordis profile.
 [Embedded languages](docs/design/embedded_languages.md) ·
 [TypeScript project runner](docs/design/functions_and_typescript_runtime.md#optional-project-runner)
 
@@ -145,8 +171,10 @@ top-level `await`. Node.js API and npm project compatibility are roadmap work.
 [![Hosted providers. The application host activates bounded TCP and queue-policy services or an ONNX Runtime CPU inference provider.](docs/diagrams/hosted-providers.png)](docs/diagrams/svg/hosted-providers.svg)
 
 The optional host activates TCP and queue-policy providers from a verified graph.
-The Linux cloud profile includes an inference gateway with a replaceable
+The optional Linux cloud profile adds an inference gateway with a replaceable
 ONNX Runtime CPU provider, bounded admission, and supervised memory-limit recovery.
+The gateway, provider and ONNX Runtime are Cordis deployment components, not K
+core dependencies.
 [Bounded TCP streams](docs/design/cordis_microkernel.md#bounded-tcp-streams) ·
 [Inference gateway](docs/design/cordis_microkernel.md#loopback-inference-gateway)
 
@@ -164,8 +192,9 @@ build inputs described by `.build` files.
 K supports generics, tagged enums and pattern matching, concrete closures and
 specialized higher-order functions, checked dynamic callables, typed decorators,
 `async fn`, and structured task scopes. Hosted TCP and CPU inference workloads
-are reference deployments. The roadmap tracks freestanding boot, wider
-Node.js compatibility, and production operating system, cloud, and AI targets.
+are reference deployments. WASI command programs run in Wasmtime. The roadmap
+tracks freestanding boot, wider Node.js compatibility, and production operating
+system, cloud, and AI targets.
 [Development roadmap](docs/roadmap.md#milestones)
 
 ## Build from source
@@ -222,6 +251,19 @@ Both runs print `[1, 4, 9, 16]`. `k run` executes generated C in-process
 through TinyCC. `k build` uses a C toolchain to produce a native executable
 and supports programs with worker threads. Use `k` in place of `build/k`
 after adding it to `PATH`. [More programs](samples/README.md)
+
+### Build a WebAssembly executable
+
+With WASI SDK and Wasmtime installed, set `WASI_SDK_PATH` to the SDK directory
+and build the same `hello.k` as a WASI Preview 1 command.
+
+```sh
+export WASI_SDK_PATH=/path/to/wasi-sdk
+build/k build --target wasm32-wasip1 hello.k -o build/hello.wasm
+wasmtime run build/hello.wasm  # [1, 4, 9, 16]
+```
+
+[WASM build options](docs/command_line.md#webassembly-executables)
 
 ## Develop K
 

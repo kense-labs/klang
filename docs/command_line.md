@@ -37,6 +37,7 @@ k file.k [options] [-- program args...]
 |---|---|
 | `k run file.k` | Compile the program and run it in this process ([§2](#2-running-a-program)). `k file.k` is the same. |
 | `k build file.k` | Build an executable, or with `--shared` a shared library, using a C compiler on this machine ([§3](#3-building-an-executable)). |
+| `k build --target wasm32-wasip1 file.k` | Build a [WebAssembly command module](#webassembly-executables) using WASI SDK Clang. |
 | `k check file.k` | Parse and typecheck the program, and write and run nothing ([§4](#4-checking-a-program)). |
 | `k fetch file.k` | Fetch the packages the program declares ([§7](#7-packages)). |
 | `k cache stats` | Report the disk use of shared caches and project build intermediates ([§7](#cache-usage-and-pruning)). |
@@ -180,6 +181,34 @@ driver plan, preprocessed C and object digest before adding a packaged
 object to the managed cache. Other toolchain configurations and failed
 matches compile the runtime locally. Compile and link failures show the
 command, its output and the log path.
+
+### WebAssembly executables
+
+Install WASI SDK and point `WASI_SDK_PATH` at its root, or pass its `bin/clang`
+path with `--cc`. `k build` writes a `.wasm` beside the source by default.
+Use `-o` to choose a different path.
+
+```sh
+export WASI_SDK_PATH=/path/to/wasi-sdk
+k build --target wasm32-wasip1 hello.k -o hello.wasm
+wasmtime run hello.wasm
+```
+
+`wasm32-wasi` is an alias. The command module includes the K target runtime
+and runs with WASI Preview 1. The WASI host supplies streams and arguments.
+Pass `wasmtime run --dir . hello.wasm` to grant access to the current
+directory when the program needs file I/O. WASI builds support cooperative
+tasks and static C package interoperability: `c_sources`, `c_include`,
+`c_defines`, `c_flags` and `c_libs` from `.build` sidecars use the selected
+WASI toolchain, and the resulting objects join the final link. C declarations
+must match the target's 32-bit pointers and K's packed aggregate layouts.
+Native and WASI package objects and stamps are separated by target and
+toolchain, including for locked-package cache entries. Worker threads,
+dynamic externs, CMake packages and builtin native packages are currently
+unavailable for this target. Browser and component-model hosts are roadmap
+work.
+[WASM design](design/wasm.md#wasi-command-target) ·
+[Wasmtime CLI](https://docs.wasmtime.dev/cli.html)
 
 ## 4. Checking a program
 

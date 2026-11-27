@@ -413,6 +413,27 @@ Keep fixture stems unique across categories,
 since expectations and generated build artifacts use those names. The runner
 rejects duplicate names.
 
+## WASI command target
+
+Run the WebAssembly integration tests with a WASI SDK compiler and Wasmtime.
+
+```sh
+python3 test/wasi.py --k build/k --clang /path/to/wasi-sdk/bin/clang \
+  --wasmtime /path/to/wasmtime --native-cc /path/to/native/clang
+```
+
+The test builds command modules, checks default and explicit output paths,
+and runs the artifacts. It verifies 32-bit layouts, closure environments,
+task cancellation, preopened file operations, and a reference that survives
+array growth. A real `cmath2` package checks scalar calls and packed slices
+with 32-bit data pointers. The test alternates native and WASI builds in one
+fresh `K_HOME`, checks their distinct object formats, confirms warm-cache
+reuse and C-source invalidation, and checks that a failed final link preserves
+the previous executable. `--native-cc` is optional when `cc`, `clang` or `cl`
+is on `PATH`. It also checks that data-stack overflow fails before writing
+beyond capacity.
+[WASM design](design/wasm.md#wasi-command-target)
+
 ## Configurations and backends
 
 | Configuration | Purpose |

@@ -37,8 +37,9 @@ static const char *k_errmsgs[] = {
    instead. */
 static K_NORETURN void k_end(int code);
 
-#include <setjmp.h>
 #include <stdarg.h>
+#if K_NEED_THREADS
+#include <setjmp.h>
 /* No abort is raised in a signal handler, so the jump leaves the signal
    state alone. */
 #ifdef _WIN32
@@ -48,6 +49,7 @@ static K_NORETURN void k_end(int code);
 #define k_setjmp(b)  _setjmp(b)
 #define k_longjmp    _longjmp
 #endif
+#endif
 
 K_API K_NORETURN void k_panic(const char *msg) {
     fprintf(stderr, "klang runtime error: %s\n", msg);
@@ -56,12 +58,14 @@ K_API K_NORETURN void k_panic(const char *msg) {
 
 /* Where an abort in a contained worker returns to (k_run_contained), and
    the message it leaves there for thread_wait; NULL on every other thread. */
+#if K_NEED_THREADS
 typedef struct {
     jmp_buf jump;
     uint8_t *msg;
     int64_t len;
 } k_contained;
 static K_TLS k_contained *k_contain;
+#endif
 
 /* The end of a failed check or abort(msg) (§9.3), whose message is `len`
    bytes at `msg` and the location after it. A contained worker's keeps the
@@ -75,7 +79,9 @@ static K_NORETURN void k_fail(const void *msg, int64_t len, const char *file, in
     int64_t loc = file ? snprintf(NULL, 0, " (%s:%d)\n", file, line) : 1;
     uint8_t *text = (uint8_t *)malloc((size_t)(pre + len + loc + 1));
     if (!text) {
+        #if K_NEED_THREADS
         if (k_contain) k_panic("out of memory recording an aborted thread");
+        #endif
         fputs(lead, stderr);
         fwrite(msg, 1, (size_t)len, stderr);
         if (file) fprintf(stderr, " (%s:%d)\n", file, line);
@@ -86,12 +92,14 @@ static K_NORETURN void k_fail(const void *msg, int64_t len, const char *file, in
     if (len) memcpy(text + pre, msg, (size_t)len);
     if (file) snprintf((char *)text + pre + len, (size_t)loc + 1, " (%s:%d)\n", file, line);
     else memcpy(text + pre + len, "\n", 2);
+    #if K_NEED_THREADS
     if (k_contain) {
         memmove(text, text + pre, (size_t)(len + loc - 1));
         k_contain->msg = text;
         k_contain->len = len + loc - 1;
         k_longjmp(k_contain->jump, 1);
     }
+    #endif
     fwrite(text, 1, (size_t)(pre + len + loc), stderr);
     free(text);
     k_end(1);
@@ -287,8 +295,12 @@ static size_t k_overflow_text(char *buf, const k_region *r) {
         p = k_size(p, k_region_reserve);
         p = k_text(p, " when the platform ran out of address space)");
     }
+#ifdef __wasi__
+    p = k_text(p, "; increase --stack-reserve within the WASM memory budget\n");
+#else
     p = k_text(p, "; --stack-reserve or -DK_STACK_RESERVE raises the reservation, "
                    "up to 256 TB\n");
+#endif
     return (size_t)(p - buf);
 }
 
@@ -301,6 +313,19 @@ K_API K_NORETURN void k_stack_overflow(const void *at) {
     }
     k_panic("data stack overflow");
 }
+
+#ifdef __wasi__
+static void k_stack_check(const void *at, uint64_t n) {
+    if (!n) return;
+    const k_region *r = k_find_region(at);
+    if (!r || n > r->usable - ((uintptr_t)at - (uintptr_t)r->base)) k_stack_overflow(at);
+}
+
+static void k_stack_check_array(const void *at, uint64_t count, uint64_t width, uint64_t prefix) {
+    if (width && count > (UINT64_MAX - prefix) / width) k_stack_overflow(at);
+    k_stack_check(at, prefix + count * width);
+}
+#endif
 
 /* The calling thread program's registry, empty, as it starts. */
 static void k_regions_begin(int64_t capacity) {
@@ -480,6 +505,21 @@ static int k_end_first(void) {
 static K_NORETURN void k_park(void) {
     for (;;) Sleep(INFINITE);
 }
+
+#elif defined(__wasi__)
+
+/* WASI linear memory has no protected gaps. Each allocation stays at its
+   original address, and checked growth handles the logical end. */
+static size_t k_os_page_size(void) { return 1; }
+static const size_t k_page_size = 1;
+static void k_regions_init(void) {}
+static void k_native_stack_init(void) {}
+static void k_native_stack_free(void) {}
+static void k_fault_uninstall(void) {}
+static uint8_t *k_os_reserve(size_t usable, size_t size) { (void)usable; return (uint8_t *)malloc(size); }
+static void k_release_region(const k_region *r) { free(r->base); }
+static int k_end_first(void) { return 1; }
+static K_NORETURN void k_park(void) { abort(); }
 
 #else  /* posix */
 
@@ -748,7 +788,10 @@ K_API void k_task_stack_close(k_stack **slot) {
    (k_trim_memory says why). k_trim_memory and slice_pool's trim
    (k_slice_pool_trim) share it. 0 means the OS refused. */
 static int k_discard_pages(uintptr_t start, size_t len) {
-#ifdef _WIN32
+#if defined(__wasi__)
+    (void)start; (void)len;
+    return 0;
+#elif defined(_WIN32)
     return VirtualFree((void *)start, len, MEM_DECOMMIT) != 0;
 #elif defined(__APPLE__)
     return mmap((void *)start, len, PROT_READ | PROT_WRITE,
@@ -855,6 +898,7 @@ static int64_t k_sp_newnode(k_sppath *p) {
         K_SPHEAD(p)->chain = K_SPLEAF(p, i)->link;
         return i;
     }
+    k_stack_check(*p->top, K_SPAN_NODE);
     *p->top += K_SPAN_NODE;
     return (*p->n)++;
 }
@@ -1271,6 +1315,7 @@ K_API void k_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx, i
     if (*n == 0) {
         k_sphead *hd = (k_sphead *)base;
         *n = 1;
+        k_stack_check(base, K_SPAN_NODE);
         *top = base + K_SPAN_NODE;
         hd->chain = 0;
         hd->height = 0;
@@ -1669,7 +1714,14 @@ K_API void k_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     reserve -= reserve % k_region_page;
     if (!reserve) k_panic("the data stack reservation (K_STACK_RESERVE) is less than a page");
     k_region_usable = k_region_reserve = (size_t)reserve;
+    #ifdef __wasi__
+    /* Keep the exact end recognizable by k_find_region, including for a
+       zero-byte allocation immediately before the next attempted write. */
+    (void)gap;
+    k_region_gap = 1;
+    #else
     k_region_gap = (size_t)gap;
+    #endif
     k_stack_budget = budget;
     k_mainregions = mainregions;
     k_workerregions = workerregions;

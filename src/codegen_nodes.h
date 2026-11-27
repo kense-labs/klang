@@ -636,6 +636,7 @@ inline void MatchExpr::CgAny(CodeGen &cg, const Dst &d) {
                 cg.vstk[arm.binder] = stk;
                 auto sz = cg.T();
                 cg.L("int64_t ", sz, " = ", cg.SizeX(vt, payload), ";");
+                cg.Room(stk, sz);
                 cg.L("K_MEMCPY(", cg.Top(stk), ", ", payload, ", (size_t)", sz, ");");
                 cg.Bump(stk, sz);
             } else if (EmptyLayout(variant->fields)) {

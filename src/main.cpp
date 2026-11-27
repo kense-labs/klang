@@ -350,6 +350,9 @@ go under K_HOME.
 
 Options:
   -o exe                Where the executable goes.
+  --target wasm32-wasip1
+                        Build a WASI command module (.wasm). Set WASI_SDK_PATH
+                        or pass --cc with the WASI SDK clang path.
   -O0, -O1, -O2         Inlining level (default -O2). The C compiler
                         optimizes at every level, unless --debug.
   --debug               Overflow, range and tag checks that name the source
@@ -643,12 +646,12 @@ bool ParseConfigValue(string s, uint64_t &out) {
 // the --stacks report: the runtime's defaults (runtime.h), then the -D
 // given, --stack-reserve's among them. A -D the compiler cannot read keeps
 // the default in the report; the C compiler sees it either way.
-CodeGen::StackConfig StackConfigOf(const vector<string> &cdefines) {
+CodeGen::StackConfig StackConfigOf(const vector<string> &cdefines, bool wasi) {
     string_view runtime;
     for (auto &rf : runtime_files)
         if (string_view(rf.name) == "runtime.h") runtime = rf.text;
-    auto value = [&](const char *name, uint64_t &out) {
-        auto key = cat("#define ", name, " ");
+    auto value = [&](const char *name, uint64_t &out, const char *target_default = nullptr) {
+        auto key = cat("#define ", target_default ? target_default : name, " ");
         if (auto at = runtime.find(key); at != string_view::npos) {
             auto line = runtime.substr(at + key.size());
             line = line.substr(0, line.find('\n'));
@@ -663,9 +666,10 @@ CodeGen::StackConfig StackConfigOf(const vector<string> &cdefines) {
     };
     CodeGen::StackConfig cfg { 0, 0, 0, 0 };
     uint64_t maxstacks = 0;
-    value("K_STACK_RESERVE", cfg.reserve);
-    value("K_STACK_GAP", cfg.gap);
-    value("K_STACK_BUDGET", cfg.budget);
+    value("K_STACK_RESERVE", cfg.reserve, wasi ? "K_WASI_STACK_RESERVE" : nullptr);
+    if (wasi) cfg.gap = 1;
+    else value("K_STACK_GAP", cfg.gap);
+    value("K_STACK_BUDGET", cfg.budget, wasi ? "K_WASI_STACK_BUDGET" : nullptr);
     value("K_MAX_STACKS", maxstacks);
     cfg.maxstacks = (int64_t)maxstacks;
     return cfg;
@@ -1070,7 +1074,7 @@ int Main(int argc, char **argv) {
     auto forcejit = false, standalone = false, shared = false;
     auto json = false, refresh = false, debug = false, verbose = false, dryrun = false;
     auto jsondiag = false;
-    string ccrequest;
+    string ccrequest, target;
     // The inlining at its highest. The C compiler optimizes whatever the
     // level, unless --debug (Builder::CFlags).
     auto optlevel = 2;
@@ -1171,6 +1175,7 @@ int Main(int argc, char **argv) {
         else if (arg == "--include" && i + 1 < argc) includenames.push_back(argv[++i]);
         else if (arg == "--stdlib" && i + 1 < argc) stdlibdir = argv[++i];
         else if (arg == "--cc" && i + 1 < argc) ccrequest = argv[++i];
+        else if (arg == "--target" && i + 1 < argc) target = argv[++i];
         else if (arg == "--json") json = true;
         else if (arg == "--refresh") refresh = true;
         else if (arg == "--debug") {
@@ -1204,6 +1209,15 @@ int Main(int argc, char **argv) {
         else files.push_back(arg);
     }
     if (verbose || dryrun) ProgressPlain();
+    const bool wasi = target == "wasm32-wasip1" || target == "wasm32-wasi";
+    if (!target.empty() && (verb != "build" || (!wasi && target != "native"))) {
+        fprintf(stderr, "k build supports --target native and --target wasm32-wasip1\n");
+        return 1;
+    }
+    if (wasi && (shared || forcejit || norfcheck)) {
+        fprintf(stderr, "the WASI target requires an executable with safe reference checks\n");
+        return 1;
+    }
     const bool locked_cordis = cordis_manifest.has_value() || cordis_lock.has_value();
     if (locked_cordis && ((verb != "check" && verb != "build") || !shaderfile.empty() ||
                           !cordis_manifest || cordis_manifest->empty() || !cordis_lock || cordis_lock->empty())) {
@@ -1253,8 +1267,8 @@ int Main(int argc, char **argv) {
                             "the flag form (-o out.c) writes the C for a C host\n");
             return 1;
         }
-        if (shared) standalone = true;
-        buildopts = BuildOptions { debug, verbose, dryrun, standalone, shared, offline, outname };
+        if (shared || wasi) standalone = true;
+        buildopts = BuildOptions { debug, verbose, dryrun, standalone, shared, offline, outname, wasi };
         outname.clear();
     }
     if (files.size() > 1 && !multitest) {
@@ -1349,6 +1363,7 @@ int Main(int argc, char **argv) {
         }
         astp = make_unique<Ast>();
         auto &ast = *astp;
+        if (wasi) ast.pointer_bytes = 4;
         if (jsondiag || provider) ast.sink = [&](const Diagnostic &d) {
             if (!jsondiag) PrintDiagnosticText(d.text);
             found.push_back(d);
@@ -1455,9 +1470,9 @@ int Main(int argc, char **argv) {
         string_view runtime_ext_text;
         for (auto &rf : runtime_files)
             if (string_view(rf.name) == "runtime_ext.h") runtime_ext_text = rf.text;
-        auto stackcfg = StackConfigOf(cdefines);
+        auto stackcfg = StackConfigOf(cdefines, wasi);
         CodeGen cg(ast, runtime_ext_text, norfcheck, library, shared,
-                   stackcfg.maxstacks, noelide);
+                   stackcfg.maxstacks, noelide, wasi);
         if (stacks) cg.StackReport(msgs, stackcfg);
         // The packages whose native parts the program needs, which a JIT
         // run takes functions from and a build links: its own, when it has
@@ -1465,6 +1480,17 @@ int Main(int argc, char **argv) {
         // each before the packages it requires, which is the order a
         // linker resolves their archives in.
         nativepkgs = NativePackagesUsed(ast, cg.usedexterns);
+        if (wasi) {
+            if (cg.usesthreads) throw CompileError { "the WASI target does not support worker threads" };
+            if (!cg.DlLibs().empty()) throw CompileError { "the WASI target does not support dynamic extern libraries" };
+            for (auto pkg : nativepkgs) {
+                auto &p = ast.packages[pkg];
+                if (!p.cmake_target.empty())
+                    throw CompileError { "the WASI target does not support CMake package builds" };
+                if (p.builtin >= 0)
+                    throw CompileError { "the WASI target does not support builtin native packages" };
+            }
+        }
         // Assemble: compiler-set feature defines, the embedded runtime, then
         // the generated program. A program built with a separate runtime
         // holds what runtime.h has of it and the extern support's
@@ -1482,6 +1508,7 @@ int Main(int argc, char **argv) {
                                          "#define K_RUNTIME_VERSION " + RuntimeVersion() + "\n")
                                       : " */\n\n",
                              cg.predefs);
+            if (wasi) out += "#define K_TARGET_WASI 1\n";
             // -D goes into the source rather than onto a backend's command
             // line, so both backends compile the same text.
             for (auto &d : cdefines) {
@@ -1493,7 +1520,7 @@ int Main(int argc, char **argv) {
                 Append(out, "#define K_EMBEDDED_JIT 1\n",
                        RuntimeSections({ "jit_c.h" }));
             auto tasks = cg.usestasks ? RuntimeSections({ "runtime_tasks.h" }) : string();
-            if (cg.usestasks)
+            if (cg.usestasks && !wasi)
                 Append(out, "#ifndef K_NEED_TASK_WAIT\n#define K_NEED_TASK_WAIT 1\n#endif\n");
             if (separate)
                 Append(out, RuntimeSections({ "runtime.h" }), tasks, cg.head,
@@ -1561,7 +1588,30 @@ int Main(int argc, char **argv) {
     string tcwhy;
     bool tclooked = false, havetc = false;
     auto findtc = [&] {
-        if (!tclooked) havetc = FindToolchain(ccrequest, tc, tcwhy);
+        if (!tclooked && wasi) {
+            auto compiler = ccrequest;
+            if (compiler.empty()) {
+                if (auto sdk = getenv("WASI_SDK_PATH"); sdk && *sdk) {
+                    #ifdef _WIN32
+                        constexpr auto clang_name = "clang.exe";
+                    #else
+                        constexpr auto clang_name = "clang";
+                    #endif
+                    compiler = (filesystem::path(sdk) / "bin" / clang_name).string();
+                }
+            }
+            if (!compiler.empty()) havetc = FindToolchain(compiler, tc, tcwhy);
+            else tcwhy = "WASI SDK clang not found. Set WASI_SDK_PATH or pass --cc PATH.";
+            if (havetc && tc.style != "cc") {
+                tcwhy = "the WASI target requires WASI SDK clang, not an MSVC-style compiler";
+                havetc = false;
+            }
+            // The same driver can produce host and WASI objects. Keep their
+            // package directories and stamps distinct as well as their flags.
+            if (havetc) tc.id += "-wasm32-wasip1";
+        } else if (!tclooked) {
+            havetc = FindToolchain(ccrequest, tc, tcwhy);
+        }
         tclooked = true;
         if (!havetc) fprintf(stderr, "%s\n", tcwhy.c_str());
         return havetc;
@@ -1580,6 +1630,7 @@ int Main(int argc, char **argv) {
         unique_ptr<FileLock> buildlock;
         if (verb == "build") {
             builddir = ProgramBuildDir(file);
+            if (wasi) builddir += "/wasm32-wasip1";
             std::error_code ec;
             filesystem::create_directories(filesystem::path(builddir), ec);
             if (ec) {

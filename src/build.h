@@ -22,6 +22,7 @@ struct BuildOptions {
     bool shared = false;      // --shared: build a self-contained shared library
     bool offline = false;     // --offline: CMake uses dependencies already on disk
     string exe;               // -o: the executable/library; "" puts it beside the root source
+    bool wasi = false;
 };
 
 // K_HOME/build/prog/<stem>-<hash of the root's absolute path>/: where a
@@ -50,13 +51,17 @@ struct Builder {
             else f.push_back("/O2");
             return f;
         }
-        if (opts.debug) return { "-O0", "-g" };
-        return { "-O2" };
+        vector<string> f;
+        if (opts.wasi) f = { "--target=wasm32-wasip1", "-mexec-model=command" };
+        if (opts.debug) f.push_back("-O0"), f.push_back("-g");
+        else f.push_back("-O2");
+        return f;
     }
 
     // The system libraries a program links beyond the C library, in the cc
     // style: none on Windows, where they live in the C runtime.
     vector<string> SystemLibs() const {
+        if (opts.wasi) return { "-lm" };
         #ifdef _WIN32
             return {};
         #else
@@ -332,7 +337,9 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
     auto exe = opts.exe;
     if (exe.empty()) {
         auto stem = output.empty() ? PathStem(rootfile) : output;
-        if (opts.shared) {
+        if (opts.wasi) {
+            exe = cat(DirOf(rootfile), stem, stem.ends_with(".wasm") ? "" : ".wasm");
+        } else if (opts.shared) {
             #ifdef _WIN32
                 exe = cat(DirOf(rootfile), stem, ".dll");
             #elif defined(__APPLE__)
@@ -355,6 +362,17 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
     vector<string> extra;
     auto input = cfile;
     auto destination = exe;
+    optional<PendingExecutable> wasm_output;
+    if (opts.wasi) {
+        // The C stack grows toward address zero. Keep a page out of the
+        // address space so a wrap just below zero traps in linear memory.
+        extra = { "-Wl,--stack-first,-z,stack-size=2097152,--max-memory=4294901760" };
+        if (!opts.dryrun) {
+            wasm_output.emplace(exe);
+            if (wasm_output->path.empty()) throw CompileError { cat("cannot stage ", exe) };
+            destination = wasm_output->path;
+        }
+    }
     #ifdef __APPLE__
         ExecutableCache cache;
         optional<PendingExecutable> pending;
@@ -423,6 +441,17 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
         }
     #endif
     if (!linked) return 1;
+    if (wasm_output) {
+        constexpr string_view magic("\0asm\x01\0\0\0", 8);
+        char header[magic.size()];
+        auto file = fopen(destination.c_str(), "rb");
+        auto valid = file && fread(header, 1, sizeof header, file) == sizeof header &&
+                     string_view(header, sizeof header) == magic;
+        if (file) fclose(file);
+        if (!valid)
+            throw CompileError { "the WASI toolchain did not produce a WebAssembly executable" };
+        wasm_output->Publish();
+    }
     if (!opts.dryrun) fprintf(msgs, "built %s\n", exe.c_str());
     return 0;
 }

@@ -109,6 +109,7 @@ inline string CodeGen::CallableThunk(FnSpec *target, bool owning) {
                 Append(callable_code, "    k_stack *stack = K_STACK(sp);\n",
                        "    uint8_t *base = stack->top;\n",
                        "    ", ct, " *copy = (", ct, " *)base;\n",
+                       checked_data_stacks ? "    k_stack_check(base, sizeof(*copy));\n" : "",
                        "    stack->top = base + sizeof(*copy);\n");
                 if (owning) callable_code += "    K_MEMCPY(copy, environment, sizeof(*copy));\n";
                 else Append(callable_code, "    *copy = *", pointer, ";\n");
@@ -990,6 +991,7 @@ inline void CodeGen::EmitReprefix(FnSpec *sp, const Dst &dd, const string &base,
         L("int64_t ", ms, " = ", IntSize(ls), ";");
         writepref = cat("*(", IntCT(ls), " *)", base, " = (", IntCT(ls), ")", count, ";");
     }
+    Room(dd.s, cat("(", ms, " > ", oms, " ? ", ms, " - ", oms, " : 0)"));
     L("memmove(", base, " + ", ms, ", ", base, " + ", oms, ", (size_t)(", Top(dd.s), " - ",
       base, " - ", oms, "));");
     L(writepref);
@@ -1287,6 +1289,7 @@ inline vector<string> CodeGen::EmitDispatch(Call *c, Dst d0, vector<Dst> *alldst
                 copied = BytesTemp(stk);
                 auto sz = T();
                 L("int64_t ", sz, " = ", SizeX(enumtype, p), ";");
+                Room(stk, sz);
                 L("K_MEMCPY(", Top(stk), ", ", p, ", (size_t)", sz, ");");
                 Bump(stk, sz);
             } else {

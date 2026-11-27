@@ -8,33 +8,38 @@
 [English](README.md) · 简体中文
 
 [架构](#核心架构) · [模块](#模块架构) · [构建](#从源码构建) · [运行程序](#运行程序) ·
+[WebAssembly](#构建-webassembly-可执行程序) ·
 [路线图](docs/roadmap.md)
 
 K 是一门内存安全的系统编程语言。编译器检查引用的生命周期，程序可以显式控制存储。
-可增长的值放在地址稳定的数据栈上，作用域退出时回收对应存储。K 编译成 C，
-命令行工具为 `k`，源文件扩展名为 `.k`。
+可增长的值放在地址稳定的数据栈上，作用域退出时回收对应存储。K 使用 C 后端构建
+本机和 WASI WebAssembly 可执行程序。命令行工具为 `k`，源文件扩展名为 `.k`。
 
 K 的长期目标是服务于操作系统组件、云服务和 AI 基础设施。首个生产目标是云端推理网关。
 裸机启动和通过 Cordis 兼容 Node.js 项目都在路线图上。
 
 ## 核心架构
 
-[![K 核心架构。源文件与工具进入 K 编译器，生成 C 供本机构建或 TinyCC 使用。Cordis 根据项目锁选择可选服务。](docs/diagrams/core-architecture.png)](docs/diagrams/svg/core-architecture.svg)
+[![K 核心架构。编译器提供本机可执行文件、WASI 命令模块和 TinyCC 进程内执行三条路径。Cordis 根据项目锁选择可选服务。](docs/diagrams/core-architecture.png)](docs/diagrams/svg/core-architecture.svg)
 
-编译器定义语法、类型、生命周期和检查后的程序表示。本机构建与 TinyCC 执行路径共用
-特化和检查流程，再使用生成的 C。目标运行时提供数据栈、任务帧、工作线程队列和 C ABI。
+编译器定义语法、类型、生命周期和检查后的程序表示。本机、WASI 与 TinyCC 共用检查器，
+再使用针对各目标生成的 C。K 运行时提供数据栈、任务帧和 C ABI。本机构建还支持工作线程
+与类型化消息队列。
 
 Cordis 微内核是 K 的首要设计原则。各宿主通过版本化接口选择服务。经验证的锁文件将
 依赖图绑定到提供者版本和受跟踪输入。宿主根据支持的契约静态链接或动态加载提供者。
+CPython 与 QuickJS/TypeScript 适配器、TypeScript 及未来的 Node.js 兼容配置、ONNX 推理网关
+都是可选 Cordis 组件，拥有独立构建目标和经验证的依赖图，不是 K 编译器或目标运行时的依赖。
 [架构说明](docs/architecture.md) · [Cordis 设计](docs/design/cordis_microkernel.md)
 
 ## 依赖关系与上下文映射
 
-[![K 依赖关系。CLI 与编辑器共用加载器和检查器，构建工具准备产物，可选宿主使用 Cordis 装配服务。](docs/diagrams/context-map.png)](docs/diagrams/svg/context-map.svg)
+[![K 依赖关系。CLI 和编辑器共用加载器和检查器。WASI 宿主运行 WebAssembly 产物，可选宿主通过 Cordis 装配服务。](docs/diagrams/context-map.png)](docs/diagrams/svg/context-map.svg)
 
 黑色实线表示调用或编译产物，靛蓝虚线表示 Cordis 选择与服务接口，灰色点线表示
 生成程序共用的运行时支持。编辑器将未保存的文档覆盖到分析快照中并离线解析包。
 可选的源码驱动将生成的 K 交给常规编译入口。独立的 TypeScript 运行器使用自己的 Cordis 图。
+WASI 宿主运行 WebAssembly 命令模块，并通过预开放目录等方式授予资源访问权限。
 [子系统边界](docs/architecture.md#domain-boundaries-in-the-code)
 
 ## 模块架构
@@ -60,16 +65,28 @@ Cordis 微内核是 K 的首要设计原则。各宿主通过版本化接口选�
 
 ### 优化与 C 后端
 
-[![C 后端。优化已检查的函数体，证明边界安全，生成 C，再选择本机 C 编译器或 TinyCC。](docs/diagrams/c-backend.png)](docs/diagrams/svg/c-backend.svg)
+[![C 后端。优化已检查的函数体，证明边界安全，生成 C，再选择本机 C 编译器、WASI SDK 或 TinyCC。](docs/diagrams/c-backend.png)](docs/diagrams/svg/c-backend.svg)
 
 优化器处理已检查的特化代码。边界检查消除依赖控制流和别名信息。
 C 生成器负责值布局、调用与任务状态机，并在无法证明安全的位置生成运行时检查。
 [编译流水线](docs/implementation.md#1-pipeline) ·
 [边界检查消除](docs/implementation.md#5-bounds-check-elimination)
 
+### WebAssembly 目标
+
+[![WebAssembly 目标。K 按 32 位布局检查程序，生成包含数据栈检查的 C，再调用 WASI SDK 的 Clang 和链接器。所得 .wasm 导出 _start，由 WASI Preview 1 宿主运行。](docs/diagrams/webassembly-target.png)](docs/diagrams/svg/webassembly-target.svg)
+
+`k build --target wasm32-wasip1` 生成内含 K 运行时的 `.wasm` 命令模块。
+数据栈在线性内存中使用地址稳定的固定区域，编译器和运行时在写入前检查剩余容量。
+当前支持协作式异步任务、标准输入输出、命令行参数、时钟和预开放目录内的文件访问。
+包的 `.build` 文件声明的普通 C 源码使用同一 WASI 工具链编译并链接进模块；包缓存按目标
+和工具链隔离。工作线程、动态 `extern` 库、CMake 与内建本机包、浏览器和组件模型宿主仍在路线图上。
+[WebAssembly 设计](docs/design/wasm.md#wasi-command-target) ·
+[WASI 集成测试](docs/testing.md#wasi-command-target)
+
 ### 目标运行时
 
-[![目标运行时。数据栈存储可增长的值，任务帧管理挂起和清理，隔离的工作线程使用类型化队列通信。](docs/diagrams/target-runtime.png)](docs/diagrams/svg/target-runtime.svg)
+[![目标运行时。数据栈存储可增长的值，任务帧管理挂起和清理，本机工作线程使用类型化队列通信。](docs/diagrams/target-runtime.png)](docs/diagrams/svg/target-runtime.svg)
 
 可增长的局部值使用地址稳定的数据栈，存储可在作用域退出时回退。
 任务帧保存 `await` 所需的状态，并在取消时执行清理。
@@ -87,10 +104,11 @@ C 库可以在构建时链接，也可以通过动态 `extern` 声明加载。
 
 ### CLI、构建与包管理
 
-[![工具链。CLI 分发命令、解析包输入并协调本机构建与缓存。](docs/diagrams/toolchain.png)](docs/diagrams/svg/toolchain.svg)
+[![工具链。CLI 分发命令、解析包输入，并选择本机或 WASI 构建。](docs/diagrams/toolchain.png)](docs/diagrams/svg/toolchain.svg)
 
 `k` 检查、运行、构建和格式化程序，也支持解析包和检查 Cordis 图。
-包解析提供本地目录或缓存的 Git 源码及本机构建信息。构建输入决定受管产物的缓存标识，
+包解析提供本地目录或缓存的 Git 源码及本机构建信息。`--target` 用于选择本机或 WASI 构建。
+构建输入、目标和工具链共同决定受管产物的缓存标识，
 闲置产物可以清理。[命令行](docs/command_line.md) · [包管理](docs/packages.md)
 
 ### 语言服务器
@@ -117,7 +135,8 @@ C 库可以在构建时链接，也可以通过动态 `extern` 声明加载。
 
 可选的 `k-cordis-source` 驱动将围栏 `using` 块转换为普通 K 和对 CPython 或 QuickJS
 的类型化调用。独立的 `k-cordis-ts` 通过 Cordis 选择 TypeScript 前端和 QuickJS，
-执行带顶层 `await` 的本地 ESM。Node.js API 和 npm 项目的兼容性仍在路线图上。
+执行带顶层 `await` 的本地 ESM。这些适配器和运行器均为独立构建选项，不是核心编译器依赖。
+Node.js API 和 npm 项目兼容性仍是可选 Cordis 配置的路线图工作。
 [嵌入式语言](docs/design/embedded_languages.md) ·
 [TypeScript 项目运行器](docs/design/functions_and_typescript_runtime.md#optional-project-runner)
 
@@ -125,8 +144,9 @@ C 库可以在构建时链接，也可以通过动态 `extern` 声明加载。
 
 [![宿主服务。应用宿主激活有界 TCP、队列策略和基于 ONNX Runtime 的 CPU 推理服务。](docs/diagrams/hosted-providers.png)](docs/diagrams/svg/hosted-providers.svg)
 
-可选的应用宿主从已验证的图激活 TCP 和队列策略提供者。Linux 云配置包含一个推理网关，
+可选的应用宿主从已验证的图激活 TCP 和队列策略提供者。可选 Linux 云配置增加一个推理网关，
 可替换 ONNX Runtime CPU 提供者，限制并发请求，并由监督进程处理内存超限后的恢复。
+网关、提供者和 ONNX Runtime 都是 Cordis 部署组件，不是 K 核心依赖。
 [有界 TCP 流](docs/design/cordis_microkernel.md#bounded-tcp-streams) ·
 [推理网关](docs/design/cordis_microkernel.md#loopback-inference-gateway)
 
@@ -142,6 +162,7 @@ C 库可以在构建时链接，也可以通过动态 `extern` 声明加载。
 
 K 支持泛型、带标签的枚举与模式匹配、具体闭包、特化高阶函数、受检查的动态可调用值、
 类型化装饰器、`async fn` 和结构化任务作用域。TCP 与 CPU 推理是当前的宿主参考工作负载。
+WASI 命令模块已在 Wasmtime 上验证。
 后续里程碑包括裸机启动、更广泛的 Node.js 兼容，以及操作系统、云和 AI 生产目标。
 [开发路线图](docs/roadmap.md#milestones)
 
@@ -194,6 +215,19 @@ build/k build -o build/hello hello.k
 两次运行都输出 `[1, 4, 9, 16]`。`k run` 通过 TinyCC 在当前进程执行生成的 C。
 `k build` 调用 C 工具链生成本机可执行文件，支持包含工作线程的程序。
 将编译器加入 `PATH` 后即可使用 `k`。[更多示例](samples/README.md)
+
+### 构建 WebAssembly 可执行程序
+
+安装 WASI SDK 和 Wasmtime，将 `WASI_SDK_PATH` 指向 SDK 目录。用同一份 `hello.k`
+构建 WASI Preview 1 命令模块。
+
+```sh
+export WASI_SDK_PATH=/path/to/wasi-sdk
+build/k build --target wasm32-wasip1 hello.k -o build/hello.wasm
+wasmtime run build/hello.wasm  # [1, 4, 9, 16]
+```
+
+[WASM 构建选项](docs/command_line.md#webassembly-executables)
 
 ## 参与开发
 

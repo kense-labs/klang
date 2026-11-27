@@ -1109,6 +1109,7 @@ inline void CodeGen::EmitPrefixPatch(const string &pref, IntStorage ls, const st
     auto tmp = T(), ms = T();
     L("uint8_t ", tmp, "[10];");
     L("int64_t ", ms, " = k_uleb_write(", tmp, ", (uint64_t)(", count, "));");
+    Room(stk, cat(ms, " - 1"));
     L("memmove((", elems, ") + ", ms, " - 1, ", elems, ", (size_t)(", Top(stk), " - (",
       elems, ")));");
     L("K_MEMCPY(", pref, ", ", tmp, ", (size_t)", ms, ");");

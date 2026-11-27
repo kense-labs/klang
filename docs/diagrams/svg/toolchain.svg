@@ -20,7 +20,7 @@
     <rect x="36.0" y="220" width="268.0" height="88" rx="8" fill="#141413" stroke="#141413" stroke-width="1.15"/>
     <text x="170.0" y="247.0" fill="#FDFCF9" font-size="16" text-anchor="middle" font-weight="700">Command driver</text>
     <text x="170.0" y="269.0" fill="#FDFCF9" font-size="13.5" text-anchor="middle">main.cpp · toolchain.h</text>
-    <text x="170.0" y="291.0" fill="#FDFCF9" font-size="13.5" text-anchor="middle">mode · flags · target</text>
+    <text x="170.0" y="291.0" fill="#FDFCF9" font-size="13.5" text-anchor="middle">native or wasm32-wasip1</text>
     </g>
     <path d="M460.0 193V218" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
     <polyline points="456,211 460,218 464,211" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -37,15 +37,15 @@
     <g>
     <rect x="616.0" y="220" width="268.0" height="88" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
     <text x="750.0" y="247.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">Build &amp; cache</text>
-    <text x="750.0" y="269.0" fill="#645F56" font-size="13.5" text-anchor="middle">build.h · artifact_cache.h</text>
-    <text x="750.0" y="291.0" fill="#645F56" font-size="13.5" text-anchor="middle">native links · reuse · prune</text>
+    <text x="750.0" y="269.0" fill="#645F56" font-size="13.5" text-anchor="middle">build.h · native.h · cache</text>
+    <text x="750.0" y="291.0" fill="#645F56" font-size="13.5" text-anchor="middle">targeted objects · links · prune</text>
     </g>
     <path d="M170.0 329H750.0" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M460 329V348" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
     <polyline points="456,341 460,348 464,341" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     <g>
     <rect x="36" y="348" width="848" height="48" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
-    <text x="460.0" y="377.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">Diagnostics · executable / C artifact · in-process run</text>
+    <text x="460.0" y="377.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">Diagnostics · native executable / WASI .wasm · in-process run</text>
     </g>
     <rect x="36" y="410" width="848" height="38" rx="8" fill="#394DF2" stroke="none" stroke-width="1.15"/>
     <text x="460.0" y="434" fill="#FDFCF9" font-size="14" text-anchor="middle">Locked provider inputs participate in artifact identity.</text>

@@ -11,7 +11,9 @@
    still ask; it needs nothing below. It reports no more workers than the
    data stack budget holds beside the main program (k_rt_start), so a pool
    sized by it never runs the program out of address space. */
-#ifdef _WIN32
+#ifdef __wasi__
+static int64_t k_os_threads(void) { return 1; }
+#elif defined(_WIN32)
 /* The CPUs the process may run on, which `start /affinity` or a job object
    can make fewer than the machine has. */
 static int64_t k_os_threads(void) {

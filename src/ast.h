@@ -2042,13 +2042,13 @@ inline IntStorage LimitedLengthStorage(int64_t capacity) {
            capacity <= (int64_t)UINT32_MAX ? IS_U32 : IS_U64;
 }
 
-inline int64_t PackedPadAlignment(TypeExpr *t) {
+inline int64_t PackedPadAlignment(TypeExpr *t, int pointer_bytes) {
     switch (t->kind) {
         case TY_INT: return t->intstorage == IS_VARINT ? 1 : IntBits(t->intstorage) / 8;
         case TY_FLT: return t->fltstorage == FS_F32 ? 4 : 8;
         case TY_REF: return t->ref->lenstorage >= 0 ?
-                            (t->ref->lenstorage == IS_VARINT ? 1 : IntBits((IntStorage)t->ref->lenstorage) / 8) : 8;
-        case TY_SLICE: return 8;
+                            (t->ref->lenstorage == IS_VARINT ? 1 : IntBits((IntStorage)t->ref->lenstorage) / 8) : pointer_bytes;
+        case TY_SLICE: return pointer_bytes;
         default: return 1;
     }
 }
@@ -2058,7 +2058,8 @@ inline int64_t AddLayoutBytes(int64_t a, int64_t b) {
 }
 
 template<typename Measure, typename At>
-int64_t PackedFieldBytes(const vector<Field> &fields, const vector<TypeExpr *> &types, Measure measure, At at) {
+int64_t PackedFieldBytes(const vector<Field> &fields, const vector<TypeExpr *> &types, int pointer_bytes,
+                        Measure measure, At at) {
     int64_t bytes = 0;
     for (size_t i = 0; i < fields.size(); ++i) {
         at(bytes);
@@ -2067,7 +2068,7 @@ int64_t PackedFieldBytes(const vector<Field> &fields, const vector<TypeExpr *> &
         else if (field.padsize >= 0) bytes = AddLayoutBytes(bytes, field.padsize);
         else {
             auto next = find_if(types.begin() + i + 1, types.end(), [](TypeExpr *t) { return t != nullptr; });
-            auto alignment = next == types.end() ? 1 : PackedPadAlignment(*next);
+            auto alignment = next == types.end() ? 1 : PackedPadAlignment(*next, pointer_bytes);
             bytes = AddLayoutBytes(bytes, (alignment - bytes % alignment) % alignment);
         }
     }
@@ -2077,7 +2078,7 @@ int64_t PackedFieldBytes(const vector<Field> &fields, const vector<TypeExpr *> &
 // Fields stored in a K value follow the same packed ABI in both backends.
 // Each caller supplies its cached nominal layout and array bounds.
 template<typename ArrayCapacity, typename IsResizable, typename NominalSize>
-int64_t FixedStorageBytes(TypeExpr *t, const ArrayCapacity &capacity, const IsResizable &resizable,
+int64_t FixedStorageBytes(TypeExpr *t, int pointer_bytes, const ArrayCapacity &capacity, const IsResizable &resizable,
                           const NominalSize &nominal) {
     switch (t->kind) {
         case TY_BOOL: return 1;
@@ -2088,14 +2089,14 @@ int64_t FixedStorageBytes(TypeExpr *t, const ArrayCapacity &capacity, const IsRe
                 assert(t->ref->lenstorage != IS_VARINT);
                 return IntBits((IntStorage)t->ref->lenstorage) / 8;
             }
-            return resizable(t->ref->sub) ? 16 : 8;
-        case TY_SLICE: return 16;
+            return resizable(t->ref->sub) ? 2 * pointer_bytes : pointer_bytes;
+        case TY_SLICE: return pointer_bytes + 8;
         case TY_STRUCT: case TY_ENUM: case TY_VARIANT: return nominal(t);
         case TY_ARRAY: {
             auto a = t->arr;
             assert(a->akind == A_FIXED || a->akind == A_LIMITED);
             auto length = capacity(a);
-            auto element = FixedStorageBytes(a->sub, capacity, resizable, nominal);
+            auto element = FixedStorageBytes(a->sub, pointer_bytes, capacity, resizable, nominal);
             if (element && length > INT64_MAX / element) return INT64_MAX;
             auto bytes = element * length;
             return a->akind == A_FIXED ? bytes :
@@ -2761,6 +2762,7 @@ struct Package {
 };
 
 struct Ast {
+    int pointer_bytes = 8;
     bool has_ownership = false;
     bool has_task_loans = false;
     bool has_task_resize_loans = false;
@@ -3091,7 +3093,7 @@ struct Ast {
             st->callable_inline = owned;
             for (size_t i = 0; i < sig.args.size() + sig.rets.size(); ++i)
                 st->generics.push_back({ Intern(cat("type#", i)), line });
-            st->fields.push_back({ "invoke", line, {}, inttypes[IS_U64] });
+            st->fields.push_back({ "invoke", line, {}, inttypes[pointer_bytes == 4 ? IS_U32 : IS_U64] });
             if (owned) {
                 auto parameter = Intern("environment#storage");
                 st->generics.push_back({ parameter, line });
