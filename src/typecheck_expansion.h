@@ -43,13 +43,20 @@ inline bool TypeCheck::IsValuelessTail(const Node *n) {
             return !fi->elseb || walk(fi->thenb) || walk(fi->elseb);
         if (auto m = Is<MatchExpr>(x)) return arms(m->arms);
         if (auto cf = Is<ConstFor>(x)) {
-            auto entry = [&](TypeExpr *t = nullptr) {
-                if (t) bindings.push_back({ cf->bindings.back(), t });
+            auto entry = [&](TypeExpr *t = nullptr, int binding = 0) {
+                if (t) bindings.push_back({ binding ? binding : cf->bindings.back(), t });
                 auto result = arms(cf->arms);
                 if (t) bindings.pop_back();
                 return result;
             };
             if (cf->source == ES_CONSTANTS) return !cf->constants.empty() && entry();
+            if (cf->source == ES_DECORATED) {
+                auto owner = cf->decorator_ns ? nullptr : shape(cf->types[1]);
+                auto declarations = DecoratedDeclarations(cf, shape(cf->types[0]), owner);
+                for (auto &decl : declarations)
+                    if (entry(decl.type, cf->bindings[1])) return true;
+                return false;
+            }
             if (cf->source == ES_TYPES) {
                 for (auto t : cf->types) if (entry(shape(t))) return true;
                 return false;
@@ -297,7 +304,9 @@ inline void TypeCheck::ExpandConstFor(ConstFor *cf, const function<void(Expansio
     // Resolve the complete source before creating any fragment instances.
     vector<vector<ExpansionArg>> entries;
     vector<string> descriptions;
-    if (cf->source == ES_CONSTANTS) {
+    if (cf->source == ES_DECORATED) {
+        ExpandDecorated(cf, entries, descriptions);
+    } else if (cf->source == ES_CONSTANTS) {
         for (size_t i = 0; i < cf->constants.size(); i++) {
             auto n = cf->constants[i];
             ConstNames(n, "const for source");
@@ -323,6 +332,8 @@ inline void TypeCheck::ExpandConstFor(ConstFor *cf, const function<void(Expansio
             // A variant type's payload is a struct-like run of fields (§3.5),
             // reached as a struct's are, on a value of that variant type.
             auto t = ast.PlainOf(types[0]);
+            if (t->kind == TY_STRUCT && t->struc->st->closure)
+                Error(cf, "closure captures are private");
             auto &fields = t->kind == TY_VARIANT ? t->var->variant->fields : GetStructInst(t)->st->fields;
             for (auto &f : fields) {
                 if (f.ispad) continue;

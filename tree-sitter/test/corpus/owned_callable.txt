@@ -1,0 +1,28 @@
+=================
+Owned callable types
+=================
+
+fn capture(callback: fn[8 + 8](i64) -> i64) -> fn[16](i64) -> i64 {
+    callback
+}
+
+---
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (function_type
+          (binary_expression
+            (int_literal)
+            (int_literal))
+          (primitive_type)
+          (primitive_type))))
+    (function_type
+      (int_literal)
+      (primitive_type)
+      (primitive_type))
+    (block
+      (identifier))))

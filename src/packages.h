@@ -6,9 +6,6 @@
 
 namespace klang {
 
-// In main.cpp.
-string RelativeTo(const string &path, const string &dir);
-
 struct PackageSource {
     string text;        // As written.
     bool ispath = false;
@@ -86,13 +83,107 @@ inline bool SameSource(const PackageSource &a, const PackageSource &b) {
     return a.ispath ? a.dir == b.dir : a.url == b.url;
 }
 
+// The C symbols a file's extern fns name: `extern fn f(...) = "sym"` (or the
+// deprecated `extern "sym" fn f`) gives sym, `extern fn f` or `extern fn
+// ns::f` gives the leaf name (§7.10). Read by the lexer alone, since this is
+// asked of files the program never parsed. The libraries the file's extern
+// blocks name go into `libs`, where it is given.
+inline void ExternNamesIn(const string &path, const string &text, set<string> &names,
+                          set<string> *libs = nullptr) {
+    Lexer lex(path, text.c_str());
+    while (lex.tok != T_EOF) {
+        if (lex.tok != T_EXTERN) {
+            lex.Next();
+            continue;
+        }
+        lex.Next();
+        string cname;
+        if (lex.tok == T_STRLIT) {
+            cname = lex.sval;
+            lex.Next();
+        }
+        // An extern block's functions come from its shared library (§7.10),
+        // not from the native part: skipped through its `}`.
+        if (lex.tok == T_LCURLY) {
+            if (libs && !cname.empty()) libs->insert(cname);
+            auto depth = 0;
+            do {
+                if (lex.tok == T_LCURLY) depth++;
+                else if (lex.tok == T_RCURLY) depth--;
+                lex.Next();
+            } while (depth > 0 && lex.tok != T_EOF);
+            continue;
+        }
+        if (lex.tok != T_FN) continue;
+        lex.Next();
+        if (lex.tok == T_IDENT) {
+            string leaf(lex.attr);
+            lex.Next();
+            if (lex.tok == T_COLONCOLON) {
+                lex.Next();
+                if (lex.tok == T_IDENT) leaf = string(lex.attr);
+            }
+            // Past the signature to its `;`: an `=` outside the parameters'
+            // parentheses (where defaults have theirs) is the symbol's.
+            auto parens = 0;
+            while (lex.tok != T_SEMI && lex.tok != T_EOF && lex.tok != T_EXTERN) {
+                if (lex.tok == T_LPAREN) parens++;
+                else if (lex.tok == T_RPAREN) parens--;
+                else if (lex.tok == T_ASSIGN && parens == 0) {
+                    lex.Next();
+                    if (lex.tok == T_STRLIT) cname = lex.sval;
+                    continue;
+                }
+                lex.Next();
+            }
+            if (cname.empty()) cname = leaf;
+        }
+        if (!cname.empty()) names.insert(cname);
+    }
+}
+
+// Whether the directory `dir` holds a sidecar, which makes it a program or
+// package of its own.
+inline bool HasSidecar(const filesystem::path &dir) {
+    std::error_code ec;
+    for (filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().extension() == ".build" && it->is_regular_file(ec)) return true;
+    return false;
+}
+
+// Scan all the library's modules so one built library serves any importer.
+// Skip excluded directories and directories that own a sidecar.
+inline vector<string> PackageExternNames(const Package &package, set<string> *libs = nullptr) {
+    set<string> names;
+    std::error_code ec;
+    filesystem::recursive_directory_iterator it(filesystem::path(package.root), ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        auto path = ForwardSlashes(it->path().string());
+        std::error_code fec;
+        if (it->is_directory(fec)) {
+            auto dir = path + "/";
+            if (std::find(package.exclude.begin(), package.exclude.end(), dir) != package.exclude.end() ||
+                HasSidecar(it->path()))
+                it.disable_recursion_pending();
+            continue;
+        }
+        if (it->path().extension() != ".k" || !it->is_regular_file(fec)) continue;
+        string text;
+        if (!LoadSource(path, text)) continue;
+        try {
+            ExternNamesIn(path, text, names, libs);
+        } catch (CompileError &) {}   // A file that does not lex has no externs to offer.
+    }
+    return vector<string>(names.begin(), names.end());
+}
+
 // --- fetching (§4.6) ------------------------------------------------------------
 
-// `k fetch --update`: refs that are not commits are fetched again.
-inline bool package_update = false;
-// `--offline`: nothing is fetched; a package whose checkout is not in the
-// cache is an error at its import, which `k fetch` resolves.
-inline bool package_nofetch = false;
+enum class PackageFetchMode {
+    FetchMissing,
+    Update,       // Refresh cached tags and branches too.
+    Offline,      // Use only packages already on disk.
+};
 
 inline bool IsCommitHash(const string &ref) {
     if (ref.size() < 7 || ref.size() > 40) return false;
@@ -129,6 +220,23 @@ inline string GitCacheKey(const PackageSource &s) {
 
 inline string GitCacheDir(const PackageSource &s) {
     return cat(KlangHome(), "/pkg/", GitCacheKey(s));
+}
+
+inline void SetPackageCheckout(Package &pkg, const PackageSource &source) {
+    if (source.ispath) return;
+    pkg.cachekey = GitCacheKey(source);
+    if (!IsCommitHash(source.ref)) return;
+    // Commit fetches publish a detached checkout. Read its full identity
+    // locally, including when the cached package is used without git.
+    string head, ref = source.ref;
+    for (auto &c : ref) c = (char)tolower((unsigned char)c);
+    if (!LoadFile(cat(pkg.root, ".git/HEAD"), head))
+        throw CompileError { cat("cannot identify the locked checkout at ", pkg.root) };
+    head.resize(head.find_last_not_of("\r\n ") + 1);
+    if (head.size() != 40 || !IsCommitHash(head) || !head.starts_with(ref))
+        throw CompileError { cat("checkout at ", pkg.root, " does not match the locked revision ",
+                                 source.ref) };
+    pkg.revision = std::move(head);
 }
 
 // Reads the package's sidecar, `<name>.build` beside its entry, if there is
@@ -250,14 +358,15 @@ inline void RunGit(const string &git, const vector<string> &args) {
 // fetch of the one commit. An interrupted fetch leaves a .tmp directory,
 // never a half checkout under the name. A lock beside it keeps concurrent
 // fetches from removing or writing each other's temporary checkout.
-inline string FetchPackage(const PackageSource &s, const string &name) {
+inline string FetchPackage(const PackageSource &s, const string &name, PackageFetchMode mode) {
     auto dir = GitCacheDir(s);
     std::error_code ec;
     auto have = filesystem::is_directory(filesystem::path(dir), ec);
-    if (!have && package_nofetch)
+    if (!have && mode == PackageFetchMode::Offline)
         throw CompileError { cat("the package ", name, " from ", s.text, " is not fetched, and "
                                  "--offline fetches nothing: `k fetch` fetches it") };
-    auto update = have && package_update && !IsCommitHash(s.ref) && !package_nofetch;
+    const auto refresh = mode == PackageFetchMode::Update && !IsCommitHash(s.ref);
+    auto update = have && refresh;
     if (!have || update) {
         auto parent = filesystem::path(dir).parent_path();
         filesystem::create_directories(parent, ec);
@@ -266,7 +375,7 @@ inline string FetchPackage(const PackageSource &s, const string &name) {
         // cleanup and publication never remove a lock another process holds.
         FileLock lock(dir + ".lock", cat("waiting for another klang fetching the package ", name));
         have = filesystem::is_directory(filesystem::path(dir), ec);
-        update = have && package_update && !IsCommitHash(s.ref);
+        update = have && refresh;
         if (have && !update) return dir + "/";
         auto git = FindOnPath("git");
         if (git.empty())
@@ -320,7 +429,7 @@ inline string FetchPackage(const PackageSource &s, const string &name) {
 // The root directory of the package `name` from `source`: the directory
 // itself for a path, the checkout in the cache for a git source; either
 // must hold `<name>.k`.
-inline string PackageRoot(const PackageSource &source, const string &name) {
+inline string PackageRoot(const PackageSource &source, const string &name, PackageFetchMode mode) {
     string dir;
     if (source.ispath) {
         std::error_code ec;
@@ -329,7 +438,7 @@ inline string PackageRoot(const PackageSource &source, const string &name) {
                                      " is not a directory (", source.dir, ")") };
         dir = source.dir;
     } else {
-        dir = FetchPackage(source, name);
+        dir = FetchPackage(source, name, mode);
     }
     if (!PathExists(SourcePath(cat(dir, name))))
         throw CompileError { cat("the package ", name, " at ", dir, " has no ", name, ".k") };

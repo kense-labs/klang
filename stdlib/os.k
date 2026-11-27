@@ -22,6 +22,24 @@ extern fn delete_file(path: const u8[:]) -> bool = "k_os_remove_file";
 // Replaces `to`, if there is one, in a single step.
 extern fn rename_file(from: const u8[:], to: const u8[:]) -> bool = "k_os_rename_file";
 
+extern fn os_reader::open(path: const u8[:]) -> u64 = "k_os_reader_open";
+extern fn os_reader::read(id: u64, out: u8[>..]&, max: i64) -> i64 = "k_os_reader_read";
+extern fn os_reader::close(id: u64) = "k_os_reader_close";
+
+// Open a binary stream and lend Body a reader(out, max) operation. The
+// stream belongs to this call and closes as the scope exits, including
+// when the block returns from its enclosing function or throws.
+fn with_read_file<Body>(path: const u8[:]) -> bool {
+    let id = os_reader::open(path);
+    if id == 0 { return false; }
+    defer os_reader::close(id);
+    fn read(out: u8[>..]&, max: i64 = 65536) -> i64 {
+        return os_reader::read(id, out, max);
+    }
+    Body(read);
+    return true;
+}
+
 // Directories.
 extern fn make_dir(path: const u8[:]) -> bool = "k_os_make_dir";         // true if one is there afterwards
 extern fn is_dir(path: const u8[:]) -> bool = "k_os_is_dir";

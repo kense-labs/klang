@@ -188,8 +188,7 @@ inline IntStorage CodeGen::LenStore(TypeArray *a) {
         case A_LIMITED: {
             auto k = ArrSize(a);
             assert(k >= 0);
-            return k <= 255 ? IS_U8 : k <= 65535 ? IS_U16 :
-                   k <= (int64_t)UINT32_MAX ? IS_U32 : IS_U64;
+            return LimitedLengthStorage(k);
         }
         default: assert(false); return IS_U32;
     }
@@ -241,44 +240,11 @@ inline const char *CodeGen::RelCT(TypeExpr *rt) {
 
 // StructInst / (EnumInst, variant).
 
-// The alignment `pad` (bare form) gives the next field: its scalar width.
-inline int64_t CodeGen::PadAlign(TypeExpr *t) {
-    switch (t->kind) {
-        case TY_INT: return t->intstorage == IS_VARINT ? 1 : IntSize(t->intstorage);
-        case TY_FLT: return t->fltstorage == FS_F32 ? 4 : 8;
-        case TY_REF: return t->ref->lenstorage >= 0 ?
-                            (t->ref->lenstorage == IS_VARINT ? 1
-                                                             : IntSize((IntStorage)t->ref->lenstorage))
-                            : 8;
-        case TY_SLICE: return 8;
-        default: return 1;
-    }
-}
-
 inline CodeGen::Layout CodeGen::LayoutFields(const vector<Field> &fields,
                                              const vector<TypeExpr *> &ftypes) {
     Layout lo;
-    int64_t off = 0;
-    for (size_t i = 0; i < fields.size(); i++) {
-        auto &f = fields[i];
-        if (f.ispad) {
-            lo.offs.push_back(off);
-            if (f.padsize >= 0) {
-                off += f.padsize;
-            } else {
-                // Bare pad: align the next real field to its own size.
-                TypeExpr *nt = nullptr;
-                for (auto j = i + 1; j < fields.size(); j++)
-                    if (!fields[j].ispad) { nt = ftypes[j]; break; }
-                auto a = nt ? PadAlign(nt) : 1;
-                off = (off + a - 1) / a * a;
-            }
-            continue;
-        }
-        lo.offs.push_back(off);
-        off += FixedSize(ftypes[i]);
-    }
-    lo.size = off;
+    lo.size = PackedFieldBytes(fields, ftypes, [&](TypeExpr *t) { return FixedSize(t); },
+                               [&](int64_t offset) { lo.offs.push_back(offset); });
     return lo;
 }
 
@@ -297,45 +263,20 @@ inline const CodeGen::Layout &CodeGen::VariantLayout(EnumInst *ei, int vi) {
 }
 
 inline int64_t CodeGen::FixedSize(TypeExpr *t) {
-    switch (t->kind) {
-        case TY_INT:  assert(t->intstorage != IS_VARINT); return IntSize(t->intstorage);
-        case TY_FLT:  return t->fltstorage == FS_F32 ? 4 : 8;
-        case TY_BOOL: return 1;
-        case TY_REF:
-            if (t->ref->lenstorage >= 0) {
-                assert(t->ref->lenstorage != IS_VARINT);
-                return IntSize((IntStorage)t->ref->lenstorage);
-            }
-            return IsResz(t->ref->sub) ? 16 : 8;
-        case TY_SLICE: return 16;
-        case TY_STRUCT: {
-            // An empty struct takes the one byte C gives it.
-            auto sz = StructLayout(SI(t)).size;
-            return sz ? sz : 1;
+    return FixedStorageBytes(t, [&](TypeArray *a) { return ArrSize(a); },
+                            [&](TypeExpr *p) { return IsResz(p); }, [&](TypeExpr *part) {
+        if (part->kind == TY_STRUCT) return max<int64_t>(1, StructLayout(SI(part)).size);
+        if (part->kind == TY_VARIANT) {
+            auto ei = EIVar(part);
+            return VariantLayout(ei, ei->en->VariantIndex(part->var->variant)).size;
         }
-        case TY_ENUM: {
-            assert(!t->enu->varmode);
-            auto ei = EIOf(t);
-            int64_t maxp = 0;
-            for (size_t vi = 0; vi < ei->en->variants.size(); vi++)
-                maxp = std::max(maxp, VariantLayout(ei, (int)vi).size);
-            return TagSize(ei->en) + maxp;
-        }
-        case TY_VARIANT: {
-            auto ei = EIVar(t);
-            return VariantLayout(ei, ei->en->VariantIndex(t->var->variant)).size;
-        }
-        case TY_ARRAY: {
-            auto &a = *t->arr;
-            switch (a.akind) {
-                case A_FIXED:   return ArrSize(t->arr) * FixedSize(a.sub);
-                case A_LIMITED: return IntSize(LenStore(t->arr)) +
-                                       ArrSize(t->arr) * FixedSize(a.sub);
-                default: assert(false); return 0;
-            }
-        }
-        default: assert(false); return 0;
-    }
+        assert(part->kind == TY_ENUM && !part->enu->varmode);
+        auto ei = EIOf(part);
+        int64_t payload = 0;
+        for (size_t i = 0; i < ei->en->variants.size(); ++i)
+            payload = max(payload, VariantLayout(ei, (int)i).size);
+        return AddLayoutBytes(TagSize(ei->en), payload);
+    });
 }
 
 // ------------------------------------------------------------------
@@ -597,7 +538,13 @@ inline string CodeGen::CT(TypeExpr *t, bool unaligned) {
         case TY_STRUCT: {
             auto si = SI(t);
             Append(d, "struct ", name, " {\n");
-            if (EmptyLayout(si->st->fields)) Append(d, "    uint8_t k_empty;\n");
+            if (si->st->callable_arity >= 0) {
+                d += "    void (*invoke_g)(const void *, void *const *, void *const *, int64_t, const k_loc *);\n";
+                if (auto storage = CallableStorage(t)) {
+                    auto bytes = ArrSize(storage->arr);
+                    if (bytes) Append(d, "    uint8_t storage_g[", bytes, "];\n");
+                } else d += "    const void *environment_g;\n";
+            } else if (EmptyLayout(si->st->fields)) Append(d, "    uint8_t k_empty;\n");
             else if (si->st->isroot) {
                 for (size_t i = 0; i < si->ftypes.size(); i++) {
                     if (!si->ftypes[i]) continue;
@@ -1413,6 +1360,13 @@ inline void CodeGen::EmitEqFixed(string &bo, TypeExpr *t) {
     switch (t->kind) {
         case TY_STRUCT: {
             auto si = SI(t);
+            if (auto storage = CallableStorage(t)) {
+                bo += "    return a->invoke_g == b->invoke_g";
+                if (ArrSize(storage->arr))
+                    bo += " && k_memeq(a->storage_g, b->storage_g, sizeof(a->storage_g))";
+                bo += ";\n";
+                return;
+            }
             for (size_t i = 0; i < si->st->fields.size(); i++) {
                 auto &f = si->st->fields[i];
                 if (f.ispad) continue;

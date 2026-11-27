@@ -84,7 +84,9 @@ struct ExpansionBinder {
             for (size_t i = 0; i < cf->names.size(); i++) {
                 auto id = ++next;
                 cf->bindings.push_back(id);
-                bindings.push_back({ cf->names[i], id, cf->source == ES_FIELDS && i == 1, true });
+                auto field_source = cf->source == ES_FIELDS ||
+                                    (cf->source == ES_DECORATED && !cf->decorator_ns);
+                bindings.push_back({ cf->names[i], id, field_source && i == 1, true });
             }
             Walk(cf->body);
             Inits(cf->inits);
@@ -148,7 +150,15 @@ struct ExpansionBinder {
             if (b.accessor) n->expansionbinding = b.id;
             Type(d->enumtype);
         }
-        if (auto sl = Is<StructLit>(n)) { Type(sl->type); Inits(sl->inits); return; }
+        if (auto sl = Is<StructLit>(n)) {
+            Type(sl->type);
+            if (sl->Closure()) {
+                for (auto &capture : sl->inits) Walk(capture.val);
+            } else {
+                Inits(sl->inits);
+            }
+            return;
+        }
         if (auto vd = Is<VarDecl>(n)) Type(vd->type);
         if (auto c = Is<Call>(n)) for (auto t : c->tyargs) Type(t);
         if (auto c = Is<AsCast>(n)) Type(c->type);
@@ -167,6 +177,13 @@ struct ExpansionBinder {
 inline void BindExpansionNames(Ast &ast) {
     ExpansionBinder binder;
     for (auto n : ast.topdecls) binder.Walk(n);
+    for (auto st : ast.structs)
+        if (st->decorator_wrapper) binder.Function(st->decorator_wrapper);
+    // Closure bodies and generated async stages each have their own scope.
+    // Parsing already moved async bodies into stages, so the top-level
+    // function walk above only reached their task constructors.
+    for (auto sf : ast.functions)
+        if (sf->closure_body || sf->task_stage) binder.Function(sf);
 }
 
 } // namespace klang

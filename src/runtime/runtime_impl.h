@@ -216,6 +216,27 @@ static K_TLS volatile long k_nregions;
    worked it out, so a reservation past it is a compiler bug. */
 static K_TLS long k_regions_cap;
 
+/* Indexed stacks have a static count. Suspended tasks own their regions
+   separately, so two tasks can use the same poll stack indices. */
+typedef struct k_task_region {
+    k_stack stack;  /* First member, so the descriptor identifies its owner. */
+    k_region region;
+    struct k_task_region *previous, *next;
+} k_task_region;
+static K_TLS k_task_region *k_task_regions;
+
+static k_region *k_find_region(const void *at) {
+    for (long i = 0; i < k_nregions; i++) {
+        k_region *r = &k_regions[i];
+        if ((uintptr_t)at - (uintptr_t)r->base < r->size) return r;
+    }
+    for (k_task_region *entry = k_task_regions; entry; entry = entry->next) {
+        k_region *r = &entry->region;
+        if ((uintptr_t)at - (uintptr_t)r->base < r->size) return r;
+    }
+    return NULL;
+}
+
 /* Text without stdio, which a fault handler may not call (nor malloc):
    decimal digits, a size in the largest unit that holds it exactly, and a
    string. Each returns the end of what it wrote. */
@@ -272,13 +293,11 @@ static size_t k_overflow_text(char *buf, const k_region *r) {
 }
 
 K_API K_NORETURN void k_stack_overflow(const void *at) {
-    for (long i = 0; i < k_nregions; i++) {
-        const k_region *r = &k_regions[i];
-        if ((uintptr_t)at - (uintptr_t)r->base < r->size) {
-            char msg[K_OVERFLOW_TEXT];
-            fwrite(msg, 1, k_overflow_text(msg, r), stderr);
-            k_end(1);
-        }
+    const k_region *r = k_find_region(at);
+    if (r) {
+        char msg[K_OVERFLOW_TEXT];
+        fwrite(msg, 1, k_overflow_text(msg, r), stderr);
+        k_end(1);
     }
     k_panic("data stack overflow");
 }
@@ -294,8 +313,31 @@ static void k_regions_begin(int64_t capacity) {
 static void k_release_region(const k_region *r);
 static void k_native_stack_free(void);
 
+static K_TLS k_task_cleanup *k_task_cleanups;
+
+K_API void k_task_cleanup_open(k_task_cleanup *entry, void (*release)(k_task_cleanup *)) {
+    entry->release = release;
+    entry->link = &k_task_cleanups;
+    entry->next = k_task_cleanups;
+    if (entry->next) entry->next->link = &entry->next;
+    k_task_cleanups = entry;
+}
+
+K_API void k_task_cleanup_close(k_task_cleanup *entry) {
+    *entry->link = entry->next;
+    if (entry->next) entry->next->link = entry->link;
+    entry->release(entry);
+}
+
 /* Unregister before unmapping, then drop the registry. */
 K_API void k_release_regions(void) {
+    while (k_task_cleanups) k_task_cleanup_close(k_task_cleanups);
+    while (k_task_regions) {
+        k_task_region *entry = k_task_regions;
+        k_task_regions = entry->next;
+        k_release_region(&entry->region);
+        free(entry);
+    }
     while (k_nregions) {
         long i = k_nregions - 1;
         k_region r = k_regions[i];
@@ -337,39 +379,37 @@ static LONG WINAPI k_fault_filter(EXCEPTION_POINTERS *ep) {
     if (code != STATUS_ACCESS_VIOLATION)
         return EXCEPTION_CONTINUE_SEARCH;
     uint8_t *hit = (uint8_t *)ep->ExceptionRecord->ExceptionInformation[1];
-    for (long i = 0; i < k_nregions; i++) {
-        k_region *r = &k_regions[i];
-        if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
-            /* Within the usable part: commit another chunk (clamped to the
-               region) and resume, or where the system has no more memory to
-               commit, say so. A read below the commit mark (a page that was
-               skipped or decommitted by slice_pool's trim) commits only its
-               page, so a stale view does not take back the pages around it;
-               a write there still takes a chunk, as reuse writes on. Within
-               the gap: a data stack overran. */
-            if (hit < r->base + r->usable) {
-                uint8_t *page = (uint8_t *)((size_t)hit & ~(k_page_size - 1));
-                size_t n = page < r->committed && ep->ExceptionRecord->ExceptionInformation[0] == 0
-                               ? k_page_size : K_COMMIT_CHUNK;
-                if (page + n > r->base + r->usable)
-                    n = (size_t)(r->base + r->usable - page);
-                if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
-                    if (page + n > r->committed) r->committed = page + n;
-                    return EXCEPTION_CONTINUE_EXECUTION;
-                }
-                static const char nomem[] =
-                    "klang runtime error: out of memory committing a data stack\n";
-                DWORD written;
-                WriteFile(GetStdHandle(STD_ERROR_HANDLE), nomem, sizeof(nomem) - 1, &written,
-                          NULL);
-                ExitProcess(1);
+    k_region *r = k_find_region(hit);
+    if (r) {
+        /* Within the usable part: commit another chunk (clamped to the
+           region) and resume, or where the system has no more memory to
+           commit, say so. A read below the commit mark (a page that was
+           skipped or decommitted by slice_pool's trim) commits only its
+           page, so a stale view does not take back the pages around it;
+           a write there still takes a chunk, as reuse writes on. Within
+           the gap: a data stack overran. */
+        if (hit < r->base + r->usable) {
+            uint8_t *page = (uint8_t *)((size_t)hit & ~(k_page_size - 1));
+            size_t n = page < r->committed && ep->ExceptionRecord->ExceptionInformation[0] == 0
+                           ? k_page_size : K_COMMIT_CHUNK;
+            if (page + n > r->base + r->usable)
+                n = (size_t)(r->base + r->usable - page);
+            if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
+                if (page + n > r->committed) r->committed = page + n;
+                return EXCEPTION_CONTINUE_EXECUTION;
             }
-            char msg[K_OVERFLOW_TEXT];
+            static const char nomem[] =
+                "klang runtime error: out of memory committing a data stack\n";
             DWORD written;
-            WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, (DWORD)k_overflow_text(msg, r),
-                      &written, NULL);
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), nomem, sizeof(nomem) - 1, &written,
+                      NULL);
             ExitProcess(1);
         }
+        char msg[K_OVERFLOW_TEXT];
+        DWORD written;
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, (DWORD)k_overflow_text(msg, r),
+                  &written, NULL);
+        ExitProcess(1);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -469,14 +509,12 @@ static size_t k_page_size = 0;
 static void k_fault_handler(int sig, siginfo_t *info, void *ctx) {
     (void)ctx;
     uint8_t *hit = (uint8_t *)info->si_addr;
-    for (long i = 0; i < k_nregions; i++) {
-        k_region *r = &k_regions[i];
-        if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
-            char msg[K_OVERFLOW_TEXT];
-            ssize_t w = write(2, msg, k_overflow_text(msg, r));
-            (void)w;
-            _exit(1);
-        }
+    k_region *r = k_find_region(hit);
+    if (r) {
+        char msg[K_OVERFLOW_TEXT];
+        ssize_t w = write(2, msg, k_overflow_text(msg, r));
+        (void)w;
+        _exit(1);
     }
     if ((uintptr_t)hit - k_native_lo < k_native_hi - k_native_lo) {
         static const char msg[] = "klang runtime error: native call stack overflow\n";
@@ -645,9 +683,7 @@ static K_NORETURN void k_end(int code) {
    sooner. Workers racing through a refusal may each halve the size once
    more than needed, or restore a larger one for a moment; it only ever
    settles downward. */
-K_API uint8_t *k_reserve_region(k_stack *stack) {
-    if (k_nregions >= k_regions_cap)
-        k_panic("too many data stack regions");
+static k_region k_make_region(k_stack *stack) {
     size_t usable = k_region_usable;
     uint8_t *p;
     for (;;) {
@@ -658,12 +694,14 @@ K_API uint8_t *k_reserve_region(k_stack *stack) {
         usable -= usable % k_region_page;
         k_region_usable = usable;
     }
+    return (k_region){ p, usable, usable + k_region_gap, stack, p };
+}
+
+K_API uint8_t *k_reserve_region(k_stack *stack) {
+    if (k_nregions >= k_regions_cap)
+        k_panic("too many data stack regions");
     long i = k_nregions;
-    k_regions[i].base = p;
-    k_regions[i].usable = usable;
-    k_regions[i].size = usable + k_region_gap;
-    k_regions[i].stack = stack;
-    k_regions[i].committed = p;
+    k_regions[i] = k_make_region(stack);
     k_nregions = i + 1;  /* Publish only the initialized entry. */
 
     /* Region bases agree in their low 16 or more address bits (Windows
@@ -675,7 +713,31 @@ K_API uint8_t *k_reserve_region(k_stack *stack) {
        smallest page breaks the match. */
     long colors = 4096 / 64;
     size_t pad = (size_t)(i % colors) * 64;
-    return p + pad;
+    return k_regions[i].base + pad;
+}
+
+K_API void k_task_stack_open(k_stack **slot) {
+    if (*slot) k_panic("task data stack already open");
+    k_task_region *entry = (k_task_region *)malloc(sizeof(k_task_region));
+    if (!entry) k_panic("out of memory allocating task data stack");
+    entry->region = k_make_region(&entry->stack);
+    entry->stack.top = entry->region.base;
+    entry->previous = NULL;
+    entry->next = k_task_regions;
+    if (k_task_regions) k_task_regions->previous = entry;
+    k_task_regions = entry;
+    *slot = &entry->stack;
+}
+
+K_API void k_task_stack_close(k_stack **slot) {
+    k_task_region *entry = (k_task_region *)*slot;
+    if (!entry) return;
+    *slot = NULL;
+    if (entry->previous) entry->previous->next = entry->next;
+    else k_task_regions = entry->next;
+    if (entry->next) entry->next->previous = entry->previous;
+    k_release_region(&entry->region);
+    free(entry);
 }
 
 /* Returns the pages [start, start + len) of one region to the OS, which
@@ -718,33 +780,31 @@ static int k_discard_pages(uintptr_t start, size_t len) {
    publish their cached tops first (SFunction::readsalltops). C reached
    from K through another extern must not: tops cached by the K
    frames above it would still be stale, and live pages above them lost. */
-K_API uint8_t k_trim_memory(void) {
+static int k_trim_region(k_region *r) {
     uintptr_t page = (uintptr_t)k_page_size;
+    uintptr_t base = (uintptr_t)r->base, top = (uintptr_t)r->stack->top;
+    /* An invalid top could make trimming discard live data. */
+    if (top < base || top - base > r->usable)
+        k_panic("data stack top outside its region in trim_memory");
+    uintptr_t start = (top + page - 1) / page * page;
+    uintptr_t end = (base + r->usable) / page * page;
+#ifdef _WIN32
+    /* Nothing above the commit mark needs decommitting. */
+    if ((uintptr_t)r->committed < end) end = (uintptr_t)r->committed;
+#endif
+    if (start >= end) return 1;
+    if (!k_discard_pages(start, (size_t)(end - start))) return 0;
+#ifdef _WIN32
+    r->committed = (uint8_t *)start;
+#endif
+    return 1;
+}
+
+K_API uint8_t k_trim_memory(void) {
     int ok = 1;
-    for (long i = 0; i < k_nregions; i++) {
-        k_region *r = &k_regions[i];
-        uintptr_t base = (uintptr_t)r->base, top = (uintptr_t)r->stack->top;
-        /* A top outside its own region is a compiler or runtime bug, not
-           something the OS refused: carrying on could discard live data. */
-        if (top < base || top - base > r->usable)
-            k_panic("data stack top outside its region in trim_memory");
-        uintptr_t start = (top + page - 1) / page * page;
-        uintptr_t end = (base + r->usable) / page * page;
-#ifdef _WIN32
-        /* Nothing above the commit mark was ever committed (base is
-           allocation-aligned and the mark page-aligned). */
-        if ((uintptr_t)r->committed < end) end = (uintptr_t)r->committed;
-#endif
-        if (start >= end) continue;
-        if (!k_discard_pages(start, (size_t)(end - start))) {
-            ok = 0;
-            continue;
-        }
-#ifdef _WIN32
-        /* Everything from start up is decommitted now. */
-        r->committed = (uint8_t *)start;
-#endif
-    }
+    for (long i = 0; i < k_nregions; i++) ok &= k_trim_region(&k_regions[i]);
+    for (k_task_region *entry = k_task_regions; entry; entry = entry->next)
+        ok &= k_trim_region(&entry->region);
     return (uint8_t)ok;
 }
 

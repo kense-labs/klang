@@ -20,7 +20,9 @@ struct ProcessResult {
 // closed immediately: no input is sent. With `echo` the
 // output is also written to stderr as it arrives, for -v; either way the
 // live line (progress.h) sees it.
-ProcessResult RunProcess(const vector<string> &argv, const string &cwd = "", bool echo = false);
+// A separate stderr capture keeps stdout usable as a machine-readable stream.
+ProcessResult RunProcess(const vector<string> &argv, const string &cwd = "", bool echo = false,
+                         string *captured_stderr = nullptr);
 
 // The full path of the program `name` on PATH, or on `path` (a list in PATH's
 // form) where that is given, or "" when there is none. On Windows a name
@@ -33,28 +35,33 @@ string FindOnPath(const string &name, const char *path = nullptr);
 // process started from here see it.
 void SetEnvVar(const string &name, const string &value);
 
-// An exclusive cross-process lock on a persistent file. The OS releases it
+// A cross-process lock on a persistent file. The OS releases it
 // when this object (or the process) exits; children do not inherit it. The
 // file must not be removed, since waiters may already have it open. While
 // another process holds it, the live line (progress.h) says `waiting`.
 class FileLock {
     intptr_t handle = -1;
 public:
-    FileLock(const string &path, const string &waiting);
+    enum class Mode { Exclusive, Shared, TryExclusive };
+    FileLock(const string &path, const string &waiting, Mode mode = Mode::Exclusive);
     ~FileLock();
     FileLock(const FileLock &) = delete;
     FileLock &operator=(const FileLock &) = delete;
+    explicit operator bool() const { return handle != -1; }
+    // Loaded native libraries can still serve JIT workers at shutdown.
+    void KeepUntilProcessExit() { handle = -1; }
 };
-
-// Loads the shared library at `path`, a package's JIT library, and reads
-// the table its k_symbols function hands out (native.h): the names of
-// the package's C functions and their addresses, appended to `out`. False,
-// with `err` saying why, when it cannot be loaded or has no such table.
-bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &out, string &err);
 
 // The macOS SDK this machine has active, where the C library's headers are;
 // "" elsewhere, or where none is installed.
 string MacSdkPath();
+
+// Identity of a native build input, including replacement and mode changes.
+// A missing path is recorded so that later additions invalidate the cache.
+string BuildPathIdentity(const string &path, bool include_ctime = true);
+
+// Creates a private temporary directory from a path ending in XXXXXX.
+string MakeBuildTempDir(string path);
 
 // argv as one line a shell would read back as argv, for printing a command
 // (-v, --dry-run): arguments with spaces or shell characters are quoted.

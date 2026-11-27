@@ -74,7 +74,7 @@ K_API void k_stack_stats(int64_t stacks) {
             cap);
 }
 
-#if K_NEED_THREADS
+#if K_NEED_THREADS || K_NEED_TASK_WAIT
 
 #ifdef _WIN32
 
@@ -107,6 +107,117 @@ typedef pthread_cond_t k_cond;
 #define k_cond_broadcast(c) pthread_cond_broadcast(c)
 
 #endif
+#endif
+
+#if K_NEED_TASK_WAIT
+
+typedef struct {
+    k_mutex mutex;
+    k_cond condition;
+    uint32_t flags;
+} k_task_event;
+
+#ifdef __linux__
+static int k_task_event_cond_init(k_cond *condition) {
+    pthread_condattr_t attr;
+    int status = pthread_condattr_init(&attr);
+    if (status) return status;
+    status = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    if (!status) status = pthread_cond_init(condition, &attr);
+    pthread_condattr_destroy(&attr);
+    return status;
+}
+#else
+#define k_task_event_cond_init(c) k_cond_init(c)
+#endif
+
+K_API void *k_task_event_open(void) {
+    k_task_event *event = (k_task_event *)malloc(sizeof(*event));
+    if (!event) return NULL;
+    event->flags = 0;
+#ifdef _WIN32
+    k_mutex_init(&event->mutex);
+    k_cond_init(&event->condition);
+#else
+    if (k_mutex_init(&event->mutex)) {
+        free(event);
+        return NULL;
+    }
+    if (k_task_event_cond_init(&event->condition)) {
+        pthread_mutex_destroy(&event->mutex);
+        free(event);
+        return NULL;
+    }
+#endif
+    return event;
+}
+
+K_API void k_task_event_close(void *opaque) {
+    k_task_event *event = (k_task_event *)opaque;
+#ifndef _WIN32
+    pthread_cond_destroy(&event->condition);
+    pthread_mutex_destroy(&event->mutex);
+#endif
+    free(event);
+}
+
+K_API void k_task_event_signal(void *opaque, uint32_t flags) {
+    k_task_event *event = (k_task_event *)opaque;
+    k_mutex_lock(&event->mutex);
+    event->flags |= flags;
+    k_cond_signal(&event->condition);
+    k_mutex_unlock(&event->mutex);
+}
+
+K_API uint32_t k_task_event_take(void *opaque, int block) {
+    k_task_event *event = (k_task_event *)opaque;
+    k_mutex_lock(&event->mutex);
+    while (block && !event->flags) k_cond_wait(&event->condition, &event->mutex);
+    uint32_t flags = event->flags;
+    event->flags = 0;
+    k_mutex_unlock(&event->mutex);
+    return flags;
+}
+
+K_API uint32_t k_task_event_take_for(void *opaque, uint32_t millis) {
+    k_task_event *event = (k_task_event *)opaque;
+    k_mutex_lock(&event->mutex);
+    if (millis && !event->flags) {
+#ifdef _WIN32
+        SleepConditionVariableSRW(&event->condition, &event->mutex, millis, 0);
+#else
+        struct timespec timeout = { 0, 0 };
+#ifdef __APPLE__
+        timeout.tv_sec = millis / 1000;
+        timeout.tv_nsec = (long)(millis % 1000) * 1000000;
+        pthread_cond_timedwait_relative_np(&event->condition, &event->mutex, &timeout);
+#else
+#ifdef __linux__
+        const clockid_t clock = CLOCK_MONOTONIC;
+#else
+        const clockid_t clock = CLOCK_REALTIME;
+#endif
+        if (!clock_gettime(clock, &timeout)) {
+            timeout.tv_sec += millis / 1000;
+            timeout.tv_nsec += (long)(millis % 1000) * 1000000;
+            if (timeout.tv_nsec >= 1000000000L) {
+                timeout.tv_sec++;
+                timeout.tv_nsec -= 1000000000L;
+            }
+            pthread_cond_timedwait(&event->condition, &event->mutex, &timeout);
+        }
+#endif
+#endif
+    }
+    uint32_t flags = event->flags;
+    event->flags = 0;
+    k_mutex_unlock(&event->mutex);
+    return flags;
+}
+
+#endif
+
+#if K_NEED_THREADS
 
 /* ---------------------------------------------------------------------------
    Workers. Each runs its thread program on a fresh stack block; flat argument

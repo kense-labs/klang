@@ -285,7 +285,9 @@ the ref.
     build/pkg/<host>/<owner>/<repo>/<ref>/<toolchain>/   its native part built: objects or archives,
                                                      the JIT shared library, link-cc.rsp, link-msvc.rsp, logs
     build/pkg/local/<hash of the absolute path>/<toolchain>/   the same for a path source
-    build/runtime/<runtime hash>/<toolchain>-<config>/k_runtime.o
+    build/native/v1-<input digest>/output/            managed outputs of a locked native build
+    build/native/v1-<input digest>/dependencies/      CMake FetchContent trees, when needed
+    build/runtime/v1-<input digest>/<config>/k_runtime.o
     build/prog/<stem>-<hash of the root's absolute path>/   a program's C, objects, logs
     config                                           optional settings (§6.1)
 
@@ -357,8 +359,8 @@ settings (`c_include`, `c_defines`, `c_flags_*`) do not apply to these headers.
 ## 5. Native parts
 
 A package with nonempty `c_sources` or a `cmake_target` has a native part. It is
-built once per toolchain (§6.1) under `build/pkg/…/<toolchain>/`, in the
-release configuration, with the static C runtime on Windows. It is built in
+built in the release configuration with the static C runtime on Windows.
+It is built in
 two forms: what an AOT program links, and a shared library the JIT loads.
 The first `run` or `build` that reaches the package builds the first form,
 and the first `run` builds the library, from the same objects; `check`
@@ -376,6 +378,21 @@ process that had to wait for the lock checks the stamp again before
 building anything. A build that finds the stamp current reads the response
 file and the stamp without the lock. Both are written beside their final
 paths and renamed into place, the stamp last.
+
+An import fixed to a Git commit uses a managed entry keyed by the full
+revision, checkout path, build recipe, toolchain and declared native inputs.
+Declared source and include paths must be inside the checkout to use this
+entry. The entry's shared lease covers reads through the native link or JIT
+process exit. The writer lock serializes builds within that lease.
+
+Plain C AOT and JIT builds share objects. The JIT adds a symbol table and
+shared library. CMake AOT and JIT configurations use separate entries.
+Pruning takes an exclusive lease and unpublishes the build stamp before
+removing the generated outputs. It retains the Git checkout and the
+`-src` directories populated by CMake FetchContent so the same build can
+be repeated offline when its dependencies have already been fetched.
+A CMake AOT build containing shared libraries retains its output tree
+because the linked executable may refer to those paths at runtime.
 
 ### 5.1 Plain C sources
 
@@ -575,11 +592,18 @@ Without any C compiler, on Windows:
 
 ### 6.2 The runtime object
 
-The runtime object is
-`build/runtime/<runtime hash>/<toolchain>-<config>/k_runtime.o`. It is
-written from `--emit-runtime` and compiled on first use, as
-`toolchain.py`'s `KlangRuntime` does. The hash is `RuntimeVersion()`, so a
-new compiler never links a stale object. `--standalone` skips it.
+The runtime object is compiled from the same source as `--emit-runtime`
+on first use. Its cache path is
+`build/runtime/v1-<input digest>/<config>/k_runtime.o` or `k_runtime.obj`.
+The digest covers the emitted source, C driver identity and banner, compiler
+flags and known target and SDK environment settings. Projects under one
+`K_HOME` reuse the same object when these inputs agree. The compiler
+publishes the completed object by atomic rename. A build holds a shared lease
+until the linker finishes, and pruning acquires that lease exclusively
+before reclaiming the directory. The zero-length lease files stay in place
+so concurrent commands continue to coordinate over the same file.
+`--standalone` skips the runtime object.
+[Cache usage and pruning](../command_line.md#cache-usage-and-pruning)
 
 ### 6.3 What `k build` does
 
@@ -593,6 +617,16 @@ new compiler never links a stale object. `--standalone` skips it.
    packages' response files in link order, `-lm -pthread` where the style
    needs them; `/Fe:` or `-o` to the executable beside the root source, or
    `output` from the sidecar, or `-o`.
+
+On macOS, a release executable built with the system Apple Clang, the selected
+SDK, and no custom C headers, defines or native parts can reuse the existing
+executable. The generated C stays in place when its contents match. The
+compiler checks the executable, toolchain, SDK, runtime object and the inputs
+reported by Clang and the linker before skipping step 4. Builds of the same
+root hold a lock through generation and linking. Successful links publish
+the executable by atomic rename. A build in this mode that needs a fresh
+runtime object compiles it alongside the program's C and links after both
+are ready.
 
 `--dry-run` prints steps 2 to 4 as commands, with the response files'
 paths, for a Makefile or CMake project to copy. The flags that exist

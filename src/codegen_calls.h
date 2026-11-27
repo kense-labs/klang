@@ -35,6 +35,10 @@ inline void CodeGen::EmitSlidePrefix(const string &base, IntStorage ls, const st
 }
 
 inline vector<string> CodeGen::EmitCall(Call *c, Dst d0, vector<Dst> *alldst) {
+    if (c->task_await != TaskAwait::None) return EmitTaskFlowAwait(c);
+    if (c->callable_target) return EmitCallableConversion(c);
+    if (c->callable_call) return EmitRuntimeCall(c);
+    if (c->decorator_value) return { GenX(c->decorator_value) };
     // An element-run destination for a variable-array result: builtins
     // and tag dispatch have no element-run form, so take the value form
     // and slide its length prefix out -- a builtin builds the value in the
@@ -59,12 +63,235 @@ inline vector<string> CodeGen::EmitCall(Call *c, Dst d0, vector<Dst> *alldst) {
             return rets;
         }
     }
+    if (c->scope_controller) return EmitTaskScopeOperation(c);
+    if (c->native_task) {
+        auto operand = c->args[0];
+        auto token = Sanitize(operand->exprtype->struc->st->fields[0].name);
+        auto value = GenX(operand);
+        auto type = c->rettypes[0];
+        auto task = T();
+        FixedLocal(type, task);
+        L(task, ".", Sanitize("token"), " = (", value, ").", token, ";");
+        return { task };
+    }
     if (c->builtin >= 0) return EmitBuiltin(c, d0);
     if (c->fvbody) return EmitFvCall(c, d0);
     if (!c->dispatch.empty()) return EmitDispatch(c, d0, alldst);
     assert(c->spec);
     if (c->spec->sf->isextern) return EmitExternCall(c, c->spec);
     return EmitSpecCall(c, c->spec, d0, alldst);
+}
+
+inline string CodeGen::CallableThunk(FnSpec *target, bool owning) {
+    auto [entry, fresh] = callable_thunks.try_emplace({ target, owning });
+    if (!fresh) return entry->second;
+    auto &name = entry->second;
+    name = Unique("k_callable_call");
+    const auto &info = sinfo.at(target);
+    assert(info.freevars.empty() && !info.hasrf);
+    Append(callable_code, "static void ", name,
+           "(const void *environment, void *const *inputs, void *const *results, int64_t sp, const k_loc *at) {\n");
+    vector<string> args;
+    bool stack_copy = false;
+    auto hidden = (size_t)(target->sf->closure_body != nullptr);
+    for (size_t i = 0; i < target->argtypes.size(); ++i) {
+        auto type = target->argtypes[i];
+        auto ct = CT(type);
+        auto environment_arg = i < hidden;
+        auto address = environment_arg ? string("environment") : cat("inputs[", i - hidden, "]");
+        auto pointer = cat("((", environment_arg ? "const " : "", ct, " *)", address, ")");
+        if (environment_arg && (owning || PtrAbi(type))) {
+            // An inline environment is raw bytes. Rebuild the concrete
+            // value in typed storage before any access to its fields.
+            auto empty = SI(type)->st->fields.empty();
+            if (IsLargeFixed(type)) {
+                stack_copy = true;
+                Append(callable_code, "    k_stack *stack = K_STACK(sp);\n",
+                       "    uint8_t *base = stack->top;\n",
+                       "    ", ct, " *copy = (", ct, " *)base;\n",
+                       "    stack->top = base + sizeof(*copy);\n");
+                if (owning) callable_code += "    K_MEMCPY(copy, environment, sizeof(*copy));\n";
+                else Append(callable_code, "    *copy = *", pointer, ";\n");
+                pointer = "copy";
+            } else {
+                if (!owning) Append(callable_code, "    ", ct, " copy = *", pointer, ";\n");
+                else if (empty) Append(callable_code, "    ", ct, " copy = {0};\n");
+                else Append(callable_code, "    ", ct, " copy;\n",
+                            "    K_MEMCPY(&copy, environment, sizeof(copy));\n");
+                pointer = "(&copy)";
+            }
+        }
+        if (PtrAbi(type)) {
+            args.push_back(pointer);
+            continue;
+        }
+        auto fields = ParamFields(type, false);
+        if (fields.empty()) args.push_back(cat("*", pointer));
+        else for (const auto &[unused, field] : fields) args.push_back(cat(pointer, "->", field));
+    }
+    for (size_t i = 0; i < target->rets.size(); ++i)
+        if ((int)i != info.cret) args.push_back(cat("(", CT(target->rets[i]), " *)results[", i, "]"));
+    if (info.needssp) args.push_back(stack_copy ? "sp + 1" : "sp");
+    if (info.located) args.push_back("at");
+    callable_code += "    ";
+    if (info.cret >= 0)
+        Append(callable_code, "*(", CT(target->rets[info.cret]), " *)results[", info.cret, "] = ");
+    Append(callable_code, info.cname, "(");
+    for (size_t i = 0; i < args.size(); ++i) Append(callable_code, i ? ", " : "", args[i]);
+    callable_code += ");\n";
+    if (stack_copy) callable_code += "    stack->top = base;\n";
+    callable_code += "}\n\n";
+    return name;
+}
+
+// The destination starts zeroed. Copy only live data so padding and old
+// elements in unused slots cannot affect callable equality.
+inline void CodeGen::CopyCallableCapture(TypeExpr *t, const string &source,
+                                         const string &destination) {
+    auto size = FixedSize(t);
+    if (!size) return;
+    auto copy = [&](const string &src, const string &count) {
+        L("K_MEMCPY(", destination, ", &(", src, "), ", count, ");");
+    };
+    if (BitwiseEq(t)) {
+        copy(source, to_string(size));
+        return;
+    }
+    auto field = [&](string_view name) { return cat(source, ".", name); };
+    auto at = [&](const auto &offset) { return cat("(", destination, ") + ", offset); };
+    switch (t->kind) {
+        case TY_STRUCT: case TY_VARIANT: {
+            auto run = FieldRuns(t).front();
+            auto layout = LayoutFields(*run.fields, *run.ftypes);
+            for (size_t i = 0; i < run.fields->size(); ++i) {
+                const auto &member = (*run.fields)[i];
+                if (member.ispad) continue;
+                CopyCallableCapture((*run.ftypes)[i], field(Sanitize(member.name)), at(layout.offs[i]));
+            }
+            break;
+        }
+        case TY_ENUM: {
+            auto ei = EIOf(t);
+            auto tag = field("tag");
+            auto width = TagSize(ei->en);
+            copy(tag, to_string(width));
+            L("switch (", tag, ") {");
+            ++ind;
+            for (size_t vi = 0; vi < ei->en->variants.size(); ++vi) {
+                const auto &variant = ei->en->variants[vi];
+                if (EmptyLayout(variant.fields)) continue;
+                L("case ", TagConst(ei, (int)vi), ": {");
+                ++ind;
+                CopyCallableCapture(VariantType(t, (int)vi), field(cat("u.v_", Sanitize(variant.name))),
+                                    at(width));
+                L("break;");
+                --ind;
+                L("}");
+            }
+            L("default: break;");
+            --ind;
+            L("}");
+            break;
+        }
+        case TY_ARRAY: {
+            auto a = t->arr;
+            auto length = to_string(ArrSize(a));
+            auto prefix = 0;
+            if (a->akind == A_LIMITED) {
+                prefix = IntSize(LenStore(a));
+                length = field("len");
+                copy(length, to_string(prefix));
+            }
+            auto stride = FixedSize(a->sub);
+            if (BitwiseEq(a->sub)) {
+                L("K_MEMCPY(", at(prefix), ", ", field("e"), ", (size_t)(", length, ") * ", stride, ");");
+                break;
+            }
+            auto index = T();
+            L("for (int64_t ", index, " = 0; ", index, " < ", length, "; ++", index, ") {");
+            ++ind;
+            CopyCallableCapture(a->sub, cat(field("e"), "[", index, "]"),
+                                at(cat(prefix, " + ", index, " * ", stride)));
+            --ind;
+            L("}");
+            break;
+        }
+        default: copy(source, to_string(size)); break;
+    }
+}
+
+inline vector<string> CodeGen::EmitCallableConversion(Call *c) {
+    auto type = c->rettypes[0];
+    auto target = c->callable_target;
+    auto storage = CallableStorage(type);
+    auto thunk = CallableThunk(target, storage != nullptr);
+    auto result = T();
+    FixedLocal(type, result);
+    if (storage) {
+        auto capacity = ArrSize(storage->arr);
+        if (capacity) L("K_MEMZERO(", result, ".storage_g, sizeof(", result, ".storage_g));");
+        if (target->sf->closure_body) {
+            auto envtype = target->argtypes[0];
+            PushSc(SC_STMT);
+            auto source = T();
+            FixedLocal(envtype, source);
+            GenAny(c->args[0], FreshLv(source, envtype));
+            if (!SI(envtype)->st->fields.empty()) {
+                L("(void)sizeof(char[sizeof(", source, ") <= sizeof(", result, ".storage_g) ? 1 : -1]);");
+                CopyCallableCapture(envtype, source, cat(result, ".storage_g"));
+            }
+            PopSc();
+        }
+    } else {
+        auto environment = target->sf->closure_body ? GenX(c->args[0]) : string("NULL");
+        L(result, ".environment_g = ", environment, ";");
+    }
+    L(result, ".invoke_g = ", thunk, ";");
+    return { result };
+}
+
+inline vector<string> CodeGen::EmitRuntimeCall(Call *c) {
+    auto type = c->callable_call;
+    auto value = GenXD(c->callee, type);
+    auto callable = Snapshot(type, value);
+    vector<string> inputs, results;
+    const auto types = CallableSignature(type);
+    for (size_t i = 0; i < c->args.size(); ++i) {
+        auto argument = T();
+        FixedLocal(types[i], argument);
+        GenAny(c->args[i], FreshLv(argument, types[i]));
+        inputs.push_back(argument);
+    }
+    for (auto t : c->rettypes) {
+        auto result = T();
+        FixedLocal(t, result);
+        results.push_back(result);
+    }
+    auto addresses = [&](const vector<string> &values) {
+        if (values.empty()) return string("NULL");
+        auto name = T();
+        string list;
+        for (const auto &entry : values) Append(list, list.empty() ? "" : ", ", "&(", entry, ")");
+        L("void *", name, "[] = { ", list, " };");
+        return name;
+    };
+    auto in = addresses(inputs);
+    auto out = addresses(results);
+    if (auto targets = callable_targets.find(Mangle(type)); targets != callable_targets.end())
+        for (auto target : targets->second) {
+            auto copy = target->sf->closure_body && IsLargeFixed(target->argtypes[0]) && PtrAbi(target->argtypes[0]);
+            if (copy) stkmax = max(stkmax, stknext + 1);
+            if (sinfo.at(target).needssp)
+                stackcalls[curspec].push_back({ target, stknext + (int)copy, c->line });
+        }
+    auto at = CallerLoc(c->line);
+    auto storage = CallableStorage(type);
+    auto environment = storage ? (ArrSize(storage->arr) ? cat(callable, ".storage_g") : string("NULL")) :
+                                 cat(callable, ".environment_g");
+    MarkFlush();
+    L(callable, ".invoke_g(", environment, ", ", in, ", ", out, ", ", SpTop(), ", ", at, ");");
+    MarkReload();
+    return results;
 }
 
 // A call whose every return value has a destination: bytes results land
@@ -110,8 +337,8 @@ inline vector<string> CodeGen::EmitExternCall(Call *c, FnSpec *sp) {
     for (size_t i = 0; i < an.size(); i++) {
         auto pt = sp->argtypes[i];
         if (i) argstr += ", ";
-        auto x = pt->kind == TY_REF ? GenX(an[i]) : GenXD(an[i], pt);
-        argstr += Snapshot(pt, x);
+        auto value = [&] { return pt->kind == TY_REF ? GenX(an[i]) : GenXD(an[i], pt); };
+        argstr += TaskOperandType(an[i]) ? GenTaskOperand(an[i], value) : Snapshot(pt, value());
         if (HoldsFatRef(pt)) grows = true;
     }
     if (sp->sf->takesloc) Append(argstr, an.empty() ? "" : ", ", CallerLoc(c->line));
@@ -172,6 +399,13 @@ inline bool CodeGen::EmitArg(FnSpec *sp, const vector<Node *> &an, size_t i,
                              vector<string> &args, bool later) {
     auto node = an[i];
     auto pt = sp->argtypes[i];
+    if (TaskOperandType(node)) {
+        auto value = GenTaskOperand(node, [&] { return GenXD(node, pt); });
+        if (PtrAbi(pt)) args.push_back(cat("&", value));
+        else PushArg(args, pt, false, value);
+        return false;
+    }
+    TaskLiteralScope inputs(*this, node);
     if (IsPoolParam(sp, i)) {
         PushArg(args, pt, true, GenPrefVal(node));
         return false;
@@ -568,7 +802,25 @@ inline vector<string> CodeGen::EmitSpecCall(Call *c, FnSpec *sp, Dst d0, vector<
     // Whether an argument is a variable of the caller's that the callee
     // reads where it lies (EmitArg), which a result must not overwrite.
     auto lent = false;
-    for (size_t i = 0; i < an.size(); i++) lent |= EmitArg(sp, an, i, args, later[i + 1]);
+    string initial;
+    TypeExpr *initial_type = nullptr;
+    if (!c->task_slot_loans.empty()) {
+        assert(sp->sf->task_join && an.size() == 1);
+        initial_type = sp->argtypes[0];
+        initial = T();
+        FixedLocal(initial_type, initial);
+        GenAny(an[0], FreshLv(initial, initial_type));
+        PushArg(args, initial_type, false, PtrAbi(initial_type) ? cat("&", initial) : initial);
+    } else {
+        for (size_t i = 0; i < an.size(); i++) lent |= EmitArg(sp, an, i, args, later[i + 1]);
+    }
+    auto loan_count = TaskLoanCount(c->task_shared_owners, c->task_slot_loans);
+    string loans;
+    if (loan_count) {
+        loans = T();
+        L("k_task_loan ", loans, "[", loan_count, "];");
+        EmitSharedTaskLoans(c->task_shared_owners, c->task_slot_loans, loans, "NULL", initial_type, initial);
+    }
     for (auto fv : ki.freevars) EmitFvArg(c->FreeVarArg(fv), args);
     vector<string> retex(sp->rets.size());
     for (size_t i = 0; i < sp->rets.size(); i++) {
@@ -679,6 +931,7 @@ inline vector<string> CodeGen::EmitSpecCall(Call *c, FnSpec *sp, Dst d0, vector<
         L(callee, "(", argstr, ");");
     }
     MarkReload(reach);
+    if (loan_count) L("k_task_loans_close(", loans, ", ", loan_count, ");");
     // Checked before the result is fixed up: a call that unwound left none,
     // and a value in flight to a target may sit behind its reserved prefix,
     // where a fixup would move it from where the target's catch finds it.
@@ -793,6 +1046,107 @@ inline void CodeGen::EmitRfCheck(FnSpec *callee) {
 
 // Calling a function value: the checked body instance is spliced inline
 // (§7.6); its parameters are ordinary locals of this function.
+inline void CodeGen::EmitTaskScopeBegin(Call *c) {
+    usestasks = true;
+    TaskScopeCode scope;
+    scope.name = T();
+    scope.line = c->line;
+    L("k_task_scope ", scope.name, " = {0};");
+    for (size_t i = 0; i < c->scope_tasks.size(); ++i) {
+        auto spec = c->scope_tasks[i];
+        auto frame = T(), task = T();
+        const auto &gen = taskcode.at(spec);
+        L(gen.frame, " ", frame, " = {0};");
+        L("k_task ", task, " = {0};");
+        GenAny(c->args[i], Dst { DK_LVALUE, cat(frame, ".initial"), spec->argtypes[0] });
+        if (termjump) return;
+        if (sinfo.at(spec).located) L(frame, ".at = ", CallerLoc(c->args[i]->line), ";");
+        const auto &owners = c->scope_loan_owners[i];
+        const auto &writers = c->scope_resize_owners[i];
+        span<const TaskSlotLoan> precise;
+        if (i < c->scope_slot_loans.size()) precise = c->scope_slot_loans[i];
+        auto shared_count = TaskLoanCount(owners, precise);
+        auto loan_count = shared_count + TaskLoanCount(writers);
+        string loans;
+        if (loan_count) {
+            loans = T();
+            L("k_task_loan ", loans, "[", loan_count, "];");
+            EmitSharedTaskLoans(owners, precise, loans, cat("&", task), spec->argtypes[0], cat(frame, ".initial"));
+            EmitTaskLoans(writers, loans, cat("&", task), c->args[i]->line, shared_count);
+        }
+        scope.tasks.push_back({ spec, task, frame, loans, loan_count });
+    }
+    L("if (!k_task_scope_init(&", scope.name, ", ", scope.tasks.size(), ")) ",
+      "k_abort(K_E_TAG, ", LocArgs(c->line), ");");
+    L("k_task_scope_hosted(&", scope.name, ");");
+    for (auto &task : scope.tasks)
+        L("if (!k_task_init(&", task.task, ", &", task.frame, ", &", taskcode.at(task.spec).ops,
+          ") || !k_task_scope_submit(&", scope.name, ", &", task.task, ")) k_abort(K_E_TAG, ",
+          LocArgs(c->line), ");");
+    auto controller = c->fvparams[0];
+    taskscopes.emplace(controller, std::move(scope));
+    cscopes.back().task_controller = controller;
+}
+
+inline vector<string> CodeGen::TaskScopePollEffects(const TaskScopeCode &scope, Line line) {
+    vector<string> effects;
+    for (auto &task : scope.tasks) {
+        if (sinfo.at(task.spec).needssp) {
+            NoStackAcrossCycleCall(task.spec, line);
+            NoteStackCall(task.spec, line);
+            L(task.frame, ".sp = ", SpTop(), ";");
+        }
+        auto reach = SyncReach(task.spec, {}, {});
+        MarkFlush(reach);
+        effects.push_back(std::move(reach));
+    }
+    return effects;
+}
+
+inline void CodeGen::EmitTaskScopeClose(const VarDef *controller) {
+    const auto &scope = taskscopes.at(controller);
+    auto effects = TaskScopePollEffects(scope, scope.line);
+    L("k_task_scope_shutdown(&", scope.name, ");");
+    L("while (", scope.name, ".count) k_task_scope_wait_step(&", scope.name, ");");
+    L("k_task_scope_release(&", scope.name, ");");
+    for (auto &task : scope.tasks)
+        if (task.loan_count) L("k_task_loans_close(", task.loans, ", ", task.loan_count, ");");
+    for (auto &reach : effects) MarkReload(reach);
+}
+
+inline vector<string> CodeGen::EmitTaskScopeOperation(Call *c) {
+    const auto &scope = taskscopes.at(c->scope_controller);
+    if (c->scope_operation == TaskScopeOperation::Finished) {
+        auto done = T();
+        L(CT(ast.booltype), " ", done, " = k_task_terminal(", scope.tasks[c->scope_slot].task, ".state);");
+        return { done };
+    }
+    string duration;
+    if (c->scope_operation == TaskScopeOperation::WaitFor)
+        duration = Snapshot(ast.inttypes[IS_I64], GenXD(c->args[0], ast.inttypes[IS_I64]));
+    auto effects = TaskScopePollEffects(scope, c->line);
+    vector<string> result;
+    if (c->scope_operation == TaskScopeOperation::Step || c->scope_operation == TaskScopeOperation::Wait ||
+        c->scope_operation == TaskScopeOperation::WaitFor) {
+        if (c->scope_operation == TaskScopeOperation::Step) L("k_task_scope_step(&", scope.name, ");");
+        else if (c->scope_operation == TaskScopeOperation::Wait) L("k_task_scope_wait_step(&", scope.name, ");");
+        else L("k_task_scope_wait_for(&", scope.name, ", ", duration, ");");
+        auto remains = T();
+        L(CT(ast.booltype), " ", remains, " = ", scope.name, ".count != 0;");
+        result.push_back(remains);
+    } else {
+        const auto &target = scope.tasks[c->scope_slot];
+        if (c->scope_operation == TaskScopeOperation::Cancel) L("k_task_cancel(&", target.task, ");");
+        L("while (!k_task_terminal(", target.task, ".state)) k_task_scope_wait_step(&", scope.name, ");");
+        if (c->scope_operation == TaskScopeOperation::Join) {
+            L("if (", target.task, ".state != K_TASK_SUCCEEDED) k_abort(K_E_TAG, ", LocArgs(c->line), ");");
+            if (!target.spec->rets.empty()) result.push_back(cat(target.frame, ".result"));
+        }
+    }
+    for (auto &reach : effects) MarkReload(reach);
+    return result;
+}
+
 inline vector<string> CodeGen::EmitFvCall(Call *c, Dst d0) {
     auto et = c->fvbody->exprtype;
     auto wantsval = !IsVoidT(et);
@@ -826,14 +1180,29 @@ inline vector<string> CodeGen::EmitFvCall(Call *c, Dst d0) {
     PushSc(SC_PLAIN);
     L("{");
     ind++;
-    for (size_t i = 0; i < c->fvparams.size(); i++)
-        BindLocal(c->fvparams[i], i < c->args.size() ? c->args[i] : nullptr);
+    if (c->task_scope) {
+        EmitTaskScopeBegin(c);
+        if (termjump) {
+            PopSc();
+            ind--;
+            L("}");
+            return {};
+        }
+        PushSc(SC_PLAIN);  // The block's defers run before the scope shuts down.
+    } else {
+        for (size_t i = 0; i < c->fvparams.size(); i++)
+            BindLocal(c->fvparams[i], i < c->args.size() ? c->args[i] : nullptr);
+    }
     for (auto st : c->fvbody->stmts) GenStmt(st);
     if (c->fvbody->tail) {
         if (wantsval) GenAny(c->fvbody->tail, d);
         else GenAny(c->fvbody->tail, Dst {});
     }
     PopSc();
+    if (c->task_scope) {
+        PopSc();
+        taskscopes.erase(c->fvparams[0]);
+    }
     ind--;
     L("}");
     termjump = false;

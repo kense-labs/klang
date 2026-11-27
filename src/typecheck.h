@@ -70,7 +70,7 @@ namespace klang {
 enum IterKind { IK_RANGE, IK_COUNT, IK_ARRAY, IK_SLICE };
 
 // Type validation positions: what may be declared where.
-enum ValidPos { VT_LOCAL, VT_GLOBAL, VT_PARAM, VT_RET, VT_FIELD, VT_ELEM, VT_POINTEE };
+enum ValidPos { VT_LOCAL, VT_GLOBAL, VT_PARAM, VT_RET, VT_FIELD, VT_ELEM, VT_POINTEE, VT_CAPTURE };
 
 // Whether a `break` in a loop's body gives the loop a value: one no construct
 // inside the body is the target of instead (FindBreakScope) -- a nested
@@ -685,10 +685,15 @@ struct TypeCheck {
                     out.push_back({ {}, cat("... ", chain - MAXCHAIN, " more instantiations") });
                 continue;
             }
-            string s = f.sf->isthread ? "in thread_fn " : "in fn ";
-            if (!f.spec) Append(s, f.sf->qname, "()");
-            else DumpInstance(s, f.sf, f.spec->argtypes, f.spec->litparams, f.spec->bindings,
-                              f.spec->fnvals);
+            string s;
+            if (f.sf->closure_body) {
+                s = cat("in closure at ", Where(f.sf->line));
+            } else {
+                s = f.sf->isthread ? "in thread_fn " : "in fn ";
+                if (!f.spec) Append(s, f.sf->qname, "()");
+                else DumpInstance(s, f.sf, f.spec->argtypes, f.spec->litparams, f.spec->bindings,
+                                  f.spec->fnvals);
+            }
             Append(s, " instantiated from ", Where(f.callline));
             out.push_back({ LocOf(f.callline), std::move(s) });
         }
@@ -939,7 +944,7 @@ struct TypeCheck {
 
     bool TypeEq(TypeExpr *a, TypeExpr *b) {
         if (a == b) return true;
-        if (a->kind != b->kind || a->cq != b->cq) return false;
+        if (a->kind != b->kind || a->cq != b->cq || a->owns != b->owns) return false;
         switch (a->kind) {
             case TY_INT:  return a->intstorage == b->intstorage && SameIndex(a, b);
             case TY_FLT:  return a->fltstorage == b->fltstorage;
@@ -1027,8 +1032,10 @@ struct TypeCheck {
     // enclosing function's generics).
 
     TypeExpr *LookupBinding(string_view name) {
-        for (auto sp = frames.back().lexspec; sp; sp = sp->lexparent)
+        for (auto sp = frames.back().lexspec; sp; sp = sp->lexparent) {
+            if (sp->sf && sp->sf->decorator_layer) continue;
             for (auto &[n, t] : sp->bindings) if (n == name) return t;
+        }
         return nullptr;
     }
 
@@ -1038,6 +1045,7 @@ struct TypeCheck {
     TypeExpr *LookupTypeParam(string_view name, const FnValBind *&fn) {
         fn = nullptr;
         for (auto sp = frames.back().lexspec; sp; sp = sp->lexparent) {
+            if (sp->sf && sp->sf->decorator_layer) continue;
             for (auto &[n, fv] : sp->fnvals) if (n == name) { fn = &fv; return nullptr; }
             for (auto &[n, t] : sp->bindings) if (n == name) return t;
         }
@@ -1049,6 +1057,7 @@ struct TypeCheck {
     // qualifier whatever T is bound to.
     TypeExpr *Subst(TypeExpr *t) {
         auto n = SubstRaw(t);
+        if (t->owns) n = ast.WithOwnership(n, true);
         return t->cq && !n->cq ? ast.ConstOf(n) : n;
     }
 
@@ -1246,6 +1255,27 @@ struct TypeCheck {
     Node *DefaultValue(TypeExpr *t, Line line);
     SizeClass ClassOf(TypeExpr *t);
     bool IsFlat(TypeExpr *t);
+    bool TaskResidentStorage(TypeExpr *t);
+    VarDef *TaskRootComponent(Node *n);
+    bool TaskStableLayout(TypeExpr *t);
+    bool TaskInputBorrow(TypeExpr *t);
+    bool TaskInputHolder(TypeExpr *t);
+    bool TaskInputHolderRef(TypeExpr *t);
+    bool TaskHolderLayout(TypeExpr *t);
+    bool TaskHolderFields(TypeExpr *t);
+    bool TaskHolderStorage(TypeExpr *t);
+    bool TaskSealedHolder(TypeExpr *t);
+    bool TaskResizeInput(TypeExpr *t);
+    bool TaskInputLifetime(const VarDef *v, const FnSpec *spec);
+    bool TaskSharedStorage(TypeExpr *t);
+    VarDef *TaskBorrowOwner(Node *at, const RootAlt &origin, string_view message,
+                           TypeExpr *holder = nullptr, bool holder_contents = false);
+    Roots LocalTaskReferents(Node *at, TypeExpr *type, const Roots &roots);
+    void RecordTaskLoan(vector<VarDef *> &owners, VarDef *owner);
+    enum class TaskBorrowUse { Await, Join, Scope };
+    bool TaskResizeOverlaps(VarDef *owner, const Roots &roots);
+    vector<VarDef *> CheckTaskBorrowUse(Node *at, Node *operand, TaskBorrowUse use,
+                                      vector<VarDef *> *resize_owners = nullptr);
     bool Reaches(TypeExpr *t, const function<bool(TypeExpr *)> &pred);
     bool HoldsIndexT(TypeExpr *t);
     bool HoldsPlainRef(TypeExpr *t);
@@ -1283,6 +1313,8 @@ struct TypeCheck {
     map<TypeExpr *, VarDef *> pendingpools;
     void RequireComplete(TypeExpr *t, Line l);
     void ValidateType(TypeExpr *t, Line l, int pos);
+    bool HasOwnership(TypeExpr *t);
+    void CheckOwnedProgram();
 
     // A reference or slice only refers to its pointee, so building a struct
     // or enum instance leaves its fields' pointees until the outermost
@@ -2280,12 +2312,53 @@ struct TypeCheck {
                              MatchInfo &best, TypeExpr *expected, string_view name);
     Val CheckCall(Call *c, TypeExpr *expected);
     Val CheckNamedCall(Call *c, Ident *id, TypeExpr *expected);
+    Val CheckTaskScope(Call *c, TypeExpr *expected);
+    Val CheckNativeTask(Call *c);
+    Val CheckCallableConversion(Call *c, TypeExpr *expected, bool owning);
+    void CheckDecoratorApplications();
+    void CheckDecoratorResults();
+    void LowerDecoratorWrappers();
+    void LowerDecoratedFunction(SFunction *source);
+    FnSpec *DecoratorFrame();
+    Val CheckDecoratorContinuation(Call *c, FnSpec *frame, SFunction *probe = nullptr);
+    struct DecoratedDeclaration {
+        string_view name;
+        StructLit *metadata;
+        SFunction *function = nullptr;
+        TypeExpr *type = nullptr;
+        const Field *field = nullptr;
+    };
+    vector<DecoratedDeclaration> DecoratedDeclarations(const ConstFor *query, TypeExpr *decorator,
+                                                       TypeExpr *owner);
+    void ExpandDecorated(ConstFor *query, vector<vector<ExpansionArg>> &entries,
+                         vector<string> &descriptions);
+    const vector<DecoratorApplication> &DecoratorTypeApplications(Call *c, SStruct *decorator);
+    Val CheckDecoratorMetadata(Call *c);
+    bool StableCallableCaptureRoot(const RootAlt &origin);
+    bool DirectCallableEnvironment(VarDef *owner, TypeExpr *environment);
+    void CheckBorrowedCallableCaptures();
+    struct BorrowedCallableEnvironment {
+        VarDef *root;
+        TypeExpr *type;
+        Line at;
+    };
+    vector<BorrowedCallableEnvironment> borrowed_callable_environments;
+    Val CheckRuntimeCall(Call *c, Node *callee, const Val &value);
+    void ValidateCallableSignature(TypeExpr *type, Line line);
+    int64_t CallableEnvironmentBytes(TypeExpr *type);
+    Val CheckTaskScopeOperation(Call *c, Dot *member, VarDef *controller);
     vector<SFunction *> LookupLocalFns(string_view name, FnSpec *&env);
     FnValBind LocalFnValue(const vector<SFunction *> &fns, FnSpec *env);
     Val CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected);
+    Val CheckClosureCall(Call *c, TypeExpr *expected);
+    Val ResolveClosureCall(Call *c, Node *callee, Val &value, bool entryreach, TypeExpr *expected);
     Val ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *env, string_view name, Val *preval,
                     Node *&prenode, bool entryreach, bool *nomatch = nullptr,
-                    TypeExpr *expected = nullptr);
+                    TypeExpr *expected = nullptr, FnSpec *forwarded = nullptr,
+                    bool signature_only = false);
+    Val FinishMatchedCall(Call *c, vector<SFunction *> &cands, string_view name, MatchInfo &match,
+                          vector<Node *> &argnodes, vector<Val> &argvals, FnSpec *defaults,
+                          bool entryreach, bool signature_only = false);
     void MatchCandidates(Call *c, vector<SFunction *> &cands, FnSpec *env, vector<Val> &argvals,
                          vector<MatchInfo> &tied, vector<MatchInfo> &converting, string *failures,
                          string_view name);
@@ -2588,7 +2661,7 @@ struct TypeCheck {
     // The deepest root among the references a literal under construction
     // holds: its holder root (§9.2). Each literal owns its accumulator, so
     // checking a nested literal cannot replace its enclosing literal's facts.
-    void NoteLitElem(LitDeep &deep, Node *at, const Val &v, TypeExpr *t);
+    void NoteLitElem(LitDeep &deep, Node *at, const Val &v, TypeExpr *t, bool scoped_task_input = false);
     void HolderFromLit(Val &v, const LitDeep &deep);
     void AddStoreEvent(const StoreEvent &e);
     void NoteSlotStore(const StoreEvent &e);
@@ -2673,6 +2746,26 @@ struct TypeCheck {
         bool Event(const StoreEvent &e);
         bool Covered(VarDef *src, VarDef *root, bool exact);
     };
+    // Filled after the program's stores have been checked. A global holder
+    // may be rebound by a function checked later than the task call site.
+    optional<map<VarDef *, vector<size_t>>> task_global_stores;
+    vector<VarDef *> task_global_storage;
+    struct GlobalTaskEdge {
+        VarDef *owner;
+        bool follows_holder;
+    };
+    map<VarDef *, vector<GlobalTaskEdge>> task_global_referents;
+    const vector<GlobalTaskEdge> &GlobalTaskReferents(VarDef *holder);
+    void RecordGlobalTaskLoans(Node *at, VarDef *holder, vector<VarDef *> &loans);
+    void AddGlobalTaskReferents(Call *constructor, vector<VarDef *> &loans);
+    struct SavedTaskBorrow {
+        TypeExpr *type;
+        const Roots *roots;
+        TaskSlotSource source;
+    };
+    vector<TaskSlotLoan> PreciseTaskSlots(Call *constructor, const vector<VarDef *> &owners,
+                                         const vector<VarDef *> &whole_loans = {}, const Call *site = nullptr,
+                                         span<const SavedTaskBorrow> saved = {});
     bool GrowOnlyTail(TypeExpr *t);
     bool RefsBesideTail(TypeExpr *t);
     bool IsGrowOnlyRootVar(VarDef *r);
@@ -2915,12 +3008,14 @@ struct TypeCheck {
     // function it calls. The location assigned is `lval`, of type `target`.
     void CheckBuiltUses(Node *rhs, Node *lval, TypeExpr *target, const Roots &built,
                         TypeExpr *arr);
+    void CheckTaskRebuild(Node *rhs, Node *lval, TypeExpr *target, const Roots &built);
     Alias ReachesBuilt(VarDef *v, VarDef *built, bool exact, Node *lval, TypeExpr *target,
                        TypeExpr *arr, VarDef *&root);
     bool MayHoldBuilt(TypeExpr *y, Node *lval, TypeExpr *target);
     template<typename F, typename G> void EachUse(Node *n, F named, G called);
     bool FieldsApart(Node *use, Node *lval, TypeExpr *target);
-    bool NamedOutside(FnSpec *spec, vector<VarDef *> &out);
+    bool NamedOutside(FnSpec *spec, vector<VarDef *> &out, bool direct_components = false,
+                      vector<Node *> *paths = nullptr);
     // Its results for callees whose bodies were all checked, which no
     // later check changes.
     map<FnSpec *, vector<VarDef *>> namedoutside;
@@ -3088,7 +3183,8 @@ struct TypeCheck {
         // Validate all non-generic type declarations up front: clearer errors
         // than at first use, and unused decls get checked too.
         for (auto st : ast.structs)
-            if (st->generics.empty()) GetStructInst(ast.StructOf(st, {}, st->line));
+            if (st->generics.empty() && !st->task_saved)
+                GetStructInst(ast.StructOf(st, {}, st->line));
         for (auto en : ast.enums)
             if (en->generics.empty()) GetEnumInst(ast.EnumOf(en, {}, true, en->line));
         // And the sizes in every function's signature, for its parameters' and
@@ -3112,6 +3208,8 @@ struct TypeCheck {
     // the code that root reached after it; the rest is checked as if the
     // root had completed.
     void CheckRoots() {
+        CheckDecoratorApplications();
+        LowerDecoratorWrappers();
         for (auto g : ast.globals) {
             if (CheckRoot([&] { CheckVarDecl(g, true); })) {
                 for (auto d : g->defs) d->assigned = d->maybeassigned = true;
@@ -3172,13 +3270,16 @@ struct TypeCheck {
         }
         if (library && !exportcount)
             throw CompileError { "--header and --shared require at least one export fn" };
+        CheckDecoratorResults();
         CheckRoot([&] { CheckGlobalShrinks(); });
         CheckRoot([&] { SettleParamRootExactness(); });
+        CheckBorrowedCallableCaptures();
         CheckRoot([&] { ResolveGrowConflicts(); });
         CheckRoot([&] { VerifyLiterals(); });
         CheckRoot([&] { ReportRedundantCasts(); });
         CheckRoot([&] { ReportUnsentQueues(); });
         CheckRoot([&] { CheckDefers(); });
+        if (ast.has_ownership && ast.errors.empty()) CheckRoot([&] { CheckOwnedProgram(); });
         if (ast.exemplars) CheckExemplars();
     }
 
@@ -3235,11 +3336,15 @@ struct TypeCheck {
     }
 
     void CheckUnreached(SFunction *sf) {
-        if (!sf->specs.empty() || sf->isthread || sf->isnested || sf->brokensig) return;
+        // A private poll stage only has meaning at its task's checked
+        // continuation, which may be unreachable.
+        if (!sf->specs.empty() || sf->isthread || sf->isnested || sf->brokensig || sf->task_stage ||
+            sf->decorator_public) return;
         if (sf->IsGeneric()) return;
         set<string_view> names = { sf->name };
         auto foreign = false;
-        if (sf->body) ScanForeignFrom(sf->body, names, foreign);
+        if (auto body = sf->decorator_written ? sf->decorator_written : sf->body)
+            ScanForeignFrom(body, names, foreign);
         if (foreign) return;
         auto spec = ast.NewFnSpec();
         spec->sf = sf;
@@ -3261,7 +3366,8 @@ struct TypeCheck {
     void CheckExemplars() {
         vector<SFunction *> todo;
         for (auto sf : ast.functions) {
-            if (!sf->specs.empty() || sf->isthread || sf->isnested || sf->isextern || !sf->body)
+            if (!sf->specs.empty() || sf->isthread || sf->isnested || sf->isextern || !sf->body ||
+                sf->task_stage || sf->decorator_public)
                 continue;
             if (sf->IsGeneric()) todo.push_back(sf);
         }
@@ -3424,6 +3530,7 @@ struct TypeCheck {
         set<TypeExpr *> namedtypes;
         function<void(FnSpec *)> rec = [&](FnSpec *sp) {
             if (!sp || !sp->body || !seen.insert(sp).second) return;
+            rec(sp->task_cleanup);
             function<void(Node *)> walk = [&](Node *n) {
                 if (!n) return;
                 NodeNamedArrays(n, namedtypes, [&](VarDef *a, bool) {
@@ -3459,6 +3566,7 @@ struct TypeCheck {
                     }
                     rec(c->spec);
                     for (auto d : c->dispatch) rec(d);
+                    for (auto task : c->scope_tasks) rec(task);
                     for (auto &fs : c->fmtspecs) rec(fs.second);
                 }
                 RunChildren(n, walk);

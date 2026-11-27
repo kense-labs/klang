@@ -56,8 +56,11 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             // The whole line, newline included, is rendered before any of
             // it is written, so an argument that prints on its own (a call)
             // cannot interleave with it, and it goes out as one write (§3.7).
+            auto can_suspend = task_flow && an.size() == 1 && ContainsTaskAwait(an[0]);
+            auto value = can_suspend ? RenderedLoc(an[0]) : Loc {};
             auto b = TempBuilder();
-            for (auto a : an) EmitFormatInto(b, a, ln, c);
+            if (can_suspend) RenderLoc(b, value, an[0]->exprtype, false, FmtContext(c, an[0]), ln);
+            else for (auto a : an) EmitFormatInto(b, a, ln, c);
             RenderLit(b, "\n");
             L("k_out_bytes(", b.hdr, ".base, ", b.hdr, ".len);");
             return {};
@@ -367,6 +370,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 // On empty, the stack top would drop below the elements.
                 if (!c->nobc)
                     L("if (", v.len, " <= 0) k_abort(K_E_POP, ", LocArgs(ln), ");");
+                CheckTaskArrayShrink(lv, ln);
                 L(v.lenlv, "--;");
                 // The array tops its stack: the element region ends at top.
                 L(TopW(lv.stk), " -= ", esz, ";");
@@ -376,6 +380,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 L("int64_t ", nl, " = ", v.len, " - 1;");
                 // On empty, the stored length would wrap.
                 if (!c->nobc) L("if (", nl, " < 0) k_abort(K_E_POP, ", LocArgs(ln), ");");
+                CheckTaskArrayShrink(lv, ln);
                 L(v.lenlv, " = (", LenCast(lv), ")", nl, ";");
                 at = cat("(", ElemAddr(v, nl), ")");
             }
@@ -402,6 +407,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             // a negative one, which wraps to above any length.
             L("if ((uint64_t)(", nn, ") > (uint64_t)", ol, ") k_abort(K_E_POPN, ",
               LocArgs(ln), ");");
+            CheckTaskArrayShrink(lv, ln, nn);
             L(v.lenlv, " = (", LenCast(lv), ")(", ol, " - (int64_t)(", nn, "));");
             if (ak == A_GROWSHRINK || ak == A_GROW)
                 L(TopW(lv.stk), " -= (int64_t)(", nn, ") * ", FixedSize(v.elem), ";");
@@ -432,6 +438,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
               ");");
             L("if (", nn, " < ", ol, ") {");
             ind++;
+            CheckTaskArrayShrink(lv, ln);
             L(v.lenlv, " = (", LenCast(lv), ")", nn, ";");
             if (ak == A_GROWSHRINK || ak == A_GROW)
                 L(TopW(lv.stk), " = (uint8_t *)(", v.elems, ") + ", nn, " * ", esz, ";");
@@ -444,6 +451,8 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 if (ak == A_LIMITED)
                     L("if (", nn, " > ", LimitedCap(lv), ") k_abort(K_E_CAPACITY, ",
                       LocArgs(ln), ");");
+                if (ak == A_LIMITED && TaskHolderWrite(elem))
+                    CheckTaskHolderWrite(ElemAddr(v, ol), cat("(size_t)(", nn, " - ", ol, ") * ", esz), ln);
                 // The new slots of a resizable are filled through a cursor of
                 // their own, so no element store can be taken to change the
                 // stack's top (a byte store may alias it in C), and the top
@@ -497,6 +506,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             // dropping the top to the base; a limited array's capacity is
             // reserved and only its length moves.
             auto ak = lv.t->arr->akind;
+            CheckTaskArrayShrink(lv, ln);
             if (ak == A_GROWSHRINK || ak == A_GROW) {
                 NoteLen(lv.stk, v.lenlv, lv.lenroot);
                 L(TopW(lv.stk), " = (uint8_t *)(", v.elems, ");");
@@ -668,6 +678,8 @@ inline vector<string> CodeGen::EmitPush(vector<Node *> &an, Line ln) {
         L("if (", nl, " >= ", LimitedCap(lv), ") k_abort(K_E_CAPACITY, ", LocArgs(ln), ");");
         auto e = T();
         L(CT(elem), " *", e, " = (", CT(elem), " *)(", ElemAddr(v, nl), ");");
+        // Limited arrays can retain a typed reference to a popped slot.
+        if (TaskHolderWrite(elem)) CheckTaskHolderWrite(e, cat(FixedSize(elem)), ln);
         StoreElemAt(an[1], elem, e, ev, ln);
         L(v.lenlv, " = (", LenCast(lv), ")(", nl, " + 1);");
         ref = e;
@@ -776,6 +788,7 @@ inline void CodeGen::EmitAppend(vector<Node *> &an, Line ln) {
             L("if (", ol, " + ", count, " > ", LimitedCap(lv), ") k_abort(K_E_CAPACITY, ",
               LocArgs(ln), ");");
             at = ElemAddr(v, ol);
+            if (TaskHolderWrite(elem)) CheckTaskHolderWrite(at, cat(count * FixedSize(elem)), ln);
         }
         // The run is a fixed array of the literal's type laid over the slots.
         auto rt = CT(src->exprtype);
@@ -798,6 +811,8 @@ inline void CodeGen::EmitAppend(vector<Node *> &an, Line ln) {
         L("int64_t ", ol, " = ", v.len, ";");
         L("if (", ol, " + ", nn, " > ", LimitedCap(lv), ") k_abort(K_E_CAPACITY, ",
           LocArgs(ln), ");");
+        if (TaskHolderWrite(elem))
+            CheckTaskHolderWrite(ElemAddr(v, ol), cat("(size_t)", nn, " * ", FixedSize(elem)), ln);
         L(CopyFn(), "(", ElemAddr(v, ol), ", ", se.elems, ", (size_t)(", nn, " * ",
           FixedSize(elem), "));");
         L(v.lenlv, " = (", LenCast(lv), ")(", ol, " + ", nn, ");");

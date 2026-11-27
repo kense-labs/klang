@@ -1,0 +1,9 @@
+cleanup 10 5
+front 15
+cleanup 20 6
+tail 26
+cleanup 30 7
+cleanup 10 10
+packed 20
+cleanup 40 5
+local 45

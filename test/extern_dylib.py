@@ -23,6 +23,7 @@ LIBRARY_C = '''
 #include <stdlib.h>
 #include <string.h>
 #include "klang.h"
+#include "runtime_tasks.h"
 #ifdef _WIN32
 #define DLT __declspec(dllexport)
 #else
@@ -50,6 +51,103 @@ DLT void dlt_greet(k_rref out, sl_u8 name) {
 DLT uint64_t dlt_new(int32_t v) { int32_t *p = malloc(sizeof *p); *p = v; return (uint64_t)(uintptr_t)p; }
 DLT int32_t dlt_get(uint64_t h) { return *(int32_t *)(uintptr_t)h; }
 DLT void dlt_free(uint64_t h) { free((void *)(uintptr_t)h); }
+/* The scoped resource travels as a nominal record in K and a C struct. */
+typedef struct { uint64_t token; } CounterHandle;
+static int32_t *live_counter;
+static int32_t opened, closed;
+DLT CounterHandle dlt_counter_open(int32_t value) {
+    CounterHandle h = { 0 };
+    if (value < 0 || live_counter) return h;
+    live_counter = (int32_t *)malloc(sizeof *live_counter);
+    if (live_counter) {
+        *live_counter = value;
+        h.token = (uint64_t)(uintptr_t)live_counter;
+        opened++;
+    }
+    return h;
+}
+DLT int32_t dlt_counter_read(CounterHandle h) {
+    return live_counter && h.token == (uint64_t)(uintptr_t)live_counter ? *live_counter : -1;
+}
+DLT void dlt_counter_close(CounterHandle h) {
+    closed++;
+    if (h.token == (uint64_t)(uintptr_t)live_counter) {
+        free(live_counter);
+        live_counter = NULL;
+    }
+}
+DLT int32_t dlt_counter_opened(void) { return opened; }
+DLT int32_t dlt_counter_closed(void) { return closed; }
+DLT int32_t dlt_counter_size(void) { return (int32_t)sizeof(CounterHandle); }
+
+/* Model a foreign operation that retains an owned counter until a separate
+   completion callback. A K caller owns the control block through disposal. */
+typedef struct { uint64_t token; } TaskHandle;
+typedef struct {
+    k_task_scope scope;
+    k_task task;
+    CounterHandle counter;
+    bool foreign_pending;
+    int32_t polls, cancellation_requests;
+} CounterTask;
+
+static k_task_poll poll_counter_task(void *arg) {
+    CounterTask *frame = arg;
+    if (++frame->polls == 1) frame->foreign_pending = true;
+    return frame->foreign_pending ? K_TASK_POLL_PENDING : K_TASK_POLL_READY;
+}
+
+static void cancel_counter_task(void *arg) { ++((CounterTask *)arg)->cancellation_requests; }
+static bool drain_counter_task(void *arg) { return !((CounterTask *)arg)->foreign_pending; }
+
+static void finish_counter_task(void *arg, k_task_state state, bool started) {
+    CounterTask *frame = arg;
+    if (state != K_TASK_CANCELLED || started != (frame->polls != 0) || frame->foreign_pending) abort();
+    dlt_counter_close(frame->counter);
+}
+
+static const k_task_ops counter_task_ops = {
+    poll_counter_task, cancel_counter_task, drain_counter_task, finish_counter_task
+};
+
+DLT TaskHandle dlt_start_counter_task(CounterHandle counter) {
+    CounterTask *frame = calloc(1, sizeof *frame);
+    if (!frame) abort();
+    frame->counter = counter;
+    if (!k_task_scope_init(&frame->scope, 1) ||
+        !k_task_init(&frame->task, frame, &counter_task_ops) ||
+        !k_task_scope_submit(&frame->scope, &frame->task)) abort();
+    TaskHandle handle = { (uint64_t)(uintptr_t)frame };
+    return handle;
+}
+
+static CounterTask *counter_task(TaskHandle handle) { return (CounterTask *)(uintptr_t)handle.token; }
+
+DLT int32_t dlt_step_counter_task(TaskHandle handle) {
+    CounterTask *frame = counter_task(handle);
+    k_task_scope_step(&frame->scope);
+    return frame->task.state;
+}
+
+DLT void dlt_cancel_counter_task(TaskHandle handle) {
+    k_task_scope_shutdown(&counter_task(handle)->scope);
+}
+
+DLT int32_t dlt_ack_counter_task(TaskHandle handle) {
+    CounterTask *frame = counter_task(handle);
+    if (!frame->foreign_pending || frame->task.state != K_TASK_DRAINING) abort();
+    int32_t result = dlt_counter_read(frame->counter);
+    frame->foreign_pending = false;
+    return result;
+}
+
+DLT void dlt_dispose_counter_task(TaskHandle handle) {
+    CounterTask *frame = counter_task(handle);
+    if (frame->scope.count || frame->task.state != K_TASK_CANCELLED ||
+        frame->polls > 1 || frame->cancellation_requests != (frame->polls == 1)) abort();
+    free(frame);
+}
+
 /* Memory the library owns, read through ffi (stdlib/ffi.k). */
 DLT uint64_t dlt_name(void) { return (uint64_t)(uintptr_t)"dltest"; }
 DLT uint64_t dlt_null(void) { return 0; }
@@ -104,6 +202,375 @@ fn main() {
 EXPECTED = ["42", "3.0", "2 1", "11 21", "10", "hello, klang", "7", "dltest", "true dl",
             "false 0 0"]
 
+SCOPED = '''
+import exception;
+
+struct CounterHandle { token: u64 }
+extern "lib/dltest" {
+    fn open_counter(value: i32) -> CounterHandle = "dlt_counter_open";
+    fn read_counter(handle: CounterHandle) -> i32 = "dlt_counter_read";
+    fn close_counter(handle: CounterHandle) = "dlt_counter_close";
+    fn opens() -> i32 = "dlt_counter_opened";
+    fn closes() -> i32 = "dlt_counter_closed";
+}
+
+fn with_counter<Body>(value: i32) -> bool {
+    let owned = open_counter(value);
+    if owned.token == 0 { return false; }
+    defer close_counter(owned);
+    fn read() -> i32 { return read_counter(owned); }
+    Body(read);
+    return true;
+}
+
+fn early() -> i32 {
+    with_counter(23) { read => return read(); };
+    return -1;
+}
+
+fn fails() {
+    with_counter(37) { read => exception::throw(read()); };
+}
+
+fn report(error: i32) { print(error, " ", opens(), " ", closes()); }
+
+fn main() {
+    let opened = with_counter(19) { read => print(read(), " ", opens(), " ", closes()); };
+    print(opened, " ", opens(), " ", closes());
+    print(early(), " ", opens(), " ", closes());
+    exception::try<i32>(fails, report);
+    let missing = with_counter(-1) { read => print(read()); };
+    print(missing, " ", opens(), " ", closes());
+}
+'''
+
+OWNED = '''
+import exception;
+
+struct CounterHandle { token: u64 }
+extern "lib/dltest" {
+    fn open_counter(value: i32) -> own CounterHandle = "dlt_counter_open";
+    fn read_counter(borrow handle: CounterHandle) -> i32 = "dlt_counter_read";
+    fn close_counter(handle: own CounterHandle) = "dlt_counter_close";
+    fn opens() -> i32 = "dlt_counter_opened";
+    fn closes() -> i32 = "dlt_counter_closed";
+    fn counter_size() -> i32 = "dlt_counter_size";
+}
+
+fn make_counter(value: i32) {
+    let acquired = open_counter(value);
+    let handle = acquired;
+    return fn[handle: own CounterHandle](mode: i32) -> i32 {
+        defer close_counter(handle);
+        let value = read_counter(handle);
+        if mode == 1 { return value; }
+        return value + 1;
+    };
+}
+
+fn invoke<C>(call: C, mode: i32) -> i32 { call(mode) }
+
+fn make_failing_counter(value: i32) {
+    let handle = open_counter(value);
+    return fn[handle: own CounterHandle]() {
+        defer close_counter(handle);
+        exception::throw(read_counter(handle));
+    };
+}
+
+fn fails() { make_failing_counter(37)(); }
+fn report(error: i32) { print(error, " ", opens(), " ", closes()); }
+
+decorator TraceClose() on fn(own CounterHandle) -> i32 {
+    wrap {
+        defer print("wrapped cleanup ", closes());
+        return next();
+    }
+}
+
+@TraceClose
+fn consume(handle: own CounterHandle) -> i32 {
+    defer close_counter(handle);
+    return read_counter(handle);
+}
+
+@TraceClose
+fn consume_failing(handle: own CounterHandle) -> i32 {
+    defer close_counter(handle);
+    let value = read_counter(handle);
+    if value != 0 { exception::throw(value); }
+    return value;
+}
+
+fn wrapped_failure() { consume_failing(open_counter(47)); }
+
+fn main() {
+    let abi = [CounterHandle { token: 0 }];
+    assert(bytes_of(abi).len == counter_size());
+    let call = make_counter(19);
+    print(opens(), " ", closes());
+    print(invoke(call, 0), " ", opens(), " ", closes());
+    print(make_counter(23)(1), " ", opens(), " ", closes());
+    exception::try<i32>(fails, report);
+    print(consume(open_counter(43)), " ", opens(), " ", closes());
+    exception::try<i32>(wrapped_failure, report);
+}
+'''
+
+TASKED = '''
+struct CounterHandle { token: u64 }
+struct TaskHandle { token: u64 }
+
+extern "lib/dltest" {
+    fn open_counter(value: i32) -> own CounterHandle = "dlt_counter_open";
+    fn start_task(counter: own CounterHandle) -> own TaskHandle = "dlt_start_counter_task";
+    fn step(borrow task: TaskHandle) -> i32 = "dlt_step_counter_task";
+    fn request_cancel(borrow task: TaskHandle) = "dlt_cancel_counter_task";
+    fn foreign_completion(borrow task: TaskHandle) -> i32 = "dlt_ack_counter_task";
+    fn dispose(task: own TaskHandle) = "dlt_dispose_counter_task";
+    fn closes() -> i32 = "dlt_counter_closed";
+}
+
+fn pending_work() {
+    let task = start_task(open_counter(41));
+    return fn[task: own TaskHandle]() {
+        defer dispose(task);
+        print(step(task), " ", closes());
+        request_cancel(task);
+        request_cancel(task);
+        print(step(task), " ", step(task), " ", closes());
+        print(foreign_completion(task), " ", closes());
+        print(step(task), " ", step(task), " ", closes());
+    };
+}
+
+fn main() {
+    pending_work()();
+    let unstarted = start_task(open_counter(17));
+    defer dispose(unstarted);
+    request_cancel(unstarted);
+    print(step(unstarted), " ", closes());
+}
+'''
+
+ASYNC_DECORATORS = '''
+struct CounterHandle { token: u64 }
+
+extern "lib/dltest" {
+    fn open_counter(value: i32) -> own CounterHandle = "dlt_counter_open";
+    fn read_counter(borrow handle: CounterHandle) -> i32 = "dlt_counter_read";
+    fn close_counter(handle: own CounterHandle) = "dlt_counter_close";
+    fn opens() -> i32 = "dlt_counter_opened";
+    fn closes() -> i32 = "dlt_counter_closed";
+}
+
+decorator Before() on async fn {
+    wrap {
+        defer print("outer ", closes());
+        await yield_now();
+        return await next();
+    }
+}
+
+decorator After() on async fn {
+    wrap {
+        defer print("inner ", closes());
+        let result = await next();
+        await yield_now();
+        return result;
+    }
+}
+
+decorator Skip() on async fn {
+    wrap {
+        defer print("skip ", closes());
+        return 99;
+    }
+}
+
+@Before
+@After
+async fn work(handle: own CounterHandle) -> i32 {
+    defer {
+        print("release ", read_counter(handle));
+        close_counter(handle);
+    }
+    print("started ", read_counter(handle));
+    await yield_now();
+    return read_counter(handle);
+}
+
+@Skip
+async fn skipped(handle: own CounterHandle) {
+    defer {
+        print("release ", read_counter(handle));
+        close_counter(handle);
+    }
+    print("unexpected original body");
+    return read_counter(handle);
+}
+
+async fn parent() -> i32 {
+    return await work(open_counter(5));
+}
+
+fn main() {
+    task_scope(work(open_counter(1))) { scope => scope.cancel(0); }
+    assert(opens() == 1 && closes() == 1);
+    task_scope(work(open_counter(2))) { scope =>
+        assert(scope.step());
+        scope.cancel(0);
+    }
+    assert(opens() == 2 && closes() == 2);
+    task_scope(work(open_counter(3))) { scope =>
+        assert(scope.step());
+        assert(scope.step());
+        scope.cancel(0);
+    }
+    assert(opens() == 3 && closes() == 3);
+    task_scope(work(open_counter(4))) { scope =>
+        assert(scope.step());
+        assert(scope.step());
+        assert(scope.step());
+        scope.cancel(0);
+    }
+    assert(opens() == 4 && closes() == 4);
+    print("joined ", parent().join());
+    assert(opens() == 5 && closes() == 5);
+    print("skipped ", skipped(open_counter(6)).join());
+    assert(opens() == 6 && closes() == 6);
+}
+'''
+
+ASYNC_OWNED = '''
+struct CounterHandle { token: u64 }
+enum Outcome {
+    Ok { value: i32 },
+    Failed { code: i32 },
+}
+
+extern "lib/dltest" {
+    fn open_counter(value: i32) -> own CounterHandle = "dlt_counter_open";
+    fn read_counter(borrow handle: CounterHandle) -> i32 = "dlt_counter_read";
+    fn close_counter(handle: own CounterHandle) = "dlt_counter_close";
+    fn opens() -> i32 = "dlt_counter_opened";
+    fn closes() -> i32 = "dlt_counter_closed";
+}
+
+async fn offset(value: i32) -> i32 {
+    defer { print("child cleanup"); }
+    await yield_now();
+    return value + 1;
+}
+
+async fn measure(value: i32, fail: bool) -> Outcome {
+    var state: i32 = 1;
+    defer { print("outer ", state, " ", closes()); }
+    let handle: own CounterHandle = open_counter(value);
+    defer {
+        print("inner ", read_counter(handle));
+        close_counter(handle);
+    }
+    let sum = await offset(read_counter(handle));
+    state = 2;
+    if fail { return Outcome.Failed { read_counter(handle) }; }
+    return Outcome.Ok { sum };
+}
+
+fn report(result: Outcome) {
+    match result {
+        Ok item => print("ok ", item.value, " ", opens(), " ", closes()),
+        Failed failure => print("failed ", failure.code, " ", opens(), " ", closes()),
+    }
+}
+
+fn leave() {
+    task_scope(measure(11, false)) { scope =>
+        assert(scope.step());
+        return;
+    }
+}
+
+async fn cooperative(value: i32) -> i32 {
+    let handle: own CounterHandle = open_counter(value);
+    defer close_counter(handle);
+    await yield_now();
+    return read_counter(handle);
+}
+
+async fn consume(handle: own CounterHandle) -> i32 {
+    defer {
+        print("input cleanup ", read_counter(handle));
+        close_counter(handle);
+    }
+    print("input started");
+    await yield_now();
+    defer { print("resume cleanup"); }
+    let result = await offset(read_counter(handle));
+    return result;
+}
+
+async fn selective(handle: own CounterHandle, stop: i32) -> i32 {
+    defer close_counter(handle);
+    if stop == 1 { return read_counter(handle); }
+    await yield_now();
+    if stop == 2 { return read_counter(handle) + 1; }
+    let result = await offset(read_counter(handle));
+    return result;
+}
+
+async fn repeat_owned(handle: own CounterHandle) -> i32 {
+    defer {
+        print("structured owner ", read_counter(handle));
+        close_counter(handle);
+    }
+    var total: i32 = 0;
+    for index in 2 {
+        defer { print("structured iteration ", index, " ", total); }
+        let value = await offset(read_counter(handle) + index as i32);
+        total += value;
+    }
+    return total;
+}
+
+fn main() {
+    report(measure(8, false).join());
+    report(measure(9, true).join());
+    task_scope(measure(70, false)) { scope => scope.cancel(0); }
+    print("unstarted ", opens(), " ", closes());
+    task_scope(measure(10, false)) { scope =>
+        assert(scope.step());
+        print("pending ", opens(), " ", closes());
+        scope.cancel(0);
+    }
+    print("cancelled ", opens(), " ", closes());
+    leave();
+    print("shutdown ", opens(), " ", closes());
+    print("cooperative ", cooperative(13).join(), " ", opens(), " ", closes());
+    task_scope(consume(open_counter(21))) { scope =>
+        print("input constructed ", opens(), " ", closes());
+        scope.cancel(0);
+    }
+    print("input cancelled ", opens(), " ", closes());
+    task_scope(consume(open_counter(23))) { scope =>
+        assert(scope.step());
+        assert(scope.step());
+        scope.cancel(0);
+    }
+    print("input drained ", opens(), " ", closes());
+    print("input joined ", consume(open_counter(29)).join(), " ", opens(), " ", closes());
+    print("before suspension ", selective(open_counter(31), 1).join(), " ", opens(), " ", closes());
+    print("after suspension ", selective(open_counter(32), 2).join(), " ", opens(), " ", closes());
+    task_scope(repeat_owned(open_counter(40))) { scope => scope.cancel(0); }
+    task_scope(repeat_owned(open_counter(41))) { scope =>
+        assert(scope.step());
+        assert(scope.step());
+        scope.cancel(0);
+    }
+    print("structured drained ", opens(), " ", closes());
+    print("structured joined ", repeat_owned(open_counter(42)).join(), " ", opens(), " ", closes());
+}
+'''
 
 def check_extern_dylib(exe, cc, base, *, jit, runtime, extra=()):
     """Raises RuntimeError on a failure. `cc` None skips the built form."""
@@ -169,6 +636,61 @@ def check_extern_dylib(exe, cc, base, *, jit, runtime, extra=()):
     relative = base / "relative.k"
     tc.write_text(relative, BLOCK % "lib/dltest" + MAIN)
     expect_output(relative)
+    scoped = base / "scoped-counter.k"
+    tc.write_text(scoped, SCOPED)
+    scoped_expected = ["19 1 0", "true 1 1", "23 2 2", "37 3 3", "false 3 3"]
+    expect_output(scoped, lines=scoped_expected)
+    owned = base / "owned-counter.k"
+    tc.write_text(owned, OWNED)
+    owned_expected = ["1 0", "20 1 1", "23 2 2", "37 3 3",
+                      "wrapped cleanup 4", "43 4 4", "wrapped cleanup 5", "47 5 5"]
+    expect_output(owned, lines=owned_expected)
+    tasked = base / "counter-task.k"
+    tc.write_text(tasked, TASKED)
+    tasked_expected = ["2 0", "3 3 0", "41 0", "6 6 1", "6 2"]
+    expect_output(tasked, lines=tasked_expected)
+    async_owned = base / "async-owned-counter.k"
+    tc.write_text(async_owned, ASYNC_OWNED)
+    async_owned_expected = [
+        "child cleanup", "inner 8", "outer 2 1", "ok 9 1 1",
+        "child cleanup", "inner 9", "outer 2 2", "failed 9 2 2", "unstarted 2 2",
+        "pending 3 2", "child cleanup", "inner 10", "outer 1 3", "cancelled 3 3",
+        "child cleanup", "inner 11", "outer 1 4", "shutdown 4 4", "cooperative 13 5 5",
+        "input constructed 6 5", "input cleanup 21", "input cancelled 6 6",
+        "input started", "child cleanup", "resume cleanup", "input cleanup 23", "input drained 7 7",
+        "input started", "child cleanup", "resume cleanup", "input cleanup 29", "input joined 30 8 8",
+        "before suspension 31 9 9", "after suspension 33 10 10",
+        "structured owner 40", "child cleanup", "structured iteration 0 42",
+        "child cleanup", "structured iteration 1 42", "structured owner 41", "structured drained 12 12",
+        "child cleanup", "structured iteration 0 43", "child cleanup", "structured iteration 1 87",
+        "structured owner 42", "structured joined 87 13 13",
+    ]
+    expect_output(async_owned, lines=async_owned_expected)
+    async_decorators = base / "async-decorated-counter.k"
+    tc.write_text(async_decorators, ASYNC_DECORATORS)
+    async_decorators_expected = [
+        "release 1", "outer 1", "release 2",
+        "started 3", "release 3", "inner 3", "outer 3",
+        "started 4", "release 4", "inner 4", "outer 4",
+        "started 5", "release 5", "inner 5", "outer 5", "joined 5",
+        "skip 5", "release 6", "skipped 99",
+    ]
+    expect_output(async_decorators, lines=async_decorators_expected)
+    if not extra:
+        for source, expected in ((scoped, scoped_expected), (owned, owned_expected),
+                                 (tasked, tasked_expected), (async_owned, async_owned_expected),
+                                 (async_decorators, async_decorators_expected)):
+            app = base / (source.stem + tc.EXE_SUFFIX)
+            code, out, err = run([exe, "build", "--cc", cc.cc, "-o", app, source])
+            if code:
+                raise RuntimeError(f"{source.name} via k build, exit {code}:\n{out}{err}")
+            commands = [[app]]
+            if jit:
+                commands.append([exe, "run", source])
+            for command in commands:
+                code, out, err = run(command)
+                if code or out.splitlines() != expected:
+                    raise RuntimeError(f"{source.name} via {command}, exit {code}:\n{out}{err}")
     # The generated C is the same from one compile to the next, binds only
     # the externs a call reaches, and takes no prototype from the library.
     _, c1 = build(relative, 1)

@@ -39,6 +39,9 @@ k file.k [options] [-- program args...]
 | `k build file.k` | Build an executable, or with `--shared` a shared library, using a C compiler on this machine ([§3](#3-building-an-executable)). |
 | `k check file.k` | Parse and typecheck the program, and write and run nothing ([§4](#4-checking-a-program)). |
 | `k fetch file.k` | Fetch the packages the program declares ([§7](#7-packages)). |
+| `k cache stats` | Report the disk use of shared caches and project build intermediates ([§7](#cache-usage-and-pruning)). |
+| `k cache prune --budget bytes` | Reclaim idle runtime and locked native package outputs ([§7](#cache-usage-and-pruning)). |
+| `k cordis resolve service --manifest file` | Print the resolved provider graph for a compiler or application lock. [Cordis graph resolution](design/cordis_microkernel.md#resolving-a-provider-graph) |
 | `k format file.k\|dir...` | Rewrite files in the standard layout ([§9](#9-formatting)). |
 | `k toolchain` | Report the C compiler, cmake and git found, and `K_HOME` ([§11](#11-toolchain-version-help-and-completion)). |
 | `k version` | Print the compiler's version and its runtime's. |
@@ -52,8 +55,8 @@ with no dot or slash in it, which is neither a command nor an existing
 file, is taken as a mistyped command: `k biuld x.k` suggests
 `build` and does nothing.
 
-Options may come before or after the file, in any order. Each command takes
-one program, its *root file*: the file that holds `main` and declares the
+Options may come before or after the file, in any order. Commands that take
+a program use its *root file*, which holds `main` and declares the
 program's packages. Everything after `--` belongs to the program being run.
 `--help` or `-h` anywhere before a `--` prints the help on the command given,
 and `k --version` is `k version`.
@@ -169,10 +172,14 @@ beyond those in [§5](#5-options-for-run-build-and-check):
 
 Everything a build makes along the way goes under `K_HOME`. The program's
 C, objects and logs go in `build/prog/<name>-<hash>/`, one directory per
-root file. The runtime object is compiled the first time a C compiler is
-used, once per compiler and per release or debug configuration, into
-`build/runtime/`. When a compile or link fails, the error shows the command
-and what it printed, and says where the log is.
+root file. `build/runtime/` holds the runtime object for each C toolchain
+and release or debug configuration. On macOS, a release built with the
+system Apple Clang includes optimized runtime objects for its default
+deployment target and for `MACOSX_DEPLOYMENT_TARGET=13.3`. K verifies the
+driver plan, preprocessed C and object digest before adding a packaged
+object to the managed cache. Other toolchain configurations and failed
+matches compile the runtime locally. Compile and link failures show the
+command, its output and the log path.
 
 ## 4. Checking a program
 
@@ -282,6 +289,14 @@ and `text` holds the whole message as the terminal would have shown it.
 An error that is not about the program, such as a missing C compiler, has a
 message and text only.
 
+### Locked Cordis diagnostics
+
+`k check` and `k build` accept `--cordis-manifest file` and
+`--cordis-lock file` together. Generate the lock with
+`k lsp --cordis-manifest file --cordis-graph`. The compiler verifies the
+selected provider and inputs before activation. A locked build records
+the graph in its native artifact. [Lock format and diagnostics](design/cordis_microkernel.md#locked-checks-and-builds)
+
 ## 7. Packages
 
 A program that imports a package that has not been fetched yet fetches it
@@ -305,6 +320,42 @@ cmake for a package built with CMake, and a C compiler for any C code. A
 program that has no C of its own and uses no package with C needs none of
 them. Deleting `K_HOME` loses nothing that a build cannot recreate
 ([packages.md](packages.md#5-the-cache) shows what is in it).
+
+### Cache usage and pruning
+
+```sh
+k cache stats --json
+k cache prune --budget 104857600 --json
+```
+
+`k cache stats` accounts for cached Git checkouts, native package outputs,
+bundled package copies, runtime objects, project build intermediates and
+toolchain metadata under `K_HOME`. It reports logical bytes of regular
+files, including build logs and temporary files observed during the scan.
+It skips symlinks. The report's `managed_runtime_bytes` and
+`managed_native_bytes` give the portions of the runtime and native
+package groups eligible for pruning. The installed compiler and
+application executables outside `K_HOME` have their own disk costs.
+
+`k cache prune` applies one byte budget to current runtime objects and
+managed native outputs. It reclaims the oldest idle entries first. Builds
+hold leases through linking, and JIT processes retain their native libraries
+through exit. Native packages imported at a fixed Git commit use this cache
+when declared C source and include paths are inside the checkout. AOT and
+JIT share plain C objects. CMake builds keep separate target graphs so
+building a JIT library can proceed during an AOT link.
+
+Git checkouts and CMake FetchContent source trees stay available after
+eviction. `k build --offline` can recreate outputs from those inputs and
+the local toolchain. AOT output trees containing shared libraries are
+retained for the executables that may load them. Their bytes, older
+cache layouts and native builds from mutable paths, branches or tags
+are visible in `stats` outside the prune budget.
+
+With `--json`, the prune report gives `before_bytes`, `remaining_bytes`,
+`reclaimed_bytes`, `skipped_in_use_bytes` and `budget_met`. Check
+`budget_met` if the command runs alongside builds. A successful prune can
+report an unmet budget when active builds still hold or create artifacts.
 
 ## 8. Writing the C yourself
 
@@ -403,6 +454,8 @@ error at its import, which `k fetch` resolves.
 | `--stdio` | Serve on stdin and stdout, as it does anyway. Clients pass it. |
 | `--stdlib dir` | Where the standard library is. |
 | `--probe` | Print the protocol version (`k lsp 3.17`) and exit. |
+| `--cordis-manifest file` | Enable explicitly selected trusted native diagnostics providers. [Cordis diagnostics](design/cordis_microkernel.md#native-diagnostics-in-the-language-server) |
+| `--cordis-graph` | With `--cordis-manifest`, resolve the diagnostics graph and print JSON without activation. Exit with status 1 and a structured error when resolution fails. [Graph format](design/cordis_microkernel.md#resolving-a-provider-graph) |
 
 The [VS Code extension](../vscode/README.md) starts the server itself;
 [editors.md](editors.md) has the configuration for Neovim, Helix and

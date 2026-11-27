@@ -33,7 +33,7 @@ struct Server {
         rpc.Send(j.s);
     }
 
-    void RespondError(const Message &m, int code, const string &message) {
+    void RespondError(const Message &m, int code, const string &message, string_view data = {}) {
         JsonOut j;
         j.BeginObject();
         j.Member("jsonrpc", "2.0");
@@ -43,6 +43,10 @@ struct Server {
         j.BeginObject();
         j.Member("code", (int64_t)code);
         j.Member("message", message);
+        if (!data.empty()) {
+            j.Key("data");
+            j.Raw(data);
+        }
         j.EndObject();
         j.EndObject();
         rpc.Send(j.s);
@@ -101,6 +105,13 @@ struct Server {
         j.EndObject();
         j.Member("full", true);
         j.EndObject();
+        if (ws.diagnostics.Enabled()) {
+            j.Key("experimental");
+            j.BeginObject();
+            j.Member("klangCordisDiagnostics", 1);
+            j.Member("klangCordisGraph", 1);
+            j.EndObject();
+        }
         j.EndObject();
         j.Key("serverInfo");
         j.BeginObject();
@@ -108,6 +119,27 @@ struct Server {
         j.Member("version", RuntimeVersion());
         j.EndObject();
         j.EndObject();
+    }
+
+    void SelectDiagnostics(const Message &m, const Json &params) {
+        auto id = JsonStr(params.Get("provider"));
+        if (id.empty()) {
+            RespondError(m, -32602, "expected a Cordis diagnostics provider identifier");
+            return;
+        }
+        try {
+            if (ws.diagnostics.Select(id))
+                for (auto &r : ws.roots) ws.Dirty(*r, 0);
+        } catch (const cordis::GraphError &e) {
+            RespondError(m, -32000, e.msg, e.Data());
+            return;
+        }
+        Respond(m, [&](JsonOut &j) {
+            j.BeginObject();
+            j.Member("provider", ws.diagnostics.ActiveId());
+            j.EndObject();
+            return true;
+        });
     }
 
     // Whether a request asks about the documents and waits for the analysis
@@ -166,6 +198,14 @@ struct Server {
             Respond(m, [](JsonOut &) { return false; });
         } else if (method == "exit") {
             return false;
+        } else if (method == "klang/cordis/selectDiagnostics") {
+            if (!m.id.empty()) SelectDiagnostics(m, p);
+        } else if (method == "klang/cordis/graph") {
+            if (!m.id.empty()) Respond(m, [&](JsonOut &j) {
+                auto &graph = ws.diagnostics.ActiveGraph();
+                if (graph) j.Raw(graph->Document());
+                return graph.has_value();
+            });
         } else if (method == "textDocument/didOpen") {
             auto td = p.Get("textDocument");
             if (td) ws.Open(JsonStr(td->Get("uri")), JsonStr(td->Get("text")));
@@ -252,9 +292,10 @@ struct Server {
     }
 };
 
-// `k lsp [--stdlib dir]`, or `k lsp --probe`.
+// `k lsp [--stdlib dir] [--cordis-manifest file]`, or `k lsp --probe`.
 inline int RunLsp(const string &exe, const vector<string> &args) {
-    string stdlib;
+    string stdlib, manifest;
+    bool print_graph = false;
     for (size_t i = 0; i < args.size(); i++) {
         if (args[i] == "--probe") {
             printf("k lsp %s\n", LSP_VERSION);
@@ -264,18 +305,43 @@ inline int RunLsp(const string &exe, const vector<string> &args) {
             stdlib = args[++i];
             continue;
         }
+        if (args[i] == "--cordis-manifest" && i + 1 < args.size() && !args[i + 1].empty()) {
+            manifest = args[++i];
+            continue;
+        }
+        if (args[i] == "--cordis-graph") {
+            print_graph = true;
+            continue;
+        }
         // The one transport there is, which clients (vscode-languageclient
         // among them) name when they start a server on stdio.
         if (args[i] == "--stdio") continue;
-        fprintf(stderr, "k lsp takes --probe, --stdio or --stdlib dir, not %s\n", args[i].c_str());
+        fprintf(stderr, "k lsp: unknown or incomplete option %s\n",
+                args[i].c_str());
         return 1;
     }
+    if (print_graph) {
+        try {
+            auto catalog = manifest.empty() ? cordis::Catalog() : CordisDiagnostics::ReadCatalog(manifest, exe);
+            puts(catalog.Resolve("diagnostics").Document().c_str());
+            return 0;
+        } catch (const cordis::GraphError &e) {
+            puts(cat("{\"error\":", e.Data(), "}").c_str());
+            return 1;
+        }
+    }
     SetBinaryStdio();
-    // A server never waits on the network: a package not fetched is an
-    // error at its import.
-    package_nofetch = true;
     Server server(exe, stdlib);
+    if (!manifest.empty()) {
+        try {
+            server.ws.diagnostics = CordisDiagnostics::Load(manifest, exe);
+        } catch (const cordis::GraphError &e) {
+            fprintf(stderr, "k lsp: %s\n", e.msg.c_str());
+            return 1;
+        }
+    }
     auto code = server.Run();
+    server.ws.diagnostics.Reset();
     // The reader thread is still blocked in fgetc on stdin, holding the
     // stream's lock, which glibc's exit waits for while it closes the
     // streams: the process would never end. Every reply was flushed as it

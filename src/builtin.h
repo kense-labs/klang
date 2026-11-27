@@ -18,7 +18,7 @@ struct BuiltinPackage {
     const char *name;
     const k_symbol *(*symbols)();   // nullptr for a package without a native part.
     const char *srcdir;                 // Its root, with a trailing slash.
-    const char *rspdir;                 // Where its link-{cc,msvc}.rsp are; "" without a native part.
+    const char *rspdir;                 // Optional build-tree fallback for link-{cc,msvc}.rsp.
 };
 
 }  // namespace klang
@@ -80,7 +80,7 @@ inline int BuiltinIndex(const BuiltinPackage *b) {
 // compiler's build put it, else pkg/<name>/ beside the compiler, where a
 // release (scripts/package_release.py) keeps it.
 inline string BuiltinSrcDir(const BuiltinPackage &b, const string &exedir) {
-    if (PathExists(SourcePath(cat(b.srcdir, b.name)))) return b.srcdir;
+    if (*b.srcdir && PathExists(SourcePath(cat(b.srcdir, b.name)))) return b.srcdir;
     auto beside = cat(exedir, "pkg/", b.name, "/");
     for (auto &c : beside) if (c == '\\') c = '/';
     return beside;
@@ -129,16 +129,17 @@ inline string BuiltinPackageLinkFile(const BuiltinPackage &b, const string &styl
                                      const string &exedir) {
     if (style != "msvc" && style != "cc")
         throw CompileError { cat("the link style is msvc or cc, not ", style) };
-    if (!*b.rspdir)
+    if (!b.symbols)
         throw CompileError { cat("the package ", b.name, " has no native part to link") };
     auto name = cat("link-", style, ".rsp");
     auto recorded = cat(b.rspdir, "/", name);
-    if (PathExists(recorded)) return recorded;
+    if (*b.rspdir && PathExists(recorded)) return recorded;
     auto beside = cat(exedir, "pkg/", b.name);
     if (auto shipped = cat(beside, "/", name); PathExists(shipped))
         return AbsoluteLinkFile(shipped, b.name, style);
     throw CompileError { cat("cannot find ", name, " of the builtin package ", b.name,
-                             " (looked in ", b.rspdir, " and ", beside, ")") };
+                             " (looked in ", *b.rspdir ? cat(b.rspdir, " and ") : string(),
+                             beside, ")") };
 }
 
 // `--<import>-link msvc|cc`: the response file of the blessed package

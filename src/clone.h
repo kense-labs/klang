@@ -18,6 +18,7 @@ struct ExpansionArg {
     // A variants<E> binding: the variant's name, which a match pattern takes
     // (the type is its variant type; the value, a payload-less one's).
     string_view variant;
+    bool nominal = false;  // A decorated type declaration can accept its own type arguments.
 };
 
 struct ExpansionClone {
@@ -39,7 +40,7 @@ struct ExpansionClone {
 inline Node *Node::Clone(Ast &ast) const {
     auto ctx = ast.expansionclone;
     if (ctx) {
-        if (++*ctx->size > ExpansionClone::MAXNODES)
+        if (ctx->size && ++*ctx->size > ExpansionClone::MAXNODES)
             ctx->error(line, cat("const for expansion exceeds ", ExpansionClone::MAXNODES, " generated nodes"));
         if (auto id = Is<Ident>(this)) {
             if (auto arg = ctx->Find(expansionbinding)) {
@@ -115,6 +116,7 @@ inline Node *StrLit::Clone1(Ast &ast) const { return ast.New<StrLit>(line, val, 
 inline Node *Ident::Clone1(Ast &ast) const {
     auto n = ast.New<Ident>(line, name, ns);
     n->expansionerror = expansionerror;
+    n->boundfn = boundfn;
     return n;
 }
 
@@ -131,6 +133,7 @@ inline Node *StructLit::Clone1(Ast &ast) const {
     auto sl = ast.New<StructLit>(line, ast.CloneExpansionType(type));
     sl->defaultall = defaultall;
     sl->implicit = implicit;
+    sl->task_carry_error = task_carry_error;
     sl->sourcefieldindices = sourcefieldindices;
     sl->inits.reserve(inits.size());
     for (auto &fi : inits) sl->inits.push_back(ast.CloneFieldInit(fi));
@@ -148,6 +151,10 @@ inline Node *Binary::Clone1(Ast &ast) const {
 inline Node *Dot::Clone1(Ast &ast) const {
     auto d = ast.New<Dot>(line, obj->Clone(ast), name, ns);
     if (enumtype) d->enumtype = ast.CloneExpansionType(enumtype);
+    else if (auto id = Is<Ident>(obj); id && ast.expansionclone) {
+        auto arg = ast.expansionclone->Find(id->expansionbinding);
+        if (arg && arg->nominal && arg->type->kind == TY_ENUM) d->enumtype = arg->type;
+    }
     d->accessorowner = accessorowner;
     d->incomplete = incomplete;
     return d;
@@ -155,10 +162,15 @@ inline Node *Dot::Clone1(Ast &ast) const {
 
 inline Node *Call::Clone1(Ast &ast) const {
     auto c = ast.New<Call>(line, callee->Clone(ast));
+    c->task_stage = task_stage;
+    c->decorator_forward = decorator_forward;
+    c->decorator_await = decorator_await;
+    c->task_await = task_await;
     for (auto t : tyargs) c->tyargs.push_back(ast.CloneExpansionType(t));
     c->implicit = implicit;
-    for (size_t i = 0; i < args.size(); i++)
-        if (!IsDefaultArg(i)) c->args.push_back(args[i]->Clone(ast));
+    if (!decorator_forward)
+        for (size_t i = 0; i < args.size(); i++)
+            if (!IsDefaultArg(i)) c->args.push_back(args[i]->Clone(ast));
     c->trailing = (FunVal *)CloneOrNull(ast, (Node *)trailing);
     return c;
 }
@@ -262,6 +274,7 @@ inline Node *Return::Clone1(Ast &ast) const {
     CloneNodes(ast, vals, r->vals);
     r->from = from;
     r->ns = ns;
+    r->task_exit = task_exit;
     return r;
 }
 
@@ -271,7 +284,9 @@ inline Node *Break::Clone1(Ast &ast) const {
 
 inline Node *Continue::Clone1(Ast &ast) const { return ast.New<Continue>(line); }
 inline Node *Defer::Clone1(Ast &ast) const {
-    return ast.New<Defer>(line, (Block *)body->Clone(ast));
+    auto d = ast.New<Defer>(line, (Block *)body->Clone(ast));
+    d->task_transfer = task_transfer;
+    return d;
 }
 
 // InlineBlocks exist only after typecheck; the annotation-stripping Clone has
@@ -336,6 +351,7 @@ inline Node *FnDecl::Clone1(Ast &ast) const {
 inline Node *ConstFor::Clone1(Ast &ast) const {
     auto cf = ast.New<ConstFor>(line);
     cf->source = source;
+    cf->decorator_ns = decorator_ns;
     cf->names = names;
     cf->bindings = bindings;
     for (auto t : types) cf->types.push_back(ast.CloneExpansionType(t));
@@ -394,8 +410,14 @@ inline TypeExpr *Ast::CloneExpansionType(TypeExpr *t) {
                 return n;
             };
             if (!a->type) return invalid(cat("const for binding ", t->named->name, " is not a type"));
-            if (!t->named->args.empty()) return invalid("const for type binding takes no type arguments");
             auto b = a->type;
+            if (!t->named->args.empty()) {
+                if (!a->nominal) return invalid("const for type binding takes no type arguments");
+                vector<TypeExpr *> args;
+                for (auto arg : t->named->args) args.push_back(CloneExpansionType(arg));
+                b = b->kind == TY_STRUCT ? StructOf(b->struc->st, std::move(args), t->line)
+                                        : EnumOf(b->enu->en, std::move(args), false, t->line);
+            }
             if (t->named->varmode) {
                 if (b->kind != TY_ENUM) return invalid("variable mode requires an ADT type");
                 b = EnumOf(b->enu->en, b->enu->args, true, t->line);
@@ -610,6 +632,32 @@ inline int CountNodes(Node *n) {
     auto c = 1;
     RunChildren(n, [&](Node *ch) { c += CountNodes(ch); });
     return c;
+}
+
+inline bool ContainsTaskAwait(Node *n) {
+    if (!n) return false;
+    if (auto c = Is<Call>(n); c && c->task_await != TaskAwait::None) return true;
+    bool found = false;
+    RunChildren(n, [&](Node *child) { if (!found) found = ContainsTaskAwait(child); });
+    return found;
+}
+
+// A checked literal's inputs, in construction order and at their
+// destination types. A repeated fill has one input.
+inline vector<pair<Node *, TypeExpr *>> LiteralInputs(Node *n) {
+    vector<pair<Node *, TypeExpr *>> inputs;
+    if (auto a = Is<ArrayLit>(n)) {
+        auto elem = n->exprtype->arr->sub;
+        if (a->capexpr) inputs.emplace_back(a->capexpr, a->capexpr->exprtype);
+        else if (a->fillval) inputs.emplace_back(a->fillval, elem);
+        else for (auto e : a->elems) inputs.emplace_back(e, elem);
+    } else if (auto s = Is<StructLit>(n)) {
+        const auto &types = s->sinst ? s->sinst->ftypes
+                          : s->einst->vftypes[s->einst->en->VariantIndex(s->variant)];
+        for (size_t i = 0; i < s->inits.size(); ++i)
+            inputs.emplace_back(s->inits[i].val, types[s->fieldindices[i]]);
+    }
+    return inputs;
 }
 
 // Whether the tree holds a `return` that exits function sf: exactly the ones

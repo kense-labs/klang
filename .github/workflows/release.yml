@@ -113,12 +113,13 @@ jobs:
 
       - name: Archive
         shell: bash
-        working-directory: dist
         run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          directory="dist/$RELEASE_NAME"
           if [ "$RUNNER_OS" = Windows ]; then
-            7z a -tzip "$RELEASE_NAME.zip" "$RELEASE_NAME"
+            python scripts/archive_release.py "$directory" "$directory.zip"
           else
-            tar -czf "$RELEASE_NAME.tar.gz" "$RELEASE_NAME"
+            python scripts/archive_release.py "$directory" "$directory.tar.gz"
           fi
 
       - uses: actions/upload-artifact@v4
@@ -127,16 +128,111 @@ jobs:
           path: dist/${{ env.RELEASE_NAME }}.*
           if-no-files-found: error
 
+  verify_core:
+    name: Reproduce macOS arm64 core
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Find Ninja
+        shell: bash
+        run: command -v ninja || brew install ninja
+
+      - name: Build and compare independent core releases
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version="$GITHUB_REF_NAME"; else version="snapshot-${GITHUB_SHA::7}"; fi
+          python scripts/reproduce_core.py --out build/repro-core --version "$version" --jobs 2
+
+      - name: Save reproduction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-reproducibility-macos-arm64
+          path: |
+            build/repro-core/*.json
+            build/repro-core/*/*.json
+            build/repro-core/*/*.log
+          if-no-files-found: warn
+
+      - name: Save verified core archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: klang-macos-arm64-core
+          path: build/repro-core/a/*-macos-arm64-core.tar.gz
+          if-no-files-found: error
+
+  verify_cloud:
+    name: Reproduce Linux ${{ matrix.arch }} cloud
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang ninja-build
+
+      - name: Download the pinned ONNX Runtime package
+        run: |
+          mkdir -p build
+          curl --fail --silent --show-error --location --retry 4 \
+            https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.24.4/microsoft.ml.onnxruntime.1.24.4.nupkg \
+            -o build/onnxruntime.nupkg
+
+      - name: Build and compare independent cloud releases
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then version="$GITHUB_REF_NAME"; else version="snapshot-${GITHUB_SHA::7}"; fi
+          python scripts/reproduce_core.py --profile cloud --onnx-package build/onnxruntime.nupkg \
+            --out build/repro-cloud --version "$version" --jobs 2 --serial
+
+      - name: Save reproduction evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-reproducibility-linux-${{ matrix.arch }}
+          path: |
+            build/repro-cloud/*.json
+            build/repro-cloud/*/*.json
+            build/repro-cloud/*/*.log
+          if-no-files-found: warn
+
+      - name: Save verified cloud archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: klang-linux-${{ matrix.arch }}-cloud
+          path: build/repro-cloud/a/*-linux-${{ matrix.arch }}-cloud.tar.gz
+          if-no-files-found: error
+
+
   release:
     name: Publish
     if: github.ref_type == 'tag'
-    needs: build
+    needs: [build, verify_core, verify_cloud]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
+          pattern: klang-*
           path: dist
           merge-multiple: true
 
@@ -162,6 +258,10 @@ jobs:
             dist/SHA256SUMS
           body: |
             Prebuilt compilers with the blessed packages (gfx, audio, ui, physics) compiled in. Unpack anywhere and put the directory on PATH; see "Install a release" in README.md for what each platform needs besides, and for checking a download against SHA256SUMS.
+
+            The macOS arm64 core archive contains the compiler and runtime with no native packages compiled in. Release verification builds it twice and tests both extracted archives.
+
+            The Linux arm64 and x64 cloud archives include the prebuilt Cordis inference gateway, the CPU provider and ONNX Runtime. The installation guide describes model and lock configuration.
 
       - name: Publish the pre-release
         if: contains(github.ref_name, '-')

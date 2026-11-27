@@ -9,6 +9,7 @@ struct Node;
 struct Block;
 struct Break;
 struct FunVal;
+struct StructLit;
 struct TypeExpr;
 struct SFunction;
 struct SStruct;
@@ -310,6 +311,7 @@ struct TypeExpr {
     // reference or slice, one whose pointee or elements are. Part of the
     // type's identity (TypeEq); a C type does not carry it.
     bool cq = false;
+    bool owns = false;           // The value carries a linear resource obligation.
     // A use of a type alias (resolve.h): a copy of the alias's type, whose
     // sizes name what they name where the alias is declared, at top level,
     // whatever scope the use is in (TypeCheck::ConstNamesIn).
@@ -392,6 +394,28 @@ struct Param {
     TypeExpr *type = nullptr;   // Null = untyped, i.e. generic.
     Node *defaultval = nullptr; // What a call leaving the argument out passes (§7.1).
     bool isvar = false;
+    bool borrows = false;       // A synchronous, non-retaining C borrow by value.
+};
+
+enum class DecoratorTarget { None, Function, AsyncFunction, Struct, Enum, Field };
+
+inline string_view DecoratorTargetName(DecoratorTarget target) {
+    switch (target) {
+        case DecoratorTarget::Function: return "fn";
+        case DecoratorTarget::AsyncFunction: return "async fn";
+        case DecoratorTarget::Struct: return "struct";
+        case DecoratorTarget::Enum: return "enum";
+        case DecoratorTarget::Field: return "field";
+        case DecoratorTarget::None: return {};
+    }
+    return {};
+}
+
+struct DecoratorApplication {
+    TypeExpr *type;
+    Line at;
+    vector<Node *> args;
+    StructLit *value = nullptr;
 };
 
 struct Field {
@@ -403,6 +427,7 @@ struct Field {
     bool isconst = false;       // "let" field: const after construction.
     bool ispad = false;         // pad n / bare pad (padsize -1 = align next field).
     int64_t padsize = -1;
+    vector<DecoratorApplication> decorators;
 };
 
 struct FieldInit {
@@ -412,6 +437,15 @@ struct FieldInit {
     int expansionbinding = 0;
     TypeExpr *accessorowner = nullptr;
 };
+
+// Internal names for the capture record and its receiver call.
+inline constexpr string_view kClosureEnv = "closure#env";
+inline constexpr string_view kClosureInvoke = "closure#invoke";
+inline constexpr string_view kTaskAwait = "task#await";
+inline constexpr string_view kTaskAwaitResult = "task#await-result";
+
+enum class TaskScopeOperation { None, Step, Wait, WaitFor, Finished, Join, Cancel };
+enum class TaskAwait { None, Yield, Child };
 
 enum PatKind { P_WILDCARD, P_LIST };
 
@@ -998,6 +1032,8 @@ NODE(Ident)
     // Filled by typecheck: exactly one of these.
     VarDef *vdef = nullptr;         // A variable.
     SFunction *fnref = nullptr;     // A named function used as a function value.
+    SFunction *boundfn = nullptr;   // The exact declaration selected by an expansion.
+    const Field *fieldref = nullptr; // A field named by a metadata lookup.
     Ident(Line l, string_view _name, string_view _ns = {}) : Node(l, NKind), name(_name), ns(_ns) {}
 NODE_END
 
@@ -1018,6 +1054,9 @@ NODE(StructLit)
     // default<T>()), of a type written elsewhere, whose sizes were checked
     // there (TypeCheck::ConstNamesIn).
     bool implicit = false;
+    // The async parser can discover an invalid carry before type checking
+    // proves the suspension reachable. Diagnose it when checking the save.
+    optional<pair<Line, string_view>> task_carry_error;
     // Filled by typecheck:
     StructInst *sinst = nullptr;    // Struct literals.
     EnumInst *einst = nullptr;      // Variant literals.
@@ -1025,6 +1064,7 @@ NODE(StructLit)
     vector<int> fieldindices;       // Per init, the target field index.
     vector<int> sourcefieldindices; // Supplied fields before CheckInits sorts; retained on rechecks.
     StructLit(Line l, TypeExpr *_type) : Node(l, NKind), type(_type) {}
+    SFunction *Closure() const;
     // The initializer of field `fieldidx` once the literal is checked
     // (TypeCheck::CheckInits): the one written, the field's declared
     // default, or the default<T>() call a `..` or default<T>() fills it
@@ -1089,16 +1129,57 @@ NODE(Dot)
     bool incomplete = false;
     Dot(Line l, Node *_obj, string_view _name, string_view _ns = {})
         : Node(l, NKind), obj(_obj), name(_name), ns(_ns) {}
+    Val CheckValueMember(TypeCheck &tc, Val receiver);
     // A field, which lies in its object's storage: a path, as codegen
     // addresses it (CodeGen::GenLoc). A property or a variant constant is a
     // value computed on the spot (Dot::CgX).
     bool IsField() const { return !variantconst && member < 0; }
 NODE_END
 
+struct TaskSlotSource {
+    int field = -1;  // Field in the initial task frame.
+    VarDef *local = nullptr;
+    optional<size_t> operand;  // Index in the suspension's saved operands.
+
+    bool operator==(const TaskSlotSource &) const = default;
+};
+
+struct TaskSlotLoan {
+    VarDef *owner;
+    TaskSlotSource source;
+    bool graph = false;
+};
+
 NODE(Call)
     BCE_WALK
     BCE_MARK
     Node *callee;               // Ident, or Dot for UFCS; resolution is later.
+    SFunction *task_stage = nullptr;  // Private call in a task's generated join body.
+    FnSpec *callable_target = nullptr;  // Target of a callable conversion.
+    TypeExpr *callable_call = nullptr;  // Signature selected by a runtime callable.
+    StructLit *decorator_value = nullptr;  // Typed constant record read from a declaration.
+    bool decorator_forward = false;  // An implicit argument list on a statically bound continuation.
+    bool decorator_await = false;    // A suspension that transfers the pending decorator continuation.
+    TaskAwait task_await = TaskAwait::None;
+    vector<VarDef *> task_values;     // Initialized values at a checked suspension, filtered by liveness.
+    vector<VarDef *> task_dead;       // Lexical values whose storage can end at this suspension.
+    vector<pair<VarDef *, Roots>> task_loan_roots;  // Local loans at a suspension site.
+    // Argument roots, type and frame field. -2 - field identifies the
+    // extra owner summary reachable through that field.
+    vector<tuple<Node *, TypeExpr *, Roots, int>> task_arg_roots;
+    bool task_borrow_consumed = false;  // The task executes within a checked invocation.
+    vector<VarDef *> task_shared_owners;  // Resizable arrays protected while this task can use them.
+    vector<TaskSlotLoan> task_slot_loans;
+    vector<pair<Node *, TypeExpr *>> task_operands;  // Earlier expression values needed after resumption.
+    bool native_task = false;         // Transfers an owned native descriptor into a task.
+    bool task_scope = false;              // Lexical scope with a checked trailing block.
+    vector<FnSpec *> scope_tasks;          // Join contracts for the scheduled tasks.
+    vector<vector<VarDef *>> scope_loan_owners;  // Shared owners per scope slot.
+    vector<vector<TaskSlotLoan>> scope_slot_loans;
+    vector<vector<VarDef *>> scope_resize_owners;  // Exclusive whole-array owners per slot.
+    TaskScopeOperation scope_operation = TaskScopeOperation::None;
+    VarDef *scope_controller = nullptr;
+    size_t scope_slot = 0;
     vector<TypeExpr *> tyargs;  // Explicit <T> list, normally empty (inferred).
     vector<Node *> args;
     FunVal *trailing = nullptr; // Trailing-block function value, if any.
@@ -1190,16 +1271,21 @@ NODE(Index)
     BCE_MARK
     Node *obj, *idx;
     bool nobc = false;          // Bounds check proven redundant (bce.h); codegen omits it.
+    bool task_place = false;    // Save a checked index, then rebuild the fixed-array location.
+    unique_ptr<Roots> task_slice_owner;  // Provenance when the receiver is evaluated, before the index.
     Index(Line l, Node *_obj, Node *_idx) : Node(l, NKind), obj(_obj), idx(_idx) {}
 NODE_END
 
 NODE(SliceExpr)
     BCE_WALK
     BCE_MARK
+    enum BoundCheck : uint8_t {
+        CheckLower = 1, CheckOrder = 2, CheckUpper = 4,
+    };
     Node *obj;
     Node *lo = nullptr, *hi = nullptr;      // Either may be absent.
     bool lo_from_end = false, hi_from_end = false;  // ^k bounds.
-    bool nobc = false;          // Bounds check proven redundant (bce.h); codegen omits it.
+    uint8_t boundchecks = CheckLower | CheckOrder | CheckUpper;
     bool cmpview = false;       // The whole slice `==` takes of an operand (§4.5).
     SliceExpr(Line l, Node *_obj) : Node(l, NKind), obj(_obj) {}
 NODE_END
@@ -1320,6 +1406,9 @@ NODE_END
 
 NODE(ForLoop)
     BCE_WALK
+    bool task_resumable = false;
+    bool task_sequential = false;  // A resumable walk with a byte cursor.
+    VarDef *task_shared_owner = nullptr;  // Global owner of a saved extent or byte cursor.
     // Set by BCE for array/slice iteration: nothing in the body can change the
     // iterated array's length, so the view may be read once instead of every
     // iteration (§6.5 otherwise requires the re-read, since growing during
@@ -1360,7 +1449,7 @@ NODE(ForLoop)
         : Node(l, NKind), byref(_byref), var(_var), idxvar(_idxvar), iter(_iter), body(_body) {}
 NODE_END
 
-enum ExpansionSource { ES_FIELDS, ES_TYPES, ES_CONSTANTS, ES_VARIANTS };
+enum ExpansionSource { ES_FIELDS, ES_TYPES, ES_CONSTANTS, ES_VARIANTS, ES_DECORATED };
 
 NODE(ConstFor)
     ExpansionSource source = ES_FIELDS;
@@ -1368,6 +1457,7 @@ NODE(ConstFor)
     vector<int> bindings;           // Assigned by BindExpansionNames, stable across clones.
     vector<TypeExpr *> types;
     vector<Node *> constants;
+    optional<string_view> decorator_ns;  // Present for a decorated<D, namespace ...> query.
     Block *body = nullptr;          // Statement fragments, or null for initializer or arm fragments.
     vector<FieldInit> inits;
     bool armfragments = false;      // Its fragments are match arms (in a match's arm list).
@@ -1412,6 +1502,7 @@ NODE(Return)
     vector<Node *> vals;
     string_view from;           // "return ... from f"; empty if absent. As written (Ident::name).
     string_view ns;             // The namespace `from` resolves in first (Ident::ns).
+    SFunction *task_exit = nullptr;  // Return from a poll stage to its owning task.
     SFunction *target = nullptr;  // Filled by typecheck (the fn this exits; `from` or own).
     FnSpec *targetspec = nullptr; // Its concrete return contract and propagation channel.
     Return(Line l) : Node(l, NKind) {}
@@ -1437,6 +1528,8 @@ NODE_END
 NODE(Defer)
     BCE_WALK
     Block *body;
+    bool task_transfer = false;  // Checked here, executed by the saved task state.
+    bool task_external_effect = false;  // Unsafe on a cancellation edge.
     Defer(Line l, Block *_body) : Node(l, NKind), body(_body) {}
 NODE_END
 
@@ -1478,6 +1571,7 @@ NODE(Assign)
     TType op;                   // T_ASSIGN, T_PLUSEQ, ...
     Node *lval, *rhs;
     bool pointee = false;       // Typecheck: lval is a reference and this writes its pointee.
+    bool task_place = false;    // The destination is a fixed location rebuilt after suspension.
     Assign(Line l, TType _op, Node *_lval, Node *_rhs) : Node(l, NKind), op(_op), lval(_lval), rhs(_rhs) {}
 NODE_END
 
@@ -1521,6 +1615,13 @@ struct SFunction {
     vector<GenericParam> generics;
     vector<Param> params;
     vector<TypeExpr *> rets;    // Empty + !has_rets = inferred/none.
+    vector<DecoratorApplication> decorators;
+    const SStruct *decorator_layer = nullptr; // Scope of a generated wrapper body.
+    SFunction *decorator_next = nullptr;     // Private next layer of a wrapped call.
+    SFunction *decorator_original = nullptr; // Source implementation, for result inference.
+    SFunction *decorator_result_source = nullptr; // Original async join, for the result and input cleanup.
+    SFunction *decorator_public = nullptr;   // Named declaration of a private implementation or layer.
+    Block *decorator_written = nullptr;     // Written body of a decorated declaration.
     bool has_rets = false;
     bool isrec = false;         // Declared with `recursive`.
     bool isinline = false;      // Declared with `inline`: inlined whatever its size (§7.13).
@@ -1552,6 +1653,22 @@ struct SFunction {
     bool isnested = false;
     SFunction *outer = nullptr;     // The function a nested one is declared in.
     Block *body = nullptr;
+    Block *closure_body = nullptr;  // The written body, without capture bindings.
+    Block *async_body = nullptr;    // The written body, before task lowering.
+    vector<TypeExpr *> async_rets;
+    bool task_join = false;         // This body's call graph is implemented by the driver.
+    bool task_foreign = false;      // The driver polls a C descriptor for this task.
+    bool task_stage = false;        // A separately called task poll segment.
+    bool task_suspends = false;     // The normal stage result saves a continuation.
+    bool task_flow = false;         // Poll body with in-place control-flow resume points.
+    SFunction *task_final_of = nullptr;  // Final stage shares its task's result contract.
+    bool task_child_start = false;  // Returns the saved frame and a single owned child.
+    struct TaskSuspension {
+        size_t stage_stmt;                  // The join binding that calls this stage.
+        optional<size_t> child_stmt;        // The join statement or binding that awaits its child.
+    };
+    vector<TaskSuspension> task_suspensions;
+    SFunction *task_cleanup = nullptr;  // Unpacks the owned frame on cancellation or failure.
     // The body lost a statement to a parse error, or holds an incomplete
     // `.` (Block::brokenat, Dot::incomplete): the signature is whole, and a
     // call is checked against it alone, the body up to the error
@@ -1581,8 +1698,18 @@ struct SStruct {
     Line end;                   // As SFunction::end.
     string_view doc;            // As SFunction::doc.
     bool isroot = false;       // Explicit owning layout (docs/design/root_structs.md).
+    SFunction *closure = nullptr;  // Entry point of an anonymous closure environment.
+    DecoratorTarget decorator_target = DecoratorTarget::None;
+    TypeExpr *decorator_signature = nullptr; // Signature of a function target.
+    SFunction *decorator_wrapper = nullptr; // Untyped template for a wrapper body.
+    int callable_arity = -1;       // Signature parameters precede results in the type arguments.
+    bool callable_inline = false;  // The final type argument is the environment's byte storage.
+    SFunction *task_join = nullptr; // Joining consumes the opaque task value.
+    bool task_frame = false;        // Fixed, independently movable poll storage.
+    bool task_saved = false;        // Suspended state may own typed resources.
     vector<GenericParam> generics;
     vector<Field> fields;
+    vector<DecoratorApplication> decorators;
     vector<StructInst *> insts;  // Instantiations (typecheck), owned by Ast.
     // The declaration lost a field to a parse error (Parser::ParseMembers):
     // its fields are those parsed before the error, and a name it lacks is
@@ -1595,6 +1722,24 @@ struct SStruct {
     // code at hand silently.
     bool unknown = false;
 };
+
+inline TypeExpr *RuntimeCallableType(TypeExpr *t) {
+    if (t && t->kind == TY_REF) t = t->ref->sub;
+    return t && t->kind == TY_STRUCT && t->struc->st->callable_arity >= 0 ? t : nullptr;
+}
+
+inline TypeExpr *CallableStorage(const TypeExpr *t) {
+    return t->struc->st->callable_inline ? t->struc->args.back() : nullptr;
+}
+
+inline span<TypeExpr *const> CallableSignature(const TypeExpr *t) {
+    const auto &args = t->struc->args;
+    return { args.data(), args.size() - (size_t)t->struc->st->callable_inline };
+}
+
+inline SFunction *StructLit::Closure() const {
+    return !implicit && type->kind == TY_STRUCT ? type->struc->st->closure : nullptr;
+}
 
 struct SVariant {
     string_view name;
@@ -1613,6 +1758,7 @@ struct SEnum {
     string_view doc;            // As SFunction::doc.
     vector<GenericParam> generics;
     vector<SVariant> variants;  // Stable once parsing completes; pointed at by TY_VARIANT.
+    vector<DecoratorApplication> decorators;
     vector<EnumInst *> insts;   // Instantiations (typecheck), owned by Ast.
     // As SStruct::broken, of its variants: those parsed before the error,
     // each whole.
@@ -1707,6 +1853,7 @@ enum SizeClass { SC_FIXED, SC_VARIABLE, SC_RESIZABLE, SC_ROOT };
 // types here. Also carries the transient flow state (assigned/narrowed) used
 // while its scope is being checked.
 struct VarDef {
+    Call *task_scope = nullptr;  // Lexical controller, usable only as a scope operation receiver.
     string_view name;
     TypeExpr *type = nullptr;   // Concrete (post-substitution) declared type.
     Line line;
@@ -1719,6 +1866,10 @@ struct VarDef {
     // A global's position in ast.globals' definitions (TypeCheck::NoteNarrowed).
     int globalindex = 0;
     bool isparam = false;
+    bool task_storage = false;  // A runtime-sized local owned by a suspended task frame.
+    bool task_pinned = false;   // A fixed owner whose address stays stable across polling.
+    bool task_saved_ref = false;  // A reference stored as a value in the task's suspension state.
+    bool task_input_root = false;  // Symbolic owner of a writable task array parameter.
     // Independently owned fields of a root declaration. These synthetic
     // variables have the owner's scope and stable identities across loop
     // checking passes, but are not source-level bindings.
@@ -1886,6 +2037,74 @@ struct FieldRun {
     const vector<TypeExpr *> *ftypes = nullptr;
 };
 
+inline IntStorage LimitedLengthStorage(int64_t capacity) {
+    return capacity <= 255 ? IS_U8 : capacity <= 65535 ? IS_U16 :
+           capacity <= (int64_t)UINT32_MAX ? IS_U32 : IS_U64;
+}
+
+inline int64_t PackedPadAlignment(TypeExpr *t) {
+    switch (t->kind) {
+        case TY_INT: return t->intstorage == IS_VARINT ? 1 : IntBits(t->intstorage) / 8;
+        case TY_FLT: return t->fltstorage == FS_F32 ? 4 : 8;
+        case TY_REF: return t->ref->lenstorage >= 0 ?
+                            (t->ref->lenstorage == IS_VARINT ? 1 : IntBits((IntStorage)t->ref->lenstorage) / 8) : 8;
+        case TY_SLICE: return 8;
+        default: return 1;
+    }
+}
+
+inline int64_t AddLayoutBytes(int64_t a, int64_t b) {
+    return b > INT64_MAX - a ? INT64_MAX : a + b;
+}
+
+template<typename Measure, typename At>
+int64_t PackedFieldBytes(const vector<Field> &fields, const vector<TypeExpr *> &types, Measure measure, At at) {
+    int64_t bytes = 0;
+    for (size_t i = 0; i < fields.size(); ++i) {
+        at(bytes);
+        const auto &field = fields[i];
+        if (!field.ispad) bytes = AddLayoutBytes(bytes, measure(types[i]));
+        else if (field.padsize >= 0) bytes = AddLayoutBytes(bytes, field.padsize);
+        else {
+            auto next = find_if(types.begin() + i + 1, types.end(), [](TypeExpr *t) { return t != nullptr; });
+            auto alignment = next == types.end() ? 1 : PackedPadAlignment(*next);
+            bytes = AddLayoutBytes(bytes, (alignment - bytes % alignment) % alignment);
+        }
+    }
+    return bytes;
+}
+
+// Fields stored in a K value follow the same packed ABI in both backends.
+// Each caller supplies its cached nominal layout and array bounds.
+template<typename ArrayCapacity, typename IsResizable, typename NominalSize>
+int64_t FixedStorageBytes(TypeExpr *t, const ArrayCapacity &capacity, const IsResizable &resizable,
+                          const NominalSize &nominal) {
+    switch (t->kind) {
+        case TY_BOOL: return 1;
+        case TY_INT: assert(t->intstorage != IS_VARINT); return IntBits(t->intstorage) / 8;
+        case TY_FLT: return t->fltstorage == FS_F32 ? 4 : 8;
+        case TY_REF:
+            if (t->ref->lenstorage >= 0) {
+                assert(t->ref->lenstorage != IS_VARINT);
+                return IntBits((IntStorage)t->ref->lenstorage) / 8;
+            }
+            return resizable(t->ref->sub) ? 16 : 8;
+        case TY_SLICE: return 16;
+        case TY_STRUCT: case TY_ENUM: case TY_VARIANT: return nominal(t);
+        case TY_ARRAY: {
+            auto a = t->arr;
+            assert(a->akind == A_FIXED || a->akind == A_LIMITED);
+            auto length = capacity(a);
+            auto element = FixedStorageBytes(a->sub, capacity, resizable, nominal);
+            if (element && length > INT64_MAX / element) return INT64_MAX;
+            auto bytes = element * length;
+            return a->akind == A_FIXED ? bytes :
+                AddLayoutBytes(bytes, IntBits(LimitedLengthStorage(length)) / 8);
+        }
+        default: assert(false); return 0;
+    }
+}
+
 // A struct type with concrete generic arguments: substituted field types plus
 // the derived properties every user of the type needs.
 struct StructInst {
@@ -1895,6 +2114,7 @@ struct StructInst {
     FieldRun run;                  // st->fields with ftypes (RunsOf).
     SizeClass sclass = SC_FIXED;
     bool flat = true;
+    bool owns = false;            // A closure with at least one owned capture.
     bool validated = false;        // Guards against recursive by-value nesting.
     // Its build was cut short by the error that ended the root it was in
     // (TypeCheck::CheckRoot): never used again, and a use of it ends its own
@@ -1945,6 +2165,22 @@ template<typename F> bool AnyFieldOf(span<const FieldRun> runs, F f) {
 template<typename F> void EachFieldOf(span<const FieldRun> runs, F f) {
     for (auto &run : runs)
         for (auto ft : *run.ftypes) if (ft) f(ft);
+}
+
+// Only arrays held by value can have their length changed by a store to
+// the enclosing value. A reference or slice is a separate destination.
+template<typename F> bool HoldsLimitedArray(TypeExpr *t, const F &runs) {
+    if (t->kind == TY_ARRAY)
+        return t->arr->akind == A_LIMITED || HoldsLimitedArray(t->arr->sub, runs);
+    return AnyFieldOf(runs(t), [&](TypeExpr *ft) { return HoldsLimitedArray(ft, runs); });
+}
+
+// Absolute pointer slots held by value, without following any of them.
+template<typename F> bool HoldsPlainRefOf(TypeExpr *t, const F &runs) {
+    if (IsRefOrSlice(t)) return !IsRelRef(t);
+    if (t->kind == TY_ARRAY) return HoldsPlainRefOf(t->arr->sub, runs);
+    if (RuntimeCallableType(t) == t) return true;  // The erased environment can hold a borrow.
+    return AnyFieldOf(runs(t), [&](TypeExpr *ft) { return HoldsPlainRefOf(ft, runs); });
 }
 
 // Whether a value of type t holds a relative reference by value, at any
@@ -2321,6 +2557,9 @@ struct FnRecord {
 // of later codegen. The body is an Ast-owned clone with annotations filled;
 // only a recursive round's previous analysis record is owned here.
 struct FnSpec {
+    FnSpec *task_cleanup = nullptr;  // Terminal callback's checked cleanup stage.
+    FnSpec *task_exit = nullptr;     // Typed completion channel of a suspending stage.
+    vector<VarDef *> task_input_roots;  // One symbolic owner per writable array input field.
     SFunction *sf = nullptr;
     FnSpec *lexparent = nullptr;   // Defining specialization (or body), for nested fns.
     // Not a specialization but a function value's body as one check of its
@@ -2499,6 +2738,7 @@ struct Package {
     string root;          // With its trailing separator, or "" for the working directory.
     bool stdlib = false;
     string cachekey;      // A git source's place under K_HOME/pkg; "" for a path.
+    string revision;      // Full revision of an import pinned to a commit.
     int builtin = -1;     // Its index in builtin_packages when compiled into the compiler.
     // The sidecar beside its entry, `<name>.build` (docs/design/packages.md
     // §4.7), read when the package is loaded: the C it compiles, which makes
@@ -2521,6 +2761,10 @@ struct Package {
 };
 
 struct Ast {
+    bool has_ownership = false;
+    bool has_task_loans = false;
+    bool has_task_resize_loans = false;
+    bool has_task_holder_loans = false;
     // Non-null only while specializing a const-for fragment. Ordinary clones
     // retain templates; expansion clones substitute lexically bound uses.
     ExpansionClone *expansionclone = nullptr;
@@ -2666,6 +2910,7 @@ struct Ast {
     // Declarations, by namespace. Qualified spellings (`ns::name`) are
     // interned here: the lexer delivers their parts as separate tokens.
     map<string_view, Namespace> namespaces;
+    map<tuple<size_t, size_t, bool>, SStruct *> callable_layouts;
     deque<string> interned;
 
     // Shared instances of the primitive types.
@@ -2758,6 +3003,14 @@ struct Ast {
         return n;
     }
 
+    TypeExpr *WithOwnership(TypeExpr *t, bool owns) {
+        if (t->owns == owns) return t;
+        auto n = NewType(t->kind, t->line);
+        *n = *t;
+        n->owns = owns;
+        return n;
+    }
+
     // The same type without its own qualifier: what a load of a const value
     // yields (a copy), and the pointee of a reference to one, whose
     // constness the reference carries instead. A reference or slice keeps
@@ -2826,6 +3079,40 @@ struct Ast {
         t->struc->st = st;
         t->struc->args = std::move(args);
         return t;
+    }
+    TypeExpr *RuntimeCallableOf(const TypeFn &sig, Line line, Node *capacity) {
+        auto owned = capacity != nullptr;
+        auto [entry, fresh] = callable_layouts.try_emplace({ sig.args.size(), sig.rets.size(), owned }, nullptr);
+        if (fresh) {
+            auto st = entry->second = new SStruct();
+            st->name = st->qname = Intern(cat(owned ? "inline#callable#" : "callable#", sig.args.size(), "#", sig.rets.size()));
+            st->line = st->end = line;
+            st->callable_arity = (int)sig.args.size();
+            st->callable_inline = owned;
+            for (size_t i = 0; i < sig.args.size() + sig.rets.size(); ++i)
+                st->generics.push_back({ Intern(cat("type#", i)), line });
+            st->fields.push_back({ "invoke", line, {}, inttypes[IS_U64] });
+            if (owned) {
+                auto parameter = Intern("environment#storage");
+                st->generics.push_back({ parameter, line });
+                auto storage = NewType(TY_GENERIC, line);
+                storage->named = NewDetail<TypeName>();
+                storage->named->name = parameter;
+                st->fields.push_back({ "storage", line, {}, storage });
+            } else {
+                auto environment = ArrayOf(inttypes[IS_U8], A_FIXED, line, 0);
+                st->fields.push_back({ "environment", line, {}, ConstOf(RefTo(environment, line)) });
+            }
+            structs.push_back(st);
+        }
+        auto types = sig.args;
+        types.insert(types.end(), sig.rets.begin(), sig.rets.end());
+        if (owned) {
+            auto storage = ArrayOf(inttypes[IS_U8], A_FIXED, capacity->line);
+            storage->arr->sizeexpr = capacity;
+            types.push_back(storage);
+        }
+        return StructOf(entry->second, std::move(types), line);
     }
     // An enum type in either mode (§3.5).
     TypeExpr *EnumOf(SEnum *en, vector<TypeExpr *> args, bool varmode, Line line) {
@@ -2996,7 +3283,7 @@ struct Ast {
         return false;
     }
 
-    void Dump(string &s) const;  // In dump.h.
+    void Dump(string &s);  // In dump.h.
 };
 
 }  // namespace klang

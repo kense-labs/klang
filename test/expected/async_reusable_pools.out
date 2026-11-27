@@ -1,0 +1,8 @@
+slot 42 42
+sample 20
+run 33
+slot cleanup 2 22
+local slot 22
+slot cleanup 0 22
+slot cleanup 2 22
+local run 19

@@ -1,0 +1,11 @@
+root constructed
+outer starts
+middle starts
+capture 6
+leaf starts
+leaf resumes
+middle resumes
+outer resumes
+119
+void child
+void parent

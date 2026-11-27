@@ -328,6 +328,9 @@ static uint64_t k_byte_swap64(uint64_t x) {
 }
 
 K_API uint8_t k_os_read_file(sl_u8 path, k_rref out);
+K_API uint64_t k_os_reader_open(sl_u8 path);
+K_API int64_t k_os_reader_read(uint64_t id, k_rref out, int64_t max);
+K_API void k_os_reader_close(uint64_t id);
 K_API uint8_t k_os_write_file(sl_u8 path, sl_u8 data);
 K_API uint8_t k_os_write_file_atomic(sl_u8 path, sl_u8 data);
 K_API uint8_t k_os_append_file(sl_u8 path, sl_u8 data);

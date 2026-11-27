@@ -9,6 +9,13 @@
 
 (parameter name: (identifier) @variable.parameter)
 (function_value_parameter name: (identifier) @variable.parameter)
+(closure_parameter name: (identifier) @variable.parameter)
+(decorator_parameter name: (identifier) @variable.parameter)
+(decorator_declaration name: (identifier) @attribute)
+(decorator_declaration name: (scoped_identifier name: (identifier) @attribute))
+(decorator_target "field" @keyword)
+(decorator_application name: (identifier) @attribute)
+(decorator_application name: (scoped_identifier name: (identifier) @attribute))
 
 (field_declaration name: (identifier) @property)
 (field_expression field: (identifier) @property)
@@ -66,6 +73,7 @@
 (self) @variable.builtin
 
 (function_modifier) @keyword.modifier
+"async" @keyword.modifier
 "root" @keyword.modifier
 (extern_block "extern" @keyword.modifier)
 
@@ -74,6 +82,10 @@
 
 [
   "fn"
+  "decorator"
+  "on"
+  "wrap"
+  "await"
   "thread_fn"
   "struct"
   "enum"
@@ -81,12 +93,15 @@
   "let"
   "var"
   "const"
+  "own"
+  "borrow"
   "pad"
   "reusable"
   "namespace"
   "block"
   "defer"
   "fields"
+  "decorated"
   "variants"
   "types"
   "in"

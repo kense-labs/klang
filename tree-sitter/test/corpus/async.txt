@@ -1,0 +1,71 @@
+======================
+Async function and wait
+======================
+
+async fn compute(x: i64) -> i64 {
+    let n: i64 = await yield_now(x);
+    let value = await task;
+    n + value
+}
+
+---
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (primitive_type)))
+    (primitive_type)
+    (block
+      (variable_declaration
+        (identifier)
+        (primitive_type)
+        (await_expression
+          (call_expression
+            (identifier)
+            (argument_list
+              (identifier)))))
+      (variable_declaration
+        (identifier)
+        (await_expression
+          (identifier)))
+      (binary_expression
+        (identifier)
+        (identifier)))))
+
+=========================
+Async words as identifiers
+=========================
+
+fn await(x: i64) -> i64 { x }
+fn main() {
+    let async = 1;
+    await(async);
+}
+
+---
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (primitive_type)))
+    (primitive_type)
+    (block
+      (identifier)))
+  (function_declaration
+    (identifier)
+    (parameters)
+    (block
+      (variable_declaration
+        (identifier)
+        (int_literal))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (argument_list
+            (identifier)))))))

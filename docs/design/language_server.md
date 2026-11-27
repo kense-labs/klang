@@ -377,10 +377,10 @@ stopping at the first error until this is in; after that, `k check`
 prints all errors, in root order. The `errors_tc/` fixtures are written to
 have one error each and stay as they are.
 
-**E. No fetching.** An `Ast::nofetch` flag. When it is set, `PackageRoot`
-reports a package that is not in the cache as a diagnostic at the import
-(`k fetch` fetches it) instead of calling `FetchPackage`. `k lsp`
-sets it; `k check --offline` could too.
+**E. No fetching.** Each workspace analysis passes
+`PackageFetchMode::Offline` to the program loader. Package resolution
+reports an uncached package at the import. `k check --offline` uses the same
+mode, and `k fetch` can populate the cache.
 
 **F. Cancellation.** The `Ast` gets a `const atomic<bool> *cancel`, which
 `ParseTopDecl`, `CheckSpecBody` and `CheckStmt` poll. When it is set, they
@@ -500,7 +500,7 @@ own with its tests. A and C are in (`docs/implementation.md` §2,
 `test/diagnostics_json.py`): a diagnostic's range runs from the earliest
 token its node has on the anchor's line to the node's end, and a call is
 anchored at its callee rather than its `(`. So are B (`ParseProgram`'s
-`SourceProvider`), E (`--offline`, `package_nofetch`, an error at the
+`SourceProvider`), E (`--offline`, `PackageFetchMode::Offline`, an error at the
 import) and H (`Lexer::doc` on declarations, fields and variants, printed
 by `--dump-docs`). The extension's reading of the JSON is a task of its
 own.

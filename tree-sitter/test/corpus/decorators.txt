@@ -1,0 +1,361 @@
+=================
+Typed function decorators
+=================
+
+decorator routes::Route(name: const u8[:], capacity: u32) on async fn(i64) -> i64;
+decorator Public() on async fn;
+
+@Public
+@routes::Route("local", 2 + 3)
+async fn handler(value: i64) -> i64 {
+    await yield_now();
+    return value;
+}
+
+---
+
+(source_file
+  (decorator_declaration
+    (scoped_identifier
+      (identifier)
+      (identifier))
+    (decorator_parameter
+      (identifier)
+      (const_type
+        (slice_type
+          (primitive_type))))
+    (decorator_parameter
+      (identifier)
+      (primitive_type))
+    (decorator_target
+      (primitive_type)
+      (primitive_type)))
+  (decorator_declaration
+    (identifier)
+    (decorator_target))
+  (decorated_function_declaration
+    (decorator_application
+      (identifier))
+    (decorator_application
+      (scoped_identifier
+        (identifier)
+        (identifier))
+      (argument_list
+        (string_literal
+          (string_content))
+        (binary_expression
+          (int_literal)
+          (int_literal))))
+    (function_declaration
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (primitive_type)))
+      (primitive_type)
+      (block
+        (expression_statement
+          (await_expression
+            (call_expression
+              (identifier)
+              (argument_list))))
+        (expression_statement
+          (return_expression
+            (identifier)))))))
+
+=================
+Synchronous decorator wrapper
+=================
+
+decorator Trace(label: const u8[:]) on fn {
+    wrap {
+        defer print(label);
+        return next();
+    }
+}
+
+@Trace("finished")
+fn handler(value: i64) -> i64 { value }
+
+---
+
+(source_file
+  (decorator_declaration
+    (identifier)
+    (decorator_parameter
+      (identifier)
+      (const_type
+        (slice_type
+          (primitive_type))))
+    (decorator_target)
+    (block
+      (defer_statement
+        (expression_statement
+          (call_expression
+            (identifier)
+            (argument_list
+              (identifier)))))
+      (expression_statement
+        (return_expression
+          (call_expression
+            (identifier)
+            (argument_list))))))
+  (decorated_function_declaration
+    (decorator_application
+      (identifier)
+      (argument_list
+        (string_literal
+          (string_content))))
+    (function_declaration
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (primitive_type)))
+      (primitive_type)
+      (block
+        (identifier)))))
+
+=================
+Asynchronous decorator wrapper
+=================
+
+decorator TraceAsync() on async fn(i64) -> i64 {
+    wrap {
+        defer print("done");
+        return await next();
+    }
+}
+
+@TraceAsync
+async fn handler(value: i64) -> i64 {
+    await yield_now();
+    return value;
+}
+
+---
+
+(source_file
+  (decorator_declaration
+    (identifier)
+    (decorator_target
+      (primitive_type)
+      (primitive_type))
+    (block
+      (defer_statement
+        (expression_statement
+          (call_expression
+            (identifier)
+            (argument_list
+              (string_literal
+                (string_content))))))
+      (expression_statement
+        (return_expression
+          (await_expression
+            (call_expression
+              (identifier)
+              (argument_list)))))))
+  (decorated_function_declaration
+    (decorator_application
+      (identifier))
+    (function_declaration
+      (identifier)
+      (parameters
+        (parameter
+          (identifier)
+          (primitive_type)))
+      (primitive_type)
+      (block
+        (expression_statement
+          (await_expression
+            (call_expression
+              (identifier)
+              (argument_list))))
+        (expression_statement
+          (return_expression
+            (identifier)))))))
+
+=================
+Type and field metadata
+=================
+
+decorator Schema(label: const u8[:]) on struct;
+decorator Choice() on enum;
+decorator Column(index: u8) on field;
+
+@Schema("row")
+root struct Row<T> {
+    @Column(1) let data: T,
+}
+
+@Choice
+enum Event {
+    Data { @Column(2) data: i64 },
+    End,
+}
+
+fn main() {
+    let schema = decorator_metadata<Schema, Row>();
+    let column = decorator_metadata<Column, Event.Data>(data);
+}
+
+---
+
+(source_file
+  (decorator_declaration
+    (identifier)
+    (decorator_parameter
+      (identifier)
+      (const_type
+        (slice_type
+          (primitive_type))))
+    (decorator_target))
+  (decorator_declaration
+    (identifier)
+    (decorator_target))
+  (decorator_declaration
+    (identifier)
+    (decorator_parameter
+      (identifier)
+      (primitive_type))
+    (decorator_target))
+  (decorated_struct_declaration
+    (decorator_application
+      (identifier)
+      (argument_list
+        (string_literal
+          (string_content))))
+    (struct_declaration
+      (identifier)
+      (type_parameters
+        (type_parameter
+          (identifier)))
+      (field_declaration_list
+        (field_declaration
+          (decorator_application
+            (identifier)
+            (argument_list
+              (int_literal)))
+          (identifier)
+          (named_type
+            (identifier))))))
+  (decorated_enum_declaration
+    (decorator_application
+      (identifier))
+    (enum_declaration
+      (identifier)
+      (enum_variant
+        (identifier)
+        (field_declaration_list
+          (field_declaration
+            (decorator_application
+              (identifier)
+              (argument_list
+                (int_literal)))
+            (identifier)
+            (primitive_type))))
+      (enum_variant
+        (identifier))))
+  (function_declaration
+    (identifier)
+    (parameters)
+    (block
+      (variable_declaration
+        (identifier)
+        (call_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (identifier))
+            (named_type
+              (identifier)))
+          (argument_list)))
+      (variable_declaration
+        (identifier)
+        (call_expression
+          (identifier)
+          (type_arguments
+            (named_type
+              (identifier))
+            (variant_type
+              (named_type
+                (identifier))
+              (identifier)))
+          (argument_list
+            (identifier)))))))
+
+=================
+Scoped decorator enumeration
+=================
+
+fn register() {
+    const for <Name, Handler, Metadata> in decorated<Route, namespace routes> {
+        add(Name, Handler, Metadata);
+    }
+    const for <Name, Handler, Metadata> in decorated<Route, namespace ::> {
+        add(Name, Handler, Metadata);
+    }
+    const for <Name, Field, Metadata> in decorated<Column, Packet<u32>> {
+        use(Name, packet.Field, Metadata);
+    }
+}
+
+---
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameters)
+    (block
+      (const_for_statement
+        (identifier)
+        (identifier)
+        (identifier)
+        (const_for_decorated
+          (named_type
+            (identifier))
+          (identifier))
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (argument_list
+                (identifier)
+                (identifier)
+                (identifier))))))
+      (const_for_statement
+        (identifier)
+        (identifier)
+        (identifier)
+        (const_for_decorated
+          (named_type
+            (identifier)))
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (argument_list
+                (identifier)
+                (identifier)
+                (identifier))))))
+      (const_for_statement
+        (identifier)
+        (identifier)
+        (identifier)
+        (const_for_decorated
+          (named_type
+            (identifier))
+          (named_type
+            (identifier)
+            (type_arguments
+              (primitive_type))))
+        (block
+          (expression_statement
+            (call_expression
+              (identifier)
+              (argument_list
+                (identifier)
+                (field_expression
+                  (identifier)
+                  (identifier))
+                (identifier)))))))))

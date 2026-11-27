@@ -47,6 +47,42 @@ inline void JsonQuote(string &s, string_view v) {
     s += '"';
 }
 
+// Writes JSON text: nested objects and arrays, the commas placed as the
+// values arrive.
+struct JsonOut {
+    string s;
+    vector<bool> empty;     // Per open container: nothing written in it yet.
+
+    void Sep() {
+        if (empty.empty()) return;
+        if (!empty.back()) s += ',';
+        empty.back() = false;
+    }
+    void BeginObject() { Sep(); s += '{'; empty.push_back(true); }
+    void EndObject() { s += '}'; empty.pop_back(); }
+    void BeginArray() { Sep(); s += '['; empty.push_back(true); }
+    void EndArray() { s += ']'; empty.pop_back(); }
+    // A member's name; the value that follows is written as its own.
+    void Key(string_view k) {
+        Sep();
+        JsonQuote(s, k);
+        s += ':';
+        empty.back() = true;
+    }
+    void Str(string_view v) { Sep(); JsonQuote(s, v); }
+    void Int(int64_t v) { Sep(); s += to_string(v); }
+    void Bool(bool v) { Sep(); s += v ? "true" : "false"; }
+    void Null() { Sep(); s += "null"; }
+    void Raw(string_view json) { Sep(); s += json; }
+    // A literal is a string here, not the bool it would convert to.
+    void Member(string_view k, const char *v) { Key(k); Str(v); }
+    void Member(string_view k, string_view v) { Key(k); Str(v); }
+    void Member(string_view k, const string &v) { Key(k); Str(v); }
+    void Member(string_view k, int v) { Key(k); Int(v); }
+    void Member(string_view k, int64_t v) { Key(k); Int(v); }
+    void Member(string_view k, bool v) { Key(k); Bool(v); }
+};
+
 struct Json {
     enum Kind { NUL, BOOL, NUMBER, STRING, ARRAY, OBJECT } kind = NUL;
     bool b = false;

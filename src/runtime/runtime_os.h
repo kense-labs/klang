@@ -8,14 +8,14 @@
 #include <fcntl.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#include <limits.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
 #if defined(__APPLE__) || defined(__linux__)
 #include <sys/random.h>
-#else
-#include <unistd.h>
 #endif
 #endif
 
@@ -131,28 +131,153 @@ static int k_os_kind(const k_os_char *p) {
 #endif
 }
 
+#ifndef _WIN32
+/* Bytes the kernel can write without reaching a data stack guard page. */
+static size_t k_os_read_room(k_rref out) {
+    uintptr_t top = (uintptr_t)out.stk->top;
+    for (long i = 0; i < k_nregions; i++) {
+        const k_region *r = &k_regions[i];
+        if (r->stack != out.stk) continue;
+        uintptr_t base = (uintptr_t)r->base;
+        if (top < base || top - base > r->usable) break;
+        size_t room = r->usable - (top - base);
+        uint64_t lenroom = (uint64_t)(INT64_MAX - out.hdr->len);
+        return room > lenroom ? (size_t)lenroom : room;
+    }
+    return 0;
+}
+
+static ssize_t k_os_read_retry(int fd, void *dst, size_t size) {
+    ssize_t n;
+    do {
+        n = read(fd, dst, size);
+    } while (n < 0 && errno == EINTR);
+    return n;
+}
+
+static int k_os_read_fd(int fd, k_rref out) {
+    enum { block = 65536, initial = 2 * block };
+    size_t room = k_os_read_room(out);
+    size_t chunk = room >= initial ? initial : block;
+    int first = 1;
+    while (room >= block) {
+        ssize_t n = k_os_read_retry(fd, out.stk->top, room < chunk ? room : chunk);
+        if (n <= 0) return n == 0;
+        out.stk->top += n;
+        out.hdr->len += n;
+        room -= (size_t)n;
+
+        /* Probe for a bulk transfer size after the larger first request
+           fills. Completion still depends on observing EOF. */
+        if (first) {
+            first = 0;
+            chunk = block;
+            struct stat st;
+            if (n == initial && room > block && fstat(fd, &st) == 0 &&
+                S_ISREG(st.st_mode) && st.st_size > initial + block) {
+                uintmax_t left = (uintmax_t)st.st_size - initial;
+                chunk = left < INT_MAX ? (size_t)left : (size_t)INT_MAX;
+            }
+        }
+    }
+
+    /* Keep the full read size when there is less than a block of room.
+       Appending in user space lets the guard page report any overflow. */
+    uint8_t buf[block];
+    for (;;) {
+        ssize_t n = k_os_read_retry(fd, buf, sizeof buf);
+        if (n <= 0) return n == 0;
+        k_bld_append(out, buf, (int64_t)n);
+    }
+}
+#endif
+
 /* Appends the whole file; on a failure, nothing. */
 K_API uint8_t k_os_read_file(sl_u8 path, k_rref out) {
     k_os_char p[K_OS_PATH_MAX];
     if (k_os_native(path, p) < 0) return 0;
-    FILE *f = k_os_fopen(p, "rb");
-    if (!f) return 0;
     int64_t len = out.hdr->len;
     uint8_t *top = out.stk->top;
+#ifdef _WIN32
+    /* Windows commits data stack pages when user-space stores touch them. */
+    FILE *f = k_os_fopen(p, "rb");
+    if (!f) return 0;
     uint8_t buf[65536];
-    for (;;) {
+    while (!feof(f) && !ferror(f)) {
         size_t n = fread(buf, 1, sizeof buf, f);
         if (n == 0) break;
         k_bld_append(out, buf, (int64_t)n);
     }
-    int bad = ferror(f);
+    int ok = !ferror(f);
     fclose(f);
-    if (bad) {
+#else
+    int fd = open(p, O_RDONLY);
+    if (fd < 0) return 0;
+    int ok = k_os_read_fd(fd, out);
+    close(fd);
+#endif
+    if (!ok) {
         out.hdr->len = len;
         out.stk->top = top;
+    }
+    return (uint8_t)ok;
+}
+
+/* Active scoped readers in this thread. The ABI carries an ID instead of
+   accepting a FILE pointer from K. A closed ID cannot name a later stream. */
+typedef struct k_os_reader {
+    struct k_os_reader *next;
+    FILE *stream;
+    uint64_t id;
+} k_os_reader;
+
+static K_TLS k_os_reader *k_os_readers;
+static K_TLS uint64_t k_os_last_reader;
+
+static k_os_reader **k_os_reader_slot(uint64_t id) {
+    k_os_reader **slot = &k_os_readers;
+    while (*slot && (*slot)->id != id) slot = &(*slot)->next;
+    return slot;
+}
+
+K_API uint64_t k_os_reader_open(sl_u8 path) {
+    k_os_char p[K_OS_PATH_MAX];
+    if (k_os_last_reader == UINT64_MAX || k_os_native(path, p) < 0) return 0;
+    FILE *f = k_os_fopen(p, "rb");
+    if (!f) return 0;
+    k_os_reader *reader = (k_os_reader *)malloc(sizeof *reader);
+    if (!reader) {
+        fclose(f);
         return 0;
     }
-    return 1;
+    reader->next = k_os_readers;
+    reader->stream = f;
+    reader->id = ++k_os_last_reader;
+    k_os_readers = reader;
+    return reader->id;
+}
+
+K_API int64_t k_os_reader_read(uint64_t id, k_rref out, int64_t max) {
+    k_os_reader *reader = *k_os_reader_slot(id);
+    if (!reader || max < 0) return -1;
+    if (max == 0) return 0;
+    FILE *f = reader->stream;
+    if (ferror(f)) return -1;
+    uint8_t buf[65536];
+    size_t limit = max < (int64_t)sizeof buf ? (size_t)max : sizeof buf;
+    size_t n = fread(buf, 1, limit, f);
+    if (n == 0) return ferror(f) ? -1 : 0;
+    k_bld_append(out, buf, (int64_t)n);
+    return (int64_t)n;
+}
+
+K_API void k_os_reader_close(uint64_t id) {
+    k_os_reader **slot = k_os_reader_slot(id);
+    k_os_reader *reader = *slot;
+    if (!reader) return;
+    *slot = reader->next;
+    fclose(reader->stream);
+    free(reader);
 }
 
 /* write_file and append_file. */

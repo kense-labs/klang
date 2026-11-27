@@ -104,7 +104,7 @@ inline int Space(const Item &a, const Item &b) {
     if (b.roles & (R_TYPE_POSTFIX | R_ANGLE_CLOSE | R_GLUE_LEFT | R_GLUE)) return 0;
     if (a.roles & (R_GLUE | R_ANGLE_OPEN | R_UNARY)) return 0;
     switch (a.tok) {
-        case T_LPAREN: case T_LBRACKET: case T_DOT: case T_COLONCOLON: return 0;
+        case T_LPAREN: case T_LBRACKET: case T_DOT: case T_COLONCOLON: case T_AT: return 0;
         default: break;
     }
     if (b.tok == T_LCURLY) return 1;

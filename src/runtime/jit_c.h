@@ -41,6 +41,7 @@ void *malloc(size_t);
 void *calloc(size_t, size_t);
 void *realloc(void *, size_t);
 void free(void *);
+void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 int abs(int);
 
 #define K_JIT_MATH1(fn) double fn(double); float fn##f(float);

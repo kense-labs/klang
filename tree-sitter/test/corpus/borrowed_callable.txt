@@ -1,0 +1,28 @@
+=================
+Borrowed callable types
+=================
+
+fn apply(callback: fn&(i64) -> i64, value: i64) -> i64 {
+    callback(value)
+}
+
+---
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (function_type
+          (primitive_type)
+          (primitive_type)))
+      (parameter
+        (identifier)
+        (primitive_type)))
+    (primitive_type)
+    (block
+      (call_expression
+        (identifier)
+        (argument_list
+          (identifier))))))

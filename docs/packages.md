@@ -365,9 +365,14 @@ any build script; pinning a version expresses trust in that code.
   config                          cc = "clang";
   pkg/<host>/<owner>/<repo>/<ref>/   fetched packages, submodules included
   build/pkg/.../<toolchain>/      their native parts, per C compiler
+  build/native/v1-<digest>/       locked native builds and retained dependency sources
   build/runtime/<hash>/...        the runtime object, per C compiler and configuration
   build/prog/<name>-<hash>/       each program's C, objects and logs
   toolchain/                      what finding the C compiler took (vcvars on Windows)
 ```
 
 Deleting it loses nothing that a build cannot recreate.
+
+Use `k cache stats` to measure and `k cache prune --budget <bytes>` to
+reclaim idle runtime and locked native outputs while keeping their fetched
+sources for offline builds. [Cache usage and pruning](command_line.md#cache-usage-and-pruning)

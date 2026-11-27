@@ -406,6 +406,7 @@ inline string Call::CgX(CodeGen &cg) {
 // destination instead (FixedLitAt), since offsets from a temporary would
 // not survive the copy.
 inline string StructLit::CgX(CodeGen &cg) {
+    CodeGen::TaskLiteralScope inputs(cg, this);
     auto tv = cg.T();
     cg.FixedLocal(exprtype, tv, cg.HasUninitSlots(exprtype) ? "{0}" : "");
     cg.StructLitAt(this, tv, false);
@@ -631,18 +632,18 @@ inline void MatchExpr::CgAny(CodeGen &cg, const Dst &d) {
                 // By-value copy of a variable payload onto its own stack.
                 auto stk = cg.AllocStk(true);
                 cg.L("uint8_t *", bn, " = ", cg.Top(stk), ";");
-                cg.SaveBase(true, stk, bn);
+                cg.SaveBase(true, stk, bn, arm.binder);
                 cg.vstk[arm.binder] = stk;
                 auto sz = cg.T();
                 cg.L("int64_t ", sz, " = ", cg.SizeX(vt, payload), ";");
                 cg.L("K_MEMCPY(", cg.Top(stk), ", ", payload, ", (size_t)", sz, ");");
                 cg.Bump(stk, sz);
             } else if (EmptyLayout(variant->fields)) {
-                cg.FixedLocal(vt, bn, "{0}");
+                cg.FixedLocal(vt, bn, "{0}", false, arm.binder);
             } else if (!payload.empty()) {
-                cg.FixedLocal(vt, bn, cat("*(", cg.CT(vt), " *)(", payload, ")"), true);
+                cg.FixedLocal(vt, bn, cat("*(", cg.CT(vt), " *)(", payload, ")"), true, arm.binder);
             } else {
-                cg.FixedLocal(vt, bn, cat(sv, ".u.v_", cg.Sanitize(variant->name)), true);
+                cg.FixedLocal(vt, bn, cat(sv, ".u.v_", cg.Sanitize(variant->name)), true, arm.binder);
             }
             cg.vnames[arm.binder] = bn;
         }
@@ -869,11 +870,13 @@ inline void VarDecl::CgStmt(CodeGen &cg) {
         assert(c);
         vector<Dst> dsts;
         for (auto d : defs) {
-            if (cg.IsResz(d->type) || cg.IsBytesT(d->type)) {
+            if (d->task_pinned) {
+                dsts.push_back(cg.FreshLv(cg.BindPinnedTaskLocal(d, true), d->type));
+            } else if (cg.IsResz(d->type) || cg.IsBytesT(d->type)) {
                 dsts.push_back(cg.DeclStackLocal(d, true));
             } else {
                 auto name = cg.LocalName(d);
-                cg.FixedLocal(d->type, name, "", true);
+                cg.FixedLocal(d->type, name, "", true, d);
                 cg.vnames[d] = name;
                 dsts.push_back(Dst { DK_LVALUE, name, d->type });
             }
@@ -889,7 +892,7 @@ inline void Assign::CgStmt(CodeGen &cg) {
     // A plain store of a value that runs nothing (QuietValue) uses its
     // destination as soon as it is resolved.
     auto quiet = op == T_ASSIGN && !pointee && cg.QuietValue(rhs) && !cg.HasStmts(lval);
-    auto lv = quiet || !cg.StableDest(lval) ? cg.GenLocNow(lval) : cg.GenLoc(lval);
+    auto lv = !task_place && (quiet || !cg.StableDest(lval)) ? cg.GenLocNow(lval) : cg.GenLoc(lval);
     if (pointee) cg.DerefLoc(lv);
     // Resolve the destination before the RHS can rebind a reference or
     // change an index used by its C lvalue expression. A resizable one is
@@ -899,7 +902,7 @@ inline void Assign::CgStmt(CodeGen &cg) {
     // A destination neither can move, or that a quiet value cannot move, is
     // stored to as it is spelled (StableDest).
     if (lv.val) {
-        if (!quiet && (lv.viaref || lv.ispref || !cg.StableDest(lval))) {
+        if (!task_place && !quiet && (lv.viaref || lv.ispref || !cg.StableDest(lval))) {
             auto p = cg.T();
             cg.L(lv.ispref ? string("k_pref") : cg.CT(lv.t), " *", p, " = &(", lv.s, ");");
             lv.s = cat("(*", p, ")");
@@ -925,7 +928,8 @@ inline void Assign::CgStmt(CodeGen &cg) {
     // before writing any member of the destination.
     if (op != T_ASSIGN) {
         assert(lv.val);
-        auto old = cg.HasStmts(rhs) ? cg.Snapshot(lv.t, lv.s) : lv.s;
+        auto old = cg.TaskOperandType(lval) ? cg.GenTaskOperand(lval, [&] { return lv.s; })
+                 : cg.HasStmts(rhs) ? cg.Snapshot(lv.t, lv.s) : lv.s;
         if (lv.t->kind == TY_STRUCT || lv.t->kind == TY_ARRAY) {
             auto r = cg.GenPureVal(rhs);
             cg.GenElemwiseInto(lv.t, op, line, old, r, lv.s, false,
@@ -953,6 +957,7 @@ inline void Assign::CgStmt(CodeGen &cg) {
     if (cg.IsResz(t)) {
         // Whole-resizable assignment: clear (top back to the value start),
         // then construct the new contents in place (§4.4).
+        cg.CheckTaskArrayShrink(lv, line);
         if (cg.IsFrameObj(t) && lv.val) {
             assert(!lv.stk.empty());
             cg.L(cg.TopW(lv.stk), " = ", cg.FoTailHdr(t, lv.s), ".base;");
@@ -975,9 +980,30 @@ inline void Assign::CgStmt(CodeGen &cg) {
         cg.L("int64_t ", nn, " = (int64_t)*(k_u32 *)(", src, " + 4);");
         cg.L("if (", nn, " > ", cg.LimitedCap(lv), ") k_abort(K_E_CAPACITY, ",
              cg.LocArgs(line), ");");
+        cg.CheckTaskArrayShrink(lv, line);
         cg.L("*(k_u32 *)((", lv.s, ") + 4) = (uint32_t)", nn, ";");
         cg.L("K_MEMCPY((", lv.s, ") + 8, ", src, " + 8, (size_t)(", nn, " * ",
           cg.FixedSize(t->arr->sub), "));");
+        return;
+    }
+    if (cg.ast.has_task_loans && cg.HasInlineTaskArray(t)) {
+        if (cg.HasRelRef(t)) {
+            // Relative offsets measure from the final destination. Check
+            // the lease before any of its bytes are rebuilt.
+            cg.CheckTaskFixedReplacement(lv, line);
+            cg.GenAny(rhs, Dst { DK_LVALUE, lv.s, t });
+        } else {
+            // A copied RHS may advance another task before the store.
+            auto value = cg.GenXD(rhs, t);
+            cg.CheckTaskFixedReplacement(lv, line);
+            cg.L(lv.s, " = ", value, ";");
+        }
+        return;
+    }
+    if (cg.TaskHolderWrite(t) && !cg.HasRelRef(t)) {
+        auto value = cg.Snapshot(t, cg.GenXD(rhs, t));
+        cg.CheckTaskHolderWrite(lv, line);
+        cg.L(lv.s, " = ", value, ";");
         return;
     }
     // A small aggregate variable goes out as one store of its width, as a
@@ -997,6 +1023,12 @@ inline void IncDec::CgStmt(CodeGen &cg) {
     auto lv = cg.GenLoc(lval);
     if (lv.t->kind == TY_REF) cg.DerefLoc(lv);
     assert(lv.val);
+    // Resolve a dynamic destination once for both the load and the store.
+    if (!cg.StableDest(lval)) {
+        auto p = cg.T();
+        cg.L(cg.CT(lv.t), " *", p, " = &(", lv.s, ");");
+        lv.s = cat("(*", p, ")");
+    }
     cg.L(lv.s, " = ", cg.ArithX(op == T_INC ? T_PLUS : T_MINUS, lv.t, lv.s, "1", line), ";");
 }
 
@@ -1036,7 +1068,9 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     CodeGen::ViewScope vs(cg, hoistrefs, hoistfields);
     auto iv = cg.LocalName(vdef);
     auto ix = idxdef ? cg.LocalName(idxdef) : "";
+    auto frame = task_resumable ? cat("f->loop", cg.task_flow->loops.at(this), ".") : string();
     if (iterkind == IK_RANGE || iterkind == IK_COUNT) {
+        if (!frame.empty() && idxdef) cg.vnames[idxdef] = ix = frame + "index";
         // The loop variable runs at the range's own type: narrow counters
         // stay narrow through the body (§6.5). A binder whose type ends
         // where the range does (`for i: u8 in 0..256`) is a copy of a counter
@@ -1046,16 +1080,21 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
         auto ict = cg.CT(ct);
         string lov = "0";
         if (r) {
-            auto lo = cg.GenX(r->lo);
-            lov = cg.T();
-            cg.L(ict, " ", lov, " = ", lo, ";");
+            if (cg.TaskOperandType(r->lo)) {
+                lov = cg.GenTaskOperand(r->lo, [&] { return cg.GenX(r->lo); });
+            } else {
+                auto lo = cg.GenX(r->lo);
+                lov = cg.T();
+                cg.L(ict, " ", lov, " = ", lo, ";");
+            }
         }
         auto hi = cg.GenX(r ? r->hi : iter);
-        auto hiv = cg.T();
-        cg.L(ict, " ", hiv, " = ", hi, ";");
-        if (!ix.empty()) cg.L("int64_t ", ix, " = 0;");
+        auto hiv = frame.empty() ? cg.T() : frame + "end";
+        cg.L(frame.empty() ? ict + " " : "", hiv, " = ", hi, ";");
+        if (!ix.empty()) cg.L(frame.empty() ? "int64_t " : "", ix, " = 0;");
         auto wide = ct->intstorage != vdef->type->intstorage;
-        auto ctr = wide ? cg.T() : iv;
+        auto ctr = frame.empty() ? (wide ? cg.T() : iv) : frame + "counter";
+        if (!frame.empty() && !wide) cg.vnames[vdef] = ctr;
         auto bind = [&]() {
             if (wide) cg.L(cg.CT(vdef->type), " ", iv, " = (", cg.CT(vdef->type), ")", ctr, ";");
         };
@@ -1071,7 +1110,8 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
             return;
         }
         cg.GenLoopBody(bind, body, d,
-            cat("for (", ict, " ", ctr, " = ", lov, "; ", ctr, " < ", hiv, "; ", step, ") {"),
+            cat("for (", frame.empty() ? ict + " " : "", ctr, " = ", lov, "; ",
+                ctr, " < ", hiv, "; ", step, ") {"),
             nullptr, 0, { vdef, idxdef });
         return;
     }
@@ -1081,9 +1121,40 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     // on its path are loaded again each iteration and the sequence is walked
     // where it lies: the checker keeps the arrays those lie in from shrinking
     // in the body (HoldForSequence).
-    auto lv = cg.GenLoc(iter);
-    if (lv.t->kind == TY_REF) cg.DerefLoc(lv);
-    auto v = cg.ArrayView(lv);
+    auto slice = frame.empty() ? nullptr : Is<SliceExpr>(iter);
+    auto sampled_ref = slice && slice->obj->exprtype->kind == TY_REF;
+    CodeGen::Loc lv;
+    if (sampled_ref) {
+        // The reference can be rebound later. Save the evaluated range
+        // itself under the caller's loan of the original array.
+        lv.s = frame + "view";
+        cg.GenSlice(slice, lv.s);
+        lv.t = iter->exprtype;
+        lv.val = true;
+    } else {
+        lv = cg.GenLoc(slice ? slice->obj : iter);
+        if (lv.t->kind == TY_REF) cg.DerefLoc(lv);
+    }
+    auto v = cg.ArrayView(lv, !frame.empty());
+    if (sampled_ref) {
+        v.elems = cat("(uint8_t *)(", v.elems, ")");
+        v.typedelems = false;
+    } else if (slice && task_sequential) {
+        // The checker only allows whole slices of variable-size elements.
+        cg.L(frame, "count = ", v.len, ";");
+        v.len = frame + "count";
+    } else if (slice) {
+        auto length = cg.Snapshot(cg.ast.inttypes[IS_I64], v.len);
+        auto [first, end] = cg.GenSliceBounds(slice, length);
+        cg.L(frame, "first = ", first, ";");
+        cg.L(frame, "count = ", end, " - ", first, ";");
+        // A typed array member can be packed. Reconstruct the byte view
+        // so the element load uses the backend's unaligned storage type.
+        auto offset = cat(frame, "first * ", cg.FixedSize(v.elem));
+        v.elems = cat("((uint8_t *)(", v.elems, ") + ", offset, ")");
+        v.typedelems = false;
+        v.len = frame + "count";
+    }
     // Where BCE proved the body cannot resize it, both halves of the view are
     // loop-invariant. Only a length that is an actual memory load is worth
     // spelling as a local: that is the one the C backend cannot hoist for
@@ -1101,15 +1172,16 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
         v.len = nv;
         v.elems = bv;
     };
-    if (fixedlen && memlen) hoist();
+    if (frame.empty() && fixedlen && memlen) hoist();
     // A body that re-points a slice on the path, or rebinds a reference on it,
     // moves the walk to the elements the path leads to now, as the length read
     // again does: the next iteration takes the element at its index there. An
     // array's elements, and a resizable's, stay where they are otherwise.
-    auto moves = !fixedlen && (lv.t->kind == TY_SLICE || lv.viaref);
+    auto moves = !sampled_ref && !fixedlen && (lv.t->kind == TY_SLICE || lv.viaref);
     // An index binder of a type of its own is a copy of the i64 counter.
     auto typedix = idxdef && idxdef->type->intstorage != IS_I64;
-    auto gi = ix.empty() || typedix ? cg.T() : ix;
+    auto gi = frame.empty() ? (ix.empty() || typedix ? cg.T() : ix) : frame + "counter";
+    if (!frame.empty() && idxdef && !typedix) cg.vnames[idxdef] = gi;
     auto bindix = [&]() {
         if (typedix)
             cg.L(cg.CT(idxdef->type), " ", ix, " = (", cg.CT(idxdef->type), ")", gi, ";");
@@ -1142,6 +1214,39 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
         cg.L("if (", gi, " >= (", v.len, ")) goto ", cg.cscopes[si].brklbl, ";");
         cg.cscopes[si].usedbrk = true;
     };
+    if (task_sequential) {
+        assert(!held && !vdef->copybind);
+        auto offset = frame + "offset";
+        auto identity = frame + "base";
+        auto view = Is<Ident>(iter);
+        auto rebind = view && view->vdef->isvar &&
+                      (iterkind == IK_SLICE || iter->exprtype->kind == TY_REF);
+        cg.L(offset, " = 0;");
+        if (rebind) cg.L(identity, " = 0;");
+        cg.GenLoopBody([&]() {
+            auto base = cg.T();
+            cg.L("uint8_t *", base, " = (uint8_t *)(", v.elems, ");");
+            if (rebind) {
+                cg.L("if (", identity, " != (uintptr_t)", base, ") {");
+                cg.ind++;
+                cg.L(identity, " = (uintptr_t)", base, ";");
+                cg.L(offset, " = 0;");
+                auto k = cg.T();
+                cg.L("for (int64_t ", k, " = 0; ", k, " < ", gi, "; ", k, "++) ", offset, " += ",
+                     cg.SizeX(v.elem, cat(base, " + ", offset)), ";");
+                cg.ind--;
+                cg.L("}");
+            }
+            bindix();
+            cg.L("uint8_t *", iv, " = ", base, " + ", offset, ";");
+            // The current element's encoded size cannot change in place.
+            // Advance before polling so a rebound view never dereferences
+            // the previous base, and cancellation has nothing to advance.
+            cg.L(offset, " += ", cg.SizeX(v.elem, iv), ";");
+        }, body, d, cat("for (", gi, " = 0; ", gi, " < ", bound, "; ", gi, "++) {"),
+           nullptr, 0, { vdef, idxdef });
+        return;
+    }
     if (!cg.IsFix(v.elem)) {
         // Sequential walk, &-binding only; the cursor advances in the
         // increment clause so `continue` behaves.
@@ -1220,7 +1325,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
             else
                 cg.L(cg.CT(et), " ", iv, " = ", target, ";");
         } else {
-            cg.FixedLocal(et, iv, elem, true);
+            cg.FixedLocal(et, iv, elem, true, vdef);
             cg.vnames[vdef] = iv;
         }
     };
@@ -1250,7 +1355,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     // NULL, and NULL + 0 is undefined in C, so the end is only computed for a
     // sequence that has some. The test is `<`: with `!=`, clang loses the
     // bound it knows on a short loop's trip count and no longer unrolls it.
-    if (!idxdef && fixedlen && !fixedarr && !exitlen && CodeGen::CallsRecursive(body)) {
+    if (frame.empty() && !idxdef && fixedlen && !fixedarr && !exitlen && CodeGen::CallsRecursive(body)) {
         if (!memlen) hoist();
         at = v.elems;
         auto endp = cg.T();
@@ -1270,11 +1375,16 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     cg.GenLoopBody([&]() {
         testlen();
         bind();
-    }, body, d, cat("for (int64_t ", gi, " = 0; ", gi, " < ", bound, "; ", gi, "++) {"),
+    }, body, d, cat("for (", frame.empty() ? "int64_t " : "", gi, " = 0; ", gi, " < ", bound,
+                    "; ", gi, "++) {"),
        nullptr, 0, { vdef, idxdef });
 }
 
 inline void Return::CgStmt(CodeGen &cg) {
+    if (task_exit) {
+        cg.GenTaskReturn(this);
+        return;
+    }
     // Exiting an inlined body?
     for (auto i = (int)cg.cscopes.size() - 1; i >= 0; i--) {
         if (cg.cscopes[i].kind == CodeGen::SC_IB && cg.cscopes[i].ibsf == target) {
@@ -1297,7 +1407,9 @@ inline void Return::CgStmt(CodeGen &cg) {
 }
 
 inline void Break::CgStmt(CodeGen &cg) { cg.GenBreakPath(val); }
-inline void Defer::CgStmt(CodeGen &cg) { cg.RegisterDefer(this); }
+inline void Defer::CgStmt(CodeGen &cg) {
+    if (!task_transfer || cg.curspec->task_exit) cg.RegisterDefer(this);
+}
 inline void Continue::CgStmt(CodeGen &cg) {
     auto si = -1;
     for (auto i = (int)cg.cscopes.size() - 1; i >= 0; i--) {

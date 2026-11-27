@@ -1,0 +1,7 @@
+cleanup 11 2
+direct 20
+cleanup 25 3
+scoped 36
+cleanup 11 3
+cleanup 40 10
+local 45

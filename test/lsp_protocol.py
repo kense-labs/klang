@@ -44,8 +44,8 @@ def uri_of(path):
 
 
 class Client:
-    def __init__(self, exe, cwd):
-        self.p = subprocess.Popen([exe, "lsp"], cwd=cwd, stdin=subprocess.PIPE,
+    def __init__(self, exe, cwd, *, args=(), env=None):
+        self.p = subprocess.Popen([exe, "lsp", *args], cwd=cwd, env=env, stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.seq = 0
         self.pending = []    # Notifications read while waiting for a reply.
@@ -731,6 +731,9 @@ def check_lsp_protocol(exe, base):
     pools = fixtures / "pools.k"
     ptext = pools.read_text(encoding="utf-8")
     queries(pools, ptext, open_fixture(pools, ptext))
+    decorators = fixtures / "decorator_declarations.k"
+    dtext = decorators.read_text(encoding="utf-8")
+    queries(decorators, dtext, open_fixture(decorators, dtext))
     # Generic functions nothing calls, which the server checks as exemplars:
     # the queries answer from them, and one whose body no binding could make
     # right reports nothing, as `k check` does not (its errors_tc

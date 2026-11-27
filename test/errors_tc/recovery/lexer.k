@@ -1,5 +1,5 @@
 // error: unknown escape sequence: \q
-// error: illegal character: '@'
+// error: illegal character: '#' (35)
 // error: illegal character: '©' (U+00A9)
 // error: expected closing ' of character literal
 // error: unterminated string literal
@@ -11,7 +11,7 @@
 // the blocks still open there as well, which report nothing more.
 fn main() {
     let s = "bad\q";
-    let e = 3 @ 4;
+    let e = 3 # 4;
     let u = 3 © 4;
     let c = 'ab';
     let t = "open

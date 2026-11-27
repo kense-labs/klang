@@ -43,6 +43,8 @@ struct NativeBuild {
     string dir;       // Where it was built.
     string rsp;       // The response file an AOT link takes.
     string jitlib;    // The shared library a JIT run loads.
+    string dependencies; // Persistent FetchContent sources beside a managed build.
+    unique_ptr<FileLock> lease;
 };
 
 // Where the package `pkg`'s native part is built by `b`: under the
@@ -56,111 +58,15 @@ inline string NativeBuildDir(const Ast &ast, int pkg, const string &rootfile, co
     return cat(KlangHome(), "/build/pkg/local/", Hex8(p.root), "/", b.tc.id);
 }
 
-// The C symbols a file's extern fns name: `extern fn f(...) = "sym"` (or the
-// deprecated `extern "sym" fn f`) gives sym, `extern fn f` or `extern fn
-// ns::f` gives the leaf name (§7.10). Read by the lexer alone, since this is
-// asked of files the program never parsed. The libraries the file's extern
-// blocks name go into `libs`, where it is given.
-inline void ExternNamesIn(const string &path, const string &text, set<string> &names,
-                          set<string> *libs = nullptr) {
-    Lexer lex(path, text.c_str());
-    while (lex.tok != T_EOF) {
-        if (lex.tok != T_EXTERN) {
-            lex.Next();
-            continue;
-        }
-        lex.Next();
-        string cname;
-        if (lex.tok == T_STRLIT) {
-            cname = lex.sval;
-            lex.Next();
-        }
-        // An extern block's functions come from its shared library (§7.10),
-        // not from the native part: skipped through its `}`.
-        if (lex.tok == T_LCURLY) {
-            if (libs && !cname.empty()) libs->insert(cname);
-            auto depth = 0;
-            do {
-                if (lex.tok == T_LCURLY) depth++;
-                else if (lex.tok == T_RCURLY) depth--;
-                lex.Next();
-            } while (depth > 0 && lex.tok != T_EOF);
-            continue;
-        }
-        if (lex.tok != T_FN) continue;
-        lex.Next();
-        if (lex.tok == T_IDENT) {
-            string leaf(lex.attr);
-            lex.Next();
-            if (lex.tok == T_COLONCOLON) {
-                lex.Next();
-                if (lex.tok == T_IDENT) leaf = string(lex.attr);
-            }
-            // Past the signature to its `;`: an `=` outside the parameters'
-            // parentheses (where defaults have theirs) is the symbol's.
-            auto parens = 0;
-            while (lex.tok != T_SEMI && lex.tok != T_EOF && lex.tok != T_EXTERN) {
-                if (lex.tok == T_LPAREN) parens++;
-                else if (lex.tok == T_RPAREN) parens--;
-                else if (lex.tok == T_ASSIGN && parens == 0) {
-                    lex.Next();
-                    if (lex.tok == T_STRLIT) cname = lex.sval;
-                    continue;
-                }
-                lex.Next();
-            }
-            if (cname.empty()) cname = leaf;
-        }
-        if (!cname.empty()) names.insert(cname);
-    }
-}
-
-// Whether the directory `dir` holds a sidecar, which makes it a program or
-// package of its own.
-inline bool HasSidecar(const filesystem::path &dir) {
-    std::error_code ec;
-    for (filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
-        if (it->path().extension() == ".build" && it->is_regular_file(ec)) return true;
-    return false;
-}
-
-// Every C symbol the package's extern fns name: for the program, those of
-// the files it parsed; for a library, those of every .k file under its
-// root, so that the library built once serves whatever modules a program
-// imports from it. That leaves out the directories its sidecar excludes and
-// those below the root with a sidecar of their own, such as an example
-// program with C of its own.
-inline vector<string> PackageExternNames(const Ast &ast, int pkg, set<string> *libs = nullptr) {
+// The program's native part only needs symbols from its loaded source files.
+inline vector<string> NativeExternNames(const Ast &ast, int pkg) {
+    if (pkg != 0) return PackageExternNames(ast.packages[pkg]);
     set<string> names;
-    if (pkg == 0) {
-        for (size_t i = 0; i < ast.sources.size(); i++)
-            if (ast.filepkg[i] == pkg) {
-                try {
-                    ExternNamesIn(ast.sources[i].first, *ast.sources[i].second, names, libs);
-                } catch (CompileError &) {}
-            }
-    } else {
-        auto &p = ast.packages[pkg];
-        std::error_code ec;
-        filesystem::recursive_directory_iterator it(filesystem::path(p.root), ec), end;
-        for (; !ec && it != end; it.increment(ec)) {
-            auto path = ForwardSlashes(it->path().string());
-            std::error_code fec;
-            if (it->is_directory(fec)) {
-                auto dir = path + "/";
-                if (std::find(p.exclude.begin(), p.exclude.end(), dir) != p.exclude.end() ||
-                    HasSidecar(it->path()))
-                    it.disable_recursion_pending();
-                continue;
-            }
-            auto ext = it->path().extension();
-            if (ext != ".k" || !it->is_regular_file(fec)) continue;
-            string text;
-            if (!LoadSource(path, text)) continue;
-            try {
-                ExternNamesIn(path, text, names, libs);
-            } catch (CompileError &) {}   // A file that does not lex has no externs to offer.
-        }
+    for (size_t i = 0; i < ast.sources.size(); i++) {
+        if (ast.filepkg[i] != pkg) continue;
+        try {
+            ExternNamesIn(ast.sources[i].first, *ast.sources[i].second, names);
+        } catch (CompileError &) {}
     }
     return vector<string>(names.begin(), names.end());
 }
@@ -190,6 +96,65 @@ inline string KlangHeader() {
     for (auto &rf : runtime_files)
         if (string_view(rf.name) == "klang.h") return string(rf.text);
     return {};
+}
+
+inline filesystem::path LockedNativeEntry(const Package &pkg, const Builder &b, bool wantjit,
+                                           string_view sidecar, string_view externs) {
+    if (pkg.revision.empty()) return {};
+    std::error_code ec;
+    auto root = filesystem::weakly_canonical(filesystem::path(pkg.root), ec);
+    if (ec) return {};
+    auto within_checkout = [&](const string &path) {
+        std::error_code error;
+        auto real = filesystem::weakly_canonical(filesystem::path(path), error);
+        auto relative = real.lexically_relative(root);
+        return !error && !relative.empty() && *relative.begin() != "..";
+    };
+    // Local overrides outside the commit are not locked build inputs.
+    for (auto files : { &pkg.csources, &pkg.cincludes, &pkg.cheaders })
+        if (!all_of(files->begin(), files->end(), within_checkout)) return {};
+
+    string input;
+    auto add = [&](string_view part) { Append(input, part, '\0'); };
+    add("native-package-v1");
+    add(pkg.revision);
+    add(pkg.name);
+    // An absolute checkout path affects __FILE__, include search and the
+    // response files CMake produces, even for identical Git trees.
+    add(root.string());
+    add(Sha256(sidecar));
+    add(Sha256(externs));
+    add(Sha256(KlangHeader()));
+    AppendToolchainIdentity(input, b);
+    for (auto name : { "LIBRARY_PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "LIB" }) {
+        add(name);
+        if (auto value = getenv(name)) add(value);
+    }
+    auto file = [&](const string &path) {
+        add(path);
+        add(Sha256File(path).value_or("missing"));
+    };
+    for (const auto &path : pkg.csources) file(path);
+    for (const auto &path : pkg.cheaders) file(path);
+    if (!pkg.cmake_target.empty()) {
+        // An upgrade from link-probe to a shared target may rebuild its
+        // dependencies. Give those build graphs separate output trees.
+        add(wantjit ? "cmake-jit" : "cmake-aot");
+        file(cat(pkg.root, "CMakeLists.txt"));
+        for (const auto &tool : { CMakePath(), NinjaPath(), b.tc.cxx }) {
+            add(tool);
+            if (!tool.empty()) add(BuildPathIdentity(tool));
+        }
+        for (auto name : { "CC", "CXX", "CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS", "OBJCFLAGS",
+                           "OBJCXXFLAGS", "CMAKE_GENERATOR", "CMAKE_GENERATOR_PLATFORM",
+                           "CMAKE_GENERATOR_TOOLSET", "CMAKE_TOOLCHAIN_FILE", "CMAKE_PREFIX_PATH",
+                           "PKG_CONFIG_PATH" }) {
+            add(name);
+            if (auto value = getenv(name)) add(value);
+        }
+    }
+    return filesystem::path(AbsolutePath(KlangHome())) / "build/native" /
+           cat(NativeCachePrefix, Sha256(input));
 }
 
 inline string NativeIncludeDir(const NativeBuild &out) { return cat(out.dir, "/include"); }
@@ -371,8 +336,9 @@ inline bool BuildCMakePart(const Ast &ast, int pkg, const Builder &b, bool wantj
             argv.push_back(cat("-DCMAKE_CXX_COMPILER=", b.tc.cxx.empty() ? b.tc.cc : b.tc.cxx));
         #endif
     }
+    if (!out.dependencies.empty()) argv.push_back(cat("-DFETCHCONTENT_BASE_DIR=", out.dependencies));
     for (auto &o : p.cmake_options) argv.push_back(cat("-D", o));
-    if (package_nofetch) argv.push_back("-DFETCHCONTENT_FULLY_DISCONNECTED=ON");
+    if (b.opts.offline) argv.push_back("-DFETCHCONTENT_FULLY_DISCONNECTED=ON");
     // The configure command that last succeeded. Another one starts from a
     // fresh cache, as `cmake --fresh` would, so that an option taken out of
     // cmake_options does not stay in force.
@@ -440,6 +406,20 @@ inline string ReadStamp(const string &path) {
     return s;
 }
 
+inline bool NativeSharedOutput(const filesystem::path &path) {
+    if (!CacheDirectory(path)) return false;
+    std::error_code ec;
+    for (filesystem::recursive_directory_iterator it(path, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        auto name = it->path().filename().string();
+        if (name.ends_with(".dll") || name.ends_with(".dylib") || name.ends_with(".so") ||
+            name.find(".so.") != string::npos)
+            if (!CacheDirectory(it->path())) return true;
+    }
+    CheckCacheRead(path, ec);
+    return false;
+}
+
 // Builds the package's native part with the toolchain the program is built
 // with, unless the build there is up to date with its inputs (the sidecar,
 // the C sources, the toolchain), and names what was built in `out`. The JIT
@@ -458,7 +438,21 @@ inline bool BuildNativePart(const Ast &ast, int pkg, const string &rootfile,
     auto opts = program.opts;
     opts.debug = opts.debug && pkg == 0 && p.cmake_target.empty();
     Builder b { program.tc, opts, program.msgs };
-    auto dir = NativeBuildDir(ast, pkg, rootfile, b);
+    // The sidecar's path absolute, as the sources' are: the program's own
+    // is as the command line named the program, and a build that named it
+    // another way is the same build.
+    auto inputs = p.csources;
+    inputs.push_back(ForwardSlashes(AbsolutePath(p.sidecar)));
+    string sidecartext;
+    LoadFile(p.sidecar, sidecartext);
+    // The JIT library's symbol table names every extern fn, so a new one
+    // rebuilds it.
+    auto externs = NativeExternNames(ast, pkg);
+    string externtext;
+    for (auto &n : externs) Append(externtext, n, "\n");
+    auto entry = LockedNativeEntry(p, b, wantjit, sidecartext, externtext);
+    auto dir = entry.empty() ? NativeBuildDir(ast, pkg, rootfile, b)
+                             : (entry / NativeOutputDir).string();
     out.dir = dir;
     out.rsp = cat(dir, "/link-", b.tc.style, ".rsp");
     #ifdef _WIN32
@@ -469,22 +463,23 @@ inline bool BuildNativePart(const Ast &ast, int pkg, const string &rootfile,
         auto jitext = ".so";
     #endif
     out.jitlib = cat(dir, "/k_jit_", p.name, jitext);
-    // The sidecar's path absolute, as the sources' are: the program's own
-    // is as the command line named the program, and a build that named it
-    // another way is the same build.
-    auto inputs = p.csources;
-    inputs.push_back(ForwardSlashes(AbsolutePath(p.sidecar)));
-    string sidecartext;
-    LoadFile(p.sidecar, sidecartext);
-    // The JIT library's symbol table names every extern fn, so a new one
-    // rebuilds it.
-    auto externs = PackageExternNames(ast, pkg);
-    string externtext;
-    for (auto &n : externs) Append(externtext, n, "\n");
+    if (!entry.empty() && !p.cmake_target.empty())
+        out.dependencies = (entry / NativeDependencyDir).string();
+    auto make_dir = [](const filesystem::path &path) {
+        std::error_code ec;
+        filesystem::create_directories(path, ec);
+        if (ec) throw CompileError { cat("cannot create ", path.string(), ": ", ec.message()) };
+    };
+    if (!entry.empty() && !b.opts.dryrun) {
+        make_dir(entry.parent_path());
+        out.lease = make_unique<FileLock>(ArtifactLeasePath(entry), "waiting for native cache pruning",
+                                          FileLock::Mode::Shared);
+    }
     // The stamp: what the build was made from, then whether it holds the
     // JIT library besides everything an AOT build has.
-    auto made = cat(b.tc.id, "\n", FilesHash(inputs), "\n", Hex8(sidecartext), "\n",
-                    Hex8(externtext), "\n", Hex8(KlangHeader()), "\n");
+    auto made = entry.empty() ? cat(b.tc.id, "\n", FilesHash(inputs), "\n", Hex8(sidecartext), "\n",
+                                    Hex8(externtext), "\n", Hex8(KlangHeader()), "\n")
+                              : cat(entry.filename().string(), "\n");
     auto aotstamp = cat(made, "aot\n"), jitstamp = cat(made, "jit\n");
     auto stampfile = cat(dir, "/stamp");
     // Whether the build there serves this one. A CMake package from a path
@@ -496,13 +491,12 @@ inline bool BuildNativePart(const Ast &ast, int pkg, const string &rootfile,
                (!wantjit || PathExists(out.jitlib));
     };
     if (!b.opts.dryrun && serves(ReadStamp(stampfile))) return true;
-    std::error_code ec;
-    filesystem::create_directories(filesystem::path(dir), ec);
     // One build at a time, and one that waited finds what the one before it
     // built. A dry run builds nothing, and needs no lock.
     optional<FileLock> lock;
     string have;
     if (!b.opts.dryrun) {
+        make_dir(dir);
         lock.emplace(cat(dir, "/build.lock"),
                      cat("waiting for another klang building the package ", p.name, "'s C"));
         have = ReadStamp(stampfile);
@@ -513,7 +507,16 @@ inline bool BuildNativePart(const Ast &ast, int pkg, const string &rootfile,
     if (!b.opts.dryrun) WriteKlangHeader(out);
     if (!p.cmake_target.empty()) {
         if (!BuildCMakePart(ast, pkg, b, wantjit, externs, out)) return false;
-        if (!b.opts.dryrun) WriteFileIfChanged(stampfile, wantjit ? jitstamp : aotstamp);
+        // An executable may embed a shared dependency's path or load it
+        // later. Its lifetime is independent of this build process.
+        if (!b.opts.dryrun && !entry.empty() && !wantjit &&
+            (NativeSharedOutput(dir) || NativeSharedOutput(out.dependencies))) {
+            auto marker = (filesystem::path(dir) / NativeRuntimeMarker).string();
+            if (!WriteFileIfChanged(marker, "retained for AOT runtime use\n"))
+                throw CompileError { cat("cannot publish ", marker) };
+        }
+        if (!b.opts.dryrun && !WriteFileIfChanged(stampfile, wantjit ? jitstamp : aotstamp))
+            throw CompileError { cat("cannot publish ", stampfile) };
         return true;
     }
     // Where only the JIT library is missing, the objects already made from
@@ -571,7 +574,8 @@ inline bool BuildNativePart(const Ast &ast, int pkg, const string &rootfile,
                           cat("building the package ", p.name, "'s library for the JIT")))
             return false;
     }
-    if (!b.opts.dryrun) WriteFileIfChanged(stampfile, wantjit ? jitstamp : aotstamp);
+    if (!b.opts.dryrun && !WriteFileIfChanged(stampfile, wantjit ? jitstamp : aotstamp))
+        throw CompileError { cat("cannot publish ", stampfile) };
     return true;
 }
 

@@ -1,0 +1,30 @@
+=================
+Concrete closures
+=================
+
+fn make() {
+    fn[bias: i64 = 2](x: i64) -> i64 { bias + x }
+}
+
+---
+
+(source_file
+  (function_declaration
+    (identifier)
+    (parameters)
+    (block
+      (closure_expression
+        (closure_captures
+          (closure_capture
+            (identifier)
+            (primitive_type)
+            (int_literal)))
+        (closure_parameters
+          (closure_parameter
+            (identifier)
+            (primitive_type)))
+        (primitive_type)
+        (block
+          (binary_expression
+            (identifier)
+            (identifier)))))))

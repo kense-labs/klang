@@ -93,6 +93,7 @@ struct Diagnostic {
     struct Related { DiagLoc where; string message; };
     vector<Related> related;
     string text;                // As the terminal shows it.
+    string source;              // An optional origin for supplemental diagnostics.
 };
 
 // The text the terminal shows for d: `file:line: error: message` (the message

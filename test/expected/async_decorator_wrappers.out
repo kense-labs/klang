@@ -1,0 +1,27 @@
+argument
+prepared outer
+enter outer
+enter inner
+body 6
+leaf cleanup
+leave inner
+leave outer
+join 15
+enter outer
+leave outer
+enter outer
+enter inner
+body 9
+leaf cleanup
+leave inner
+leave outer
+enter inner
+leave inner
+parent 15
+enter inner
+leave inner
+scoped 23
+enter inner
+leave inner
+holder 4
+branch 9

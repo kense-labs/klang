@@ -245,11 +245,15 @@ struct Analysis {
             }
         };
         for (auto sf : a.functions) {
-            auto o = decl(Occurrence::FN);
-            o.sf = sf;
-            view(o, sf->line.fileidx, sf->name);
-            generics(sf->generics);
+            if (sf->task_join || sf->task_stage) continue;
+            if (!sf->closure_body) {
+                auto o = decl(Occurrence::FN);
+                o.sf = sf;
+                view(o, sf->line.fileidx, sf->name);
+                generics(sf->generics);
+            }
             for (auto &p : sf->params) {
+                if (p.name == kClosureEnv) continue;
                 auto po = decl(Occurrence::PARAM);
                 po.sf = sf;
                 po.param = &p;
@@ -258,6 +262,7 @@ struct Analysis {
             }
         }
         for (auto st : a.structs) {
+            if (st->closure || st->task_frame || st->callable_arity >= 0) continue;
             auto o = decl(Occurrence::STRUCT);
             o.st = st;
             view(o, st->line.fileidx, st->name);
@@ -367,7 +372,7 @@ struct Analysis {
                 }
             } else if (auto sl = Is<StructLit>(n)) {
                 for (size_t i = 0; i < sl->inits.size(); i++) {
-                    if (sl->inits[i].name.empty()) continue;
+                    if (sl->Closure() || sl->inits[i].name.empty()) continue;
                     auto o = decl(Occurrence::INIT);
                     o.node = n;
                     o.index = (int)i;
@@ -446,7 +451,8 @@ struct Analysis {
             return start;
         };
         for (auto sf : a.functions) {
-            if (sf->body) visit(sf->body, false);
+            auto source = sf->decorator_written ? sf->decorator_written : sf->body;
+            if (auto body = sf->async_body ? sf->async_body : source) visit(body, false);
             for (auto &p : sf->params) if (p.defaultval) visit(p.defaultval, false);
         }
         for (auto st : a.structs)
@@ -523,11 +529,12 @@ struct Analysis {
                 if (c->fvbody) {
                     // The block's parameters, where the block spells them.
                     if (auto it = funvals.find(c->fvbody->Origin()); it != funvals.end())
-                        for (size_t i = 0; i < c->fvparams.size() && i < it->second->params.size(); i++) {
-                            auto &p = it->second->params[i];
-                            if (p.line.line <= 0 || !infile(p.line.fileidx)) continue;
-                            auto off = files[(size_t)p.line.fileidx].text.OffsetOf(p.line.line, p.line.col);
-                            if (off >= 0) bind(c->fvparams[i], Place { p.line.fileidx, (size_t)off, p.name.size() });
+                        for (auto v : c->fvparams) {
+                            auto &params = it->second->params;
+                            auto p = find_if(params.begin(), params.end(), [&](const Param &p) { return p.name == v->name; });
+                            if (p == params.end() || p->line.line <= 0 || !infile(p->line.fileidx)) continue;
+                            auto off = files[(size_t)p->line.fileidx].text.OffsetOf(p->line.line, p->line.col);
+                            if (off >= 0) bind(v, Place { p->line.fileidx, (size_t)off, p->name.size() });
                         }
                     mark(c->fvbody);
                 }

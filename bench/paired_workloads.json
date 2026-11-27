@@ -1,0 +1,236 @@
+{
+  "schema": 1,
+  "rust_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+  "sources": {
+    "bench/cpp/bench.h": "7fd13806c66e3c5352c4bbddde8474a0ff41fe7c7c602748b6f0f12d589ad8e6",
+    "bench/cpp/blur.cpp": "6e5193dd8e61558a0682cf7f90b32856539cfa637b84796f599b011a1d48b874",
+    "bench/cpp/calc.cpp": "86a51c41ae8db06857ba97ccd02ea0ad82169a2274c9730b65fa9887fb1c37f3",
+    "bench/cpp/graph.cpp": "b6f7d0e85338c633dbae3d6f900cd9521a0655ca0f629e317f15240bbb6755c1",
+    "bench/cpp/lru.cpp": "16a253e45e16c6f8b06dcef3b8976402e7f5cbd65022d81def4cd277de14788f",
+    "bench/cpp/respond.cpp": "24451cdb68f26a8f9ebf7607fa940955910218ae5f614ef957883b426b81a918",
+    "bench/cpp/sexp.cpp": "c908a52f0455d0fd77f718efa886cf765a3b0586735a357932ca6a9afe8607ce",
+    "bench/cpp/sum.cpp": "a4fab04ad69536daaf9b0178c032bf987b91d2d07699d6f8f73dbf4a7c4add33",
+    "bench/cpp/words.cpp": "c68c08a1da2ac7ee4c1f3ca81e9e15f0079cc606ff3dab09f63f75858a61fe6e",
+    "bench/klang/blur_rows.k": "a9928906937d855c144108818764118bf0aa329e47cf039ad5f109d16ce743f1",
+    "bench/klang/calc.k": "8e2fb8f86d8b609e9e4aceef17504cdb0117614db728278cb5d56cee09dd100d",
+    "bench/klang/file_copy.k": "39dd1aeb8d81a1903fc6daded18f245bec472a2e540813f679496ff2265754f2",
+    "bench/klang/graph_csr.k": "1dc00c193ece87281d2654695213489dff88866644c4b293089718ea44dbdd8b",
+    "bench/klang/logscan.k": "ff65115ba42b5241bd6fff97418ce240d5d29fd54df3491a235a17976d1a8fc2",
+    "bench/klang/lru.k": "f3d008eb95292c2f725ac1047d4ba2bfe8c3a3ebc46a6755946df25fc2d381fa",
+    "bench/klang/respond.k": "14dbfcc9316c30ef691bc61ae631837cb344c29c40be6db86be95cb679414b5c",
+    "bench/klang/rng.k": "5c5303b4e988038a8ff65bc37791b5db8e0bfefadb29e5a7e53af5f49dc30b57",
+    "bench/klang/sexp.k": "406bb29201da3d00711fc7c1d666122307acf6b0028d6703ec97d861246a3bb1",
+    "bench/klang/sum.k": "dde8b739449af475583c5d38ab20a6addf64e313622613e14e328983439d0106",
+    "bench/klang/words_dictionary.k": "91a09c6179c1f8edc7b16849da8f2156bc51cc4637d296f1382171c0fa124506",
+    "bench/paired_inputs.py": "478352410d9a8124c476789d2843aba865bab9358622b364f64be54ec9e91553",
+    "bench/rust/bench.rs": "268014d545ecf049a885cdb3d4f15d16422b629f429b6e2eda266ceaf75c4d53",
+    "bench/rust/blur_windows.rs": "5a09d226073ef1538c7f40f7ee7d6fb0a295fe6dfc007c21324fa56fd52913e0",
+    "bench/rust/calc_arena.rs": "b827055c190ced5d2814cbb15d957a349f1546a4698f7e6aac1763c2d59e1335",
+    "bench/rust/file_copy.rs": "e0fe5afda15a13d4a8500aae307c393ecd401787073935d2a4a8b4a8d8619a9d",
+    "bench/rust/graph_csr.rs": "1321fc8e0e17e288cbcf5a5dee7c4b696fae3f82467fb31d77132cc3af24af4d",
+    "bench/rust/logscan.rs": "433da692ca5f249115b5979d08ba2fa7d8047578ff478bcf820a3050726b24b6",
+    "bench/rust/lru_open.rs": "654dba54ce7e7f909d52c9d29d55aaf98511ae266176f993c21912833435ba3f",
+    "bench/rust/respond_dto.rs": "4ebff43d7aee1351729a42f3ff4b56639a40b605c026a29563c3271165f69ae9",
+    "bench/rust/sexp_box.rs": "417982c52c4eca7173044a5dbb782833ecc980a6b50698880790dd04d00d6c91",
+    "bench/rust/sum.rs": "280e8583292692b7bfe4ea1bd8c0b4a5abc2d77d3364314f44cd391b22a6cd48",
+    "bench/rust/words_hashmap.rs": "5783fd15afefe79f5f6b2f7d90b321a060740369bf4579b311770cd02b617096"
+  },
+  "workloads": [
+    {
+      "id": "sum",
+      "family": "numeric",
+      "tier": "matched",
+      "role": "score",
+      "k": "sum.k",
+      "rust": "sum.rs",
+      "reference": "bench/cpp/sum.cpp VARIANT=1",
+      "cases": [
+        {
+          "size": 1000000,
+          "stdout": "1000000\n3998750656"
+        },
+        {
+          "size": 16000000,
+          "stdout": "16000000\n63945983872"
+        }
+      ]
+    },
+    {
+      "id": "calc",
+      "family": "parsing",
+      "tier": "matched",
+      "role": "score",
+      "k": "calc.k",
+      "rust": "calc_arena.rs",
+      "reference": "bench/cpp/calc.cpp VARIANT=1",
+      "cases": [
+        {
+          "size": 100000,
+          "stdout": "4149826\n1689408\n64873\n1451\n15377\n14237\n4062\n2440448890907290840"
+        },
+        {
+          "size": 400000,
+          "stdout": "16589727\n6746064\n259281\n5627\n61247\n57752\n16093\n17094074625383217522"
+        }
+      ]
+    },
+    {
+      "id": "graph-csr",
+      "family": "structures",
+      "tier": "matched",
+      "role": "score",
+      "k": "graph_csr.k",
+      "rust": "graph_csr.rs",
+      "reference": "bench/cpp/graph.cpp VARIANT=1",
+      "cases": [
+        {
+          "size": 100000,
+          "stdout": "900000\n2296959"
+        },
+        {
+          "size": 500000,
+          "stdout": "4500000\n12991077"
+        }
+      ]
+    },
+    {
+      "id": "logscan",
+      "family": "io",
+      "tier": "matched",
+      "role": "score",
+      "k": "logscan.k",
+      "rust": "logscan.rs",
+      "input": "logscan",
+      "reference": "bench/paired_inputs.py:logscan",
+      "cases": [
+        {
+          "size": 100000,
+          "stdout": "rows=100000 status=0,82082,6982,7881,3055 avg_us=1218 max_us=9999 p50_us=871 p95_us=4959 p99_us=8995",
+          "input_sha256": "a04aeb509a7543c753476093037a457d978b804b21b7512a45ead40eff71b40c"
+        },
+        {
+          "size": 2000000,
+          "stdout": "rows=2000000 status=0,1640089,139732,160043,60136 avg_us=1219 max_us=9999 p50_us=872 p95_us=5009 p99_us=8999",
+          "input_sha256": "6c16327bb108d5f4607859014ea651dcb7bad1e89ab0c7833713793fc29287a1"
+        }
+      ]
+    },
+    {
+      "id": "blur-rows",
+      "family": "numeric",
+      "tier": "matched",
+      "role": "holdout",
+      "k": "blur_rows.k",
+      "rust": "blur_windows.rs",
+      "reference": "bench/cpp/blur.cpp VARIANT=1",
+      "cases": [
+        {
+          "size": 1024,
+          "stdout": "1024\n125433619"
+        },
+        {
+          "size": 2048,
+          "stdout": "2048\n502239988"
+        }
+      ]
+    },
+    {
+      "id": "sexp-owned",
+      "family": "parsing",
+      "tier": "idiomatic",
+      "role": "holdout",
+      "k": "sexp.k",
+      "rust": "sexp_box.rs",
+      "reference": "bench/cpp/sexp.cpp VARIANT=0",
+      "cases": [
+        {
+          "size": 20000,
+          "stdout": "9594225\n1523168\n20000\n0\n109567807650"
+        },
+        {
+          "size": 100000,
+          "stdout": "47939902\n7609503\n100000\n0\n547350405826"
+        }
+      ]
+    },
+    {
+      "id": "lru-open",
+      "family": "structures",
+      "tier": "matched",
+      "role": "holdout",
+      "k": "lru.k",
+      "rust": "lru_open.rs",
+      "reference": "bench/cpp/lru.cpp VARIANT=1",
+      "cases": [
+        {
+          "size": 2000000,
+          "stdout": "1232608\n641958\n82565\n250000\n16746048090193918132\n125422431"
+        },
+        {
+          "size": 8000000,
+          "stdout": "4937489\n2561689\n329505\n1000000\n1009107182135619685\n501925078"
+        }
+      ]
+    },
+    {
+      "id": "file-copy",
+      "family": "io",
+      "tier": "matched",
+      "role": "holdout",
+      "k": "file_copy.k",
+      "rust": "file_copy.rs",
+      "input": "file_copy",
+      "reference": "bench/paired_inputs.py:file_copy",
+      "cases": [
+        {
+          "size": 1048576,
+          "stdout": "1048576",
+          "input_sha256": "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+        },
+        {
+          "size": 8388608,
+          "stdout": "8388608",
+          "input_sha256": "7d212b9c884f5c77896de960ae17cc341cda43b14d6a971f34ca29ebd4badf7f"
+        }
+      ]
+    },
+    {
+      "id": "respond-dto",
+      "family": "rendering",
+      "tier": "idiomatic",
+      "role": "score",
+      "k": "respond.k",
+      "rust": "respond_dto.rs",
+      "reference": "bench/cpp/respond.cpp VARIANT=0",
+      "cases": [
+        {
+          "size": 100000,
+          "stdout": "100000\n22983649\n4263108621399969415"
+        },
+        {
+          "size": 400000,
+          "stdout": "400000\n91800236\n8685297199210497210"
+        }
+      ]
+    },
+    {
+      "id": "word-count",
+      "family": "structures",
+      "tier": "idiomatic",
+      "role": "score",
+      "k": "words_dictionary.k",
+      "rust": "words_hashmap.rs",
+      "reference": "bench/cpp/words.cpp VARIANT=1",
+      "cases": [
+        {
+          "size": 500000,
+          "stdout": "500000\n37227\n58988349"
+        },
+        {
+          "size": 4000000,
+          "stdout": "4000000\n287555\n472050912"
+        }
+      ]
+    }
+  ]
+}

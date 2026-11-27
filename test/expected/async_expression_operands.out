@@ -1,0 +1,27 @@
+arg 1
+start 2
+child cleanup 2
+arg 3
+arg 4
+call
+root 1220
+result 1220
+arg 1
+start 2
+child cleanup 2
+root 3
+arg 1
+start 2
+child cleanup 2
+arg 3
+root 3
+predicate
+predicate
+arg 5
+arg 6
+enabled 7
+arg 5
+arg 6
+disabled 6
+aggregate 23 99
+42

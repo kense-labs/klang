@@ -38,6 +38,7 @@ static const KlangJitSymbol k_core_jit_symbols[] = {
     K_JIT_SYMBOL(malloc)
     K_JIT_SYMBOL(calloc)
     K_JIT_SYMBOL(realloc)
+    K_JIT_SYMBOL(qsort)
     K_JIT_SYMBOL(free)
     K_JIT_SYMBOL(abs)
 #define K_JIT_MATH(fn) K_JIT_SYMBOL(fn) K_JIT_SYMBOL(fn##f)

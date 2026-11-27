@@ -382,7 +382,7 @@ fn first_multiple_of_7(lo: i64, hi: i64) -> i64 {
 
 This replaces Rust's `try_for_each`/`ControlFlow` gymnastics and C++'s "return a bool from the lambda to stop".
 
-### Nested functions instead of closure objects
+### Nested functions and closures
 
 A nested `fn` reads and writes the enclosing function's locals as free variables. Recursive-descent parsers in the samples are written this way: the input, cursor and output pools are locals of `parse`, and the grammar rules are nested functions.
 
@@ -391,6 +391,10 @@ var budget = 0;
 fn spend(e: Employee&) { budget += e.salary; }
 for &e in staff { if e.dept == "eng" { spend(e); } }
 ```
+
+To return or store the callable, use a closure with explicit captures.
+Generic functions can take a concrete closure as an ordinary argument.
+[Concrete closures](reference.md#concrete-closures)
 
 ### Stored callbacks: event handlers, command tables, strategy objects
 

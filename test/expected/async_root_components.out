@@ -1,0 +1,9 @@
+global cleanup 20
+observe 12
+range 60
+scoped 10
+local cleanup 42
+local 42
+local cleanup 41
+whole 83
+stored 62

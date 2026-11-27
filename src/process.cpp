@@ -1,6 +1,5 @@
 // K compiler — other processes (process.h), over subprocess.h. This is
-// the one translation unit besides main.cpp, kept apart so that the platform
-// headers it needs stay out of the compiler's.
+// kept apart so the platform headers it needs stay out of the compiler.
 
 #include "includes.h"
 #include "utils.h"
@@ -30,18 +29,19 @@
 
 namespace klang {
 
-ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool echo) {
+ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool echo,
+                         string *captured_stderr) {
     ProcessResult r;
     vector<const char *> args;
     for (auto &a : argv) args.push_back(a.c_str());
     args.push_back(nullptr);
-    // Everything the program prints comes back through one pipe, in order,
-    // which is also what keeps it from filling the other one while this
-    // process reads the first. Async mode is what makes the output readable
-    // as it comes rather than only after the exit.
-    auto options = subprocess_option_combined_stdout_stderr | subprocess_option_inherit_environment |
+    // Combine streams by default to preserve their order. When the caller
+    // needs stdout separately, drain both pipes while the child is alive.
+    auto options = subprocess_option_inherit_environment |
                    subprocess_option_search_user_path | subprocess_option_enable_async |
                    subprocess_option_no_window;
+    if (captured_stderr) captured_stderr->clear();
+    else options |= subprocess_option_combined_stdout_stderr;
     subprocess_s p;
     if (subprocess_create_ex(args.data(), options, nullptr, cwd.empty() ? nullptr : cwd.c_str(),
                              &p)) {
@@ -60,6 +60,11 @@ ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool ech
     // it may wait for input before it prints anything or exits.
     fclose(p.stdin_file);
     p.stdin_file = nullptr;
+    jthread drain;
+    if (captured_stderr) drain = jthread([&] {
+        char buf[4096];
+        while (auto n = subprocess_read_stderr(&p, buf, sizeof buf)) captured_stderr->append(buf, n);
+    });
     char buf[4096];
     for (;;) {
         auto n = subprocess_read_stdout(&p, buf, sizeof buf);
@@ -68,6 +73,7 @@ ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool ech
         if (echo) fwrite(buf, 1, n, stderr);
         ProgressOutput(buf, n);
     }
+    if (drain.joinable()) drain.join();
     int code = -1;
     if (subprocess_join(&p, &code)) code = -1;
     subprocess_destroy(&p);
@@ -140,8 +146,9 @@ void SetEnvVar(const string &name, const string &value) {
     #endif
 }
 
-FileLock::FileLock(const string &path, const string &waiting) {
-    ProgressStep step(waiting);
+FileLock::FileLock(const string &path, const string &waiting, Mode mode) {
+    optional<ProgressStep> step;
+    if (!waiting.empty()) step.emplace(waiting);
     #ifdef _WIN32
         auto h = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE,
                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
@@ -149,25 +156,31 @@ FileLock::FileLock(const string &path, const string &waiting) {
         auto error = h == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
         if (h != INVALID_HANDLE_VALUE) {
             OVERLAPPED offset = {};
-            if (LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &offset)) {
+            DWORD flags = mode == Mode::Shared ? 0 : LOCKFILE_EXCLUSIVE_LOCK;
+            if (mode == Mode::TryExclusive) flags |= LOCKFILE_FAIL_IMMEDIATELY;
+            if (LockFileEx(h, flags, 0, 1, 0, &offset)) {
                 handle = reinterpret_cast<intptr_t>(h);
                 return;
             }
             error = GetLastError();
             CloseHandle(h);
+            if (mode == Mode::TryExclusive && error == ERROR_LOCK_VIOLATION) return;
         }
         throw CompileError { cat("cannot lock ", path, " (Windows error ", (unsigned)error, ")") };
     #else
         auto fd = open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0666);
         if (fd >= 0) {
+            int flags = mode == Mode::Shared ? LOCK_SH : LOCK_EX;
+            if (mode == Mode::TryExclusive) flags |= LOCK_NB;
             int result;
-            do { result = flock(fd, LOCK_EX); } while (result < 0 && errno == EINTR);
+            do { result = flock(fd, flags); } while (result < 0 && errno == EINTR);
             if (result == 0) {
                 handle = fd;
                 return;
             }
             auto error = errno;
             close(fd);
+            if (mode == Mode::TryExclusive && (error == EAGAIN || error == EWOULDBLOCK)) return;
             errno = error;
         }
         throw CompileError { cat("cannot lock ", path, ": ", strerror(errno)) };
@@ -175,47 +188,12 @@ FileLock::FileLock(const string &path, const string &waiting) {
 }
 
 FileLock::~FileLock() {
+    if (handle == -1) return;
     #ifdef _WIN32
         CloseHandle(reinterpret_cast<HANDLE>(handle));
     #else
         close((int)handle);
     #endif
-}
-
-// The table's entry, as native.h's k_symbols.c lays it out.
-struct KlangSymbolEntry {
-    const char *name;
-    const void *addr;
-};
-
-bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &out, string &err) {
-    typedef const KlangSymbolEntry *(*TableFn)(void);
-    TableFn table = nullptr;
-    #ifdef _WIN32
-        auto wide = MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, nullptr, 0);
-        vector<wchar_t> wpath((size_t)wide + 1);
-        MultiByteToWideChar(CP_UTF8, 0, path.c_str(), -1, wpath.data(), wide);
-        auto h = LoadLibraryW(wpath.data());
-        if (!h) {
-            err = cat("cannot load ", path, " (Windows error ", (unsigned)GetLastError(), ")");
-            return false;
-        }
-        table = (TableFn)GetProcAddress(h, "k_symbols");
-    #else
-        auto h = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
-        if (!h) {
-            auto why = dlerror();
-            err = cat("cannot load ", path, ": ", why ? why : "unknown error");
-            return false;
-        }
-        table = (TableFn)dlsym(h, "k_symbols");
-    #endif
-    if (!table) {
-        err = cat(path, " has no k_symbols table");
-        return false;
-    }
-    for (auto e = table(); e->name; e++) out.emplace_back(e->name, e->addr);
-    return true;
 }
 
 string MacSdkPath() {
@@ -235,6 +213,49 @@ string MacSdkPath() {
         }
     #endif
     return sdk;
+}
+
+string BuildPathIdentity(const string &path, bool include_ctime) {
+    #ifdef _WIN32
+        auto h = CreateFileA(path.c_str(), FILE_READ_ATTRIBUTES,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+        if (h == INVALID_HANDLE_VALUE) {
+            auto error = GetLastError();
+            return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? "missing" : "";
+        }
+        BY_HANDLE_FILE_INFORMATION info = {};
+        auto got_info = GetFileInformationByHandle(h, &info);
+        CloseHandle(h);
+        if (!got_info) return {};
+        auto id = cat(info.dwVolumeSerialNumber, ":", info.nFileIndexHigh, ":", info.nFileIndexLow,
+                      ":", info.dwFileAttributes, ":", info.nFileSizeHigh, ":", info.nFileSizeLow,
+                      ":", info.ftLastWriteTime.dwHighDateTime, ":", info.ftLastWriteTime.dwLowDateTime);
+        if (include_ctime)
+            Append(id, ":", info.ftCreationTime.dwHighDateTime, ":", info.ftCreationTime.dwLowDateTime);
+        return id;
+    #else
+        struct stat st;
+        if (stat(path.c_str(), &st) != 0) return errno == ENOENT ? "missing" : string();
+        #ifdef __APPLE__
+            const auto &modified = st.st_mtimespec;
+            const auto &changed = st.st_ctimespec;
+        #else
+            const auto &modified = st.st_mtim;
+            const auto &changed = st.st_ctim;
+        #endif
+        auto id = cat(st.st_dev, ":", st.st_ino, ":", st.st_mode, ":", st.st_size, ":",
+                      modified.tv_sec, ":", modified.tv_nsec);
+        if (include_ctime) Append(id, ":", changed.tv_sec, ":", changed.tv_nsec);
+        return id;
+    #endif
+}
+
+string MakeBuildTempDir([[maybe_unused]] string path) {
+    #ifdef __APPLE__
+        if (mkdtemp(path.data())) return path;
+    #endif
+    return {};
 }
 
 string CommandLineText(const vector<string> &argv) {

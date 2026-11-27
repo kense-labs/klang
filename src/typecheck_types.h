@@ -72,6 +72,7 @@ inline StructInst *TypeCheck::GetStructInst(TypeExpr *t) {
     LimitNestedInsts(t);
     auto inst = ast.NewStructInst();
     inst->st = st;
+    if (st->callable_arity >= 0) inst->flat = false;
     if (st->isroot) {
         inst->sclass = SC_ROOT;
         // There is no single byte image, even if every component is flat.
@@ -93,16 +94,33 @@ inline StructInst *TypeCheck::GetStructInst(TypeExpr *t) {
     auto lastreal = LastRealField(st->fields);
     typechain.push_back(t);
     BeginTypeBuild();
+    auto owning_frame = st->task_saved || st->task_join;
     for (auto i = 0; i < (int)st->fields.size(); i++) {
         if (st->isroot && st->fields[i].ispad)
             Error(st->line, "root structs have no packed byte layout; padding belongs inside a component");
         if (st->fields[i].ispad) continue;
         auto ft = inst->ftypes[i];
-        ValidateType(ft, st->line, VT_FIELD);
-        if (auto zs = ZeroSizeKind(ft))
-            Error(st->line, cat("field ", st->fields[i].name, " of struct ", st->name,
-                                " cannot be ", zs, ": ", TypeStr(ft), " (§3.4)"));
+        auto pos = (st->closure || owning_frame) && HasOwnership(ft) ? VT_CAPTURE : VT_FIELD;
+        ValidateType(ft, st->line, pos);
+        inst->owns |= pos == VT_CAPTURE;
+        if (!st->callable_inline)
+            if (auto zs = ZeroSizeKind(ft))
+                Error(st->line, cat("field ", st->fields[i].name, " of struct ", st->name,
+                                    " cannot be ", zs, ": ", TypeStr(ft), " (§3.4)"));
         auto c = ClassOf(ft);
+        // An explicitly owned handle has the reference-free physical
+        // layout of its C record and can be moved into a task frame.
+        if (st->task_frame && (c != SC_FIXED || (!IsFlat(ft) && !(owning_frame && ft->owns) &&
+                                                !(st->task_join && (TaskInputBorrow(ft) || TaskInputHolder(ft)))))) {
+            if (st->task_join && IsRefOrSlice(ft) && !IsRelRef(ft))
+                Error(st->fields[i].line, cat("borrowed task input ", st->fields[i].name,
+                                             " needs a stable layout within one backing owner"));
+            Error(st->fields[i].line, cat("task frame value ", st->fields[i].name,
+                                         " needs a fixed-size type without references"));
+        }
+        if (st->closure && c != SC_FIXED)
+            Error(st->fields[i].line, cat("closure capture ", st->fields[i].name,
+                                         " must have a fixed-size type; use a reference or slice"));
         if (c == SC_RESIZABLE && !st->isroot) {
             // A pad after the tail too: its bytes would lie where the tail
             // grows.
@@ -362,14 +380,145 @@ inline SizeClass TypeCheck::ClassOf(TypeExpr *t) {
 
 // Flat (§1.1): no references, slices, or relative references at any depth.
 inline bool TypeCheck::IsFlat(TypeExpr *t) {
+    if (t->owns) return false;
     switch (t->kind) {
         case TY_REF: case TY_SLICE: return false;
-        case TY_STRUCT: return GetStructInst(t)->flat;
+        case TY_STRUCT: return !t->struc->st->task_join && GetStructInst(t)->flat;
         case TY_ENUM:   return GetEnumInst(t)->flat;
         case TY_ARRAY:  return IsFlat(t->arr->sub);
         case TY_VARIANT: return !AnyField(t, [&](TypeExpr *ft) { return !IsFlat(ft); });
         default: return true;
     }
+}
+
+// A task can park these bytes at their original address. Self-relative
+// links stay inside the same owner; other references can reach storage
+// whose lifetime the payload does not control.
+inline bool TypeCheck::TaskResidentStorage(TypeExpr *t) {
+    if (t->owns || t->kind == TY_SLICE) return false;
+    if (t->kind == TY_REF) return IsSelfRelRef(t);
+    if (t->kind == TY_ARRAY) return TaskResidentStorage(t->arr->sub);
+    if (t->kind == TY_STRUCT && (t->struc->st->isroot || t->struc->st->task_join)) return false;
+    return !AnyField(t, [&](TypeExpr *field) { return !TaskResidentStorage(field); });
+}
+
+// A loan cannot reach a layout that lets its elements move or be replaced.
+// Even a fixed-capacity array can change which elements are in use. Check
+// through links as well as by-value fields, including recursive types.
+inline bool TypeCheck::TaskStableLayout(TypeExpr *t) {
+    return !Reaches(t, [](TypeExpr *part) {
+        if (part->kind == TY_ARRAY)
+            return part->arr->akind != A_FIXED && part->arr->akind != A_VAR;
+        return part->kind == TY_ENUM || part->kind == TY_VARIANT;
+    });
+}
+
+inline bool TypeCheck::TaskInputBorrow(TypeExpr *t) {
+    if (!IsRefOrSlice(t) || IsRelRef(t)) return false;
+    auto payload = PointeeOf(t);
+    // Only the reference or slice is copied into the task frame. A
+    // self-relative link stays in its caller's leased storage.
+    if (!TaskResidentStorage(payload)) return TaskInputHolderRef(t);
+    // Whole arrays share their descriptor. The caller preserves the
+    // storage through a shared loan or an exclusive resize borrow.
+    if (t->kind == TY_REF && payload->kind == TY_ARRAY)
+        return TaskStableLayout(payload->arr->sub);
+    return TaskStableLayout(payload);
+}
+
+inline bool TypeCheck::TaskResizeInput(TypeExpr *t) {
+    if (t->kind != TY_REF || t->cq || IsRelRef(t)) return false;
+    auto array = t->ref->sub;
+    if (array->kind != TY_ARRAY) return false;
+    auto kind = array->arr->akind;
+    return kind == A_GROW || kind == A_GROWSHRINK || kind == A_LIMITED;
+}
+
+// A copied holder snapshots its pointer slots. An indirect holder must
+// be read-only through the link and have a layout whose slots can be sealed.
+inline bool TypeCheck::TaskInputHolder(TypeExpr *t) {
+    return TaskHolderStorage(t) && ClassOf(t) == SC_FIXED;
+}
+
+// The actual owner can contain a fixed-size holder in an array slot or
+// frame field. Every reference it stores still needs a checked target.
+inline bool TypeCheck::TaskHolderStorage(TypeExpr *t) {
+    return t && !IsRefOrSlice(t) && HoldsPlainRef(t) && ClassOf(t) != SC_ROOT && TaskHolderFields(t);
+}
+
+inline bool TypeCheck::TaskHolderFields(TypeExpr *t) {
+    vector<TypeExpr *> checked;
+    auto valid = [&](auto &self, TypeExpr *part) -> bool {
+        if (part->owns || RuntimeCallableType(part)) return false;
+        if (IsRefOrSlice(part)) {
+            if (IsRelRef(part) || TaskResizeInput(part)) return false;
+            auto target = PointeeOf(part);
+            if (TaskResidentStorage(target)) return TaskInputBorrow(part);
+            return part->kind == TY_REF && part->cq && TaskHolderLayout(target) && self(self, target);
+        }
+        if (any_of(checked.begin(), checked.end(), [&](auto type) { return TypeEq(part, type); }))
+            return true;
+        checked.push_back(part);
+        if (part->kind == TY_ARRAY) return self(self, part->arr->sub);
+        return !AnyField(part, [&](TypeExpr *field) { return !self(self, field); });
+    };
+    return valid(valid, t);
+}
+
+inline bool TypeCheck::TaskHolderLayout(TypeExpr *t) {
+    // An inline capacity-limited array has separate operations that can
+    // change the set of live pointer slots within its fixed byte extent.
+    return !IsRefOrSlice(t) && HoldsPlainRef(t) && ClassOf(t) == SC_FIXED &&
+           !HoldsLimitedArray(t, [&](TypeExpr *ft) { return FieldRuns(ft); });
+}
+
+inline bool TypeCheck::TaskSealedHolder(TypeExpr *t) {
+    return t && TaskHolderLayout(t) && TaskHolderFields(t);
+}
+
+inline bool TypeCheck::TaskInputHolderRef(TypeExpr *t) {
+    return t->kind == TY_REF && t->cq && !IsRelRef(t) && TaskSealedHolder(PointeeOf(t));
+}
+
+inline bool TypeCheck::TaskInputLifetime(const VarDef *v, const FnSpec *spec) {
+    if (!v || !spec || !spec->sf->task_stage || spec->params.empty()) return false;
+    return (v == spec->params[0] && v->name == kClosureEnv) ||
+           (v->task_input_root && v->ownerspec == spec);
+}
+
+inline bool TypeCheck::TaskSharedStorage(TypeExpr *t) {
+    if (ClassOf(t) == SC_ROOT) return false;  // The descriptor has no shared data region.
+    return ClassOf(t) == SC_RESIZABLE ||
+           HoldsLimitedArray(t, [&](TypeExpr *ft) { return FieldRuns(ft); });
+}
+
+inline void TypeCheck::RecordTaskLoan(vector<VarDef *> &owners, VarDef *owner) {
+    ast.has_task_loans = true;
+    if (find(owners.begin(), owners.end(), owner) == owners.end()) owners.push_back(owner);
+}
+
+inline VarDef *TypeCheck::TaskBorrowOwner(Node *at, const RootAlt &origin, string_view message,
+                                         TypeExpr *holder, bool holder_contents) {
+    auto v = origin.root;
+    auto indirect = holder_contents && v && TaskHolderStorage(v->type);
+    if (indirect || (holder && (v || !origin.exact))) {
+        if (!origin.exact || !v || IsTemp(v) || v->reusable || !TaskHolderStorage(v->type) ||
+            (holder && !CanContain(ast.PlainOf(v->type), ast.PlainOf(holder))))
+            Error(at, "a task holder reference needs its own stable storage owner");
+        ast.has_task_loans = ast.has_task_holder_loans = true;
+        return v;
+    }
+    if (!origin.exact) Error(at, string(message));
+    auto owner = origin.root;
+    if (!owner) return nullptr;  // Static data.
+    auto t = owner->type;
+    if (t && ClassOf(t) == SC_ROOT) return owner;  // A borrow of the descriptor itself.
+    if (!t || IsRefOrSlice(t) || !TaskResidentStorage(t)) Error(at, string(message));
+    if (owner->isglobal && !TaskSharedStorage(t)) {
+        auto fixed_extent = ClassOf(t) == SC_FIXED || (t->kind == TY_ARRAY && t->arr->akind == A_VAR);
+        if (!fixed_extent || !TaskStableLayout(t)) Error(at, string(message));
+    }
+    return owner;
 }
 
 // Whether t, or a type a value of it reaches through references, slices,
@@ -410,12 +559,7 @@ inline bool TypeCheck::HoldsIndexT(TypeExpr *t) {
 // `in pool` one into its named global pool, so a structure linked only by
 // those (a node pool) can never hold a reference into some other local.
 inline bool TypeCheck::HoldsPlainRef(TypeExpr *t) {
-    switch (t->kind) {
-        case TY_REF: return t->ref->lenstorage < 0;
-        case TY_SLICE: return true;
-        case TY_ARRAY: return HoldsPlainRef(t->arr->sub);
-        default: return AnyField(t, [&](TypeExpr *ft) { return HoldsPlainRef(ft); });
-    }
+    return HoldsPlainRefOf(t, [&](TypeExpr *ft) { return FieldRuns(ft); });
 }
 
 // Whether a value of type t is meaningful as bytes on their own
@@ -424,6 +568,10 @@ inline bool TypeCheck::HoldsPlainRef(TypeExpr *t) {
 // so none of the three survives leaving the program. Self-relative
 // references do, which is the whole point.
 inline bool TypeCheck::ImageSafe(TypeExpr *t, string &why) {
+    if (RuntimeCallableType(t) == t) {
+        why = "runtime callables hold code addresses";
+        return false;
+    }
     if (ClassOf(t) == SC_ROOT) {
         why = "a root owner has no contiguous byte image; serialize its fields separately";
         return false;
@@ -494,6 +642,10 @@ inline bool TypeCheck::HoldsRelRef(TypeExpr *t) {
 // without a declared field default. default<T>() gives it for a fixed-size
 // T only; DefaultValue builds it for any.
 inline bool TypeCheck::HasDefault(TypeExpr *t, string &why) {
+    if (t->owns) {
+        why = "an owned resource must come from an owning producer";
+        return false;
+    }
     switch (t->kind) {
         case TY_INT:
             // The array may be empty, so not even 0 is an index of it (§3.11).
@@ -509,6 +661,14 @@ inline bool TypeCheck::HasDefault(TypeExpr *t, string &why) {
             why = cat(TypeStr(t), " is a non-optional reference");
             return false;
         case TY_STRUCT: case TY_ENUM: case TY_VARIANT: {
+            if (RuntimeCallableType(t) == t) {
+                why = "a runtime callable requires an invocation target";
+                return false;
+            }
+            if (t->kind == TY_STRUCT && t->struc->st->closure) {
+                why = "a closure requires its capture initializers";
+                return false;
+            }
             auto runs = FieldRuns(t);
             if (t->kind == TY_ENUM) {
                 if (runs.empty()) {
@@ -610,7 +770,19 @@ inline void TypeCheck::RequireComplete(TypeExpr *t, Line l) {
                  "declaration");
 }
 
+inline bool TypeCheck::HasOwnership(TypeExpr *t) {
+    return t && (t->owns || (t->kind == TY_STRUCT &&
+        (t->struc->st->task_join ||
+         ((t->struc->st->closure || t->struc->st->task_saved) && GetStructInst(t)->owns))));
+}
+
 inline void TypeCheck::ValidateType(TypeExpr *t, Line l, int pos) {
+    if (t->owns && (t->kind != TY_STRUCT || t->struc->st->isroot || t->struc->st->closure ||
+                    ClassOf(t) != SC_FIXED || !GetStructInst(t)->flat))
+        Error(l, "own qualifies a fixed-size C-compatible handle record");
+    if (ast.has_ownership && HasOwnership(t) &&
+        (pos == VT_GLOBAL || pos == VT_FIELD || pos == VT_ELEM || pos == VT_POINTEE))
+        Error(l, "owned values require a local, parameter, result, or closure capture");
     switch (t->kind) {
         case TY_GENERIC:
             if (t->named->opaque) return;
@@ -633,6 +805,7 @@ inline void TypeCheck::ValidateType(TypeExpr *t, Line l, int pos) {
         case TY_FN:
             Error(l, "function value types are compile-time only and cannot be stored");
         case TY_STRUCT:
+            if (RuntimeCallableType(t)) ValidateCallableSignature(t, l);
             // Check placement before instantiation: nested root ownership is
             // unsupported even if the nested type is empty, fixed-only,
             // generic, or the enclosing declaration is itself a root.
@@ -1552,15 +1725,17 @@ inline bool TypeCheck::ContentsReadBack(VarDef *h, TypeExpr *of, Roots &out) {
     Roots r;
     auto known = false;
     for (auto &a : h->contents.alts) {
+        auto inherited = a.root && TaskInputLifetime(a.root, a.root->ownerspec);
         if (a.classread) r.Add({ a.root, false, h, false, true });
         else if (!a.root) r.Add({ nullptr, a.exact });
         else if (a.exact) {
             if (!of || !a.root->type || CanContain(LoadType(a.root->type), of))
                 r.Add({ a.root, true, h });
         }
-        else if (IsClassRoot(a.root)) r.Add({ a.root, false, h });
+        else if (IsClassRoot(a.root) || inherited)
+            r.Add({ a.root, false, h });
         else return false;
-        known = known || a.classread || a.exact || IsClassRoot(a.root);
+        known = known || a.classread || a.exact || IsClassRoot(a.root) || inherited;
     }
     if (!known) return false;
     out.Add(r);

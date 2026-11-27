@@ -32,8 +32,12 @@
 
 </details>
 
-Research note, November 2026. Nothing here is implemented, and every piece
-of syntax is a placeholder. The question was whether K can have a notion
+Research note, November 2026. K now implements the linear obligation for
+fixed-size C handle records and their concrete closure captures. This note
+explores extending it to pool claims, containers and suspendable frames.
+[Implemented C handle rules](../k_spec.md#96-owning-c-handles)
+
+The question was whether K can have a notion
 of ownership strong enough to settle what [coroutines.md](coroutines.md)
 leaves open at R5 (a suspended coroutine can be dropped or copied, so no
 cleanup written inside it is reliable) and what

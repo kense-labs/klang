@@ -65,7 +65,7 @@ inline CodeGen::OpenedLoop CodeGen::OpenLoop(Block *bodyb, Node *cond,
                                              const vector<const VarDef *> &binders,
                                              const Dst &d) {
     OpenedLoop lp;
-    lp.divisors = HoistDivisors(bodyb, cond, binders);
+    if (!task_flow) lp.divisors = HoistDivisors(bodyb, cond, binders);
     PushSc(SC_LOOP);
     lp.si = (int)cscopes.size() - 1;
     cscopes[lp.si].brklbl = Lbl();
@@ -684,10 +684,16 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
     }
     auto name = LocalName(d);
     auto t = d->type;
+    TaskLiteralScope inputs(*this, init);
     if (IsRoot(t)) {
         auto sl = Is<StructLit>(init);
         assert(sl && sl->sinst->st->isroot);
-        L(CT(t), " ", name, " = { 0 };");
+        if (d->task_pinned) {
+            name = BindPinnedTaskLocal(d, forlocal);
+            L(name, " = (", CT(t), "){0};");
+        } else {
+            L(CT(t), " ", name, " = { 0 };");
+        }
         for (size_t i = 0; i < d->components.size(); i++) {
             auto c = d->components[i];
             if (!c) continue;
@@ -701,6 +707,11 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
         }
         return;
     }
+    if (d->task_pinned) {
+        auto slot = BindPinnedTaskLocal(d, forlocal);
+        if (init) GenAny(init, FreshLv(slot, t));
+        return;
+    }
     if (IsResz(t) || IsBytesT(t)) {
         assert(init);
         auto dst = DeclStackLocal(d, forlocal);
@@ -708,7 +719,7 @@ inline void CodeGen::BindLocal(VarDef *d, Node *init, bool forlocal) {
         return;
     }
     if (LargeFixedOnStack(t)) {
-        FixedLocal(t, name, "", forlocal);
+        FixedLocal(t, name, "", forlocal, d);
         vnames[d] = name;
         // The variable being declared is no one else's yet (Dst::fresh).
         if (init) GenAny(init, FreshLv(name, t));
@@ -757,6 +768,32 @@ inline Dst CodeGen::DeclStackLocal(VarDef *d, bool forlocal) {
     auto t = d->type;
     auto resz = IsResz(t);
     if (resz) EmitCoreTypes();
+    if (d->task_storage) {
+        auto open_stack = [&](size_t slot) {
+            auto stack = cat("f->stacks[", slot, "]");
+            L("k_task_stack_open(&", stack, ");");
+            SaveBase(forlocal, stack, "", d, true);
+            return pair { cat("f->local", slot), stack };
+        };
+        auto [header, stk] = open_stack(task_flow->storage.at(d));
+        vnames[d] = header;
+        vstk[d] = stk;
+        if (!resz) {
+            L(header, " = ", Top(stk), ";");
+            return Dst { DK_STACK, stk, t };
+        }
+        if (IsFrameObj(t)) {
+            L(FoTailHdr(t, header), ".base = ", Top(stk), ";");
+            return Dst { DK_STACK, stk, t, header };
+        }
+        L(header, " = (k_rhdr){ ", Top(stk), ", 0 };");
+        if (d->reusable) {
+            auto [fl, flstk] = open_stack(task_flow->freelists.at(d));
+            L(fl, " = (k_rhdr){ ", Top(flstk), ", 0 };");
+            vpool[d] = { fl, flstk };
+        }
+        return Dst { DK_STACK, stk, t, cat(header, ".len") };
+    }
     string stk;
     auto nit = nrvo.find(d);
     if (nit != nrvo.end()) {
@@ -785,7 +822,7 @@ inline Dst CodeGen::DeclStackLocal(VarDef *d, bool forlocal) {
     auto own = nit == nrvo.end();
     if (!resz) {
         L("uint8_t *", name, " = ", Top(stk), ";");
-        if (own) SaveBase(forlocal, stk, name);
+        if (own) SaveBase(forlocal, stk, name, d);
         return Dst { DK_STACK, stk, t };
     }
     if (IsFrameObj(t)) {
@@ -796,18 +833,18 @@ inline Dst CodeGen::DeclStackLocal(VarDef *d, bool forlocal) {
             // (`return ... from`), whose exit restores the stack from it.
             auto base = cat(FoTailHdr(t, name), ".base");
             L(base, " = ", Top(stk), ";");
-            SaveBase(forlocal, stk, base);
+            SaveBase(forlocal, stk, base, d);
         }
         return Dst { DK_STACK, stk, t, name };
     }
     L("k_rhdr ", name, " = { ", Top(stk), ", 0 };");
-    if (own) SaveBase(forlocal, stk, cat(name, ".base"));
+    if (own) SaveBase(forlocal, stk, cat(name, ".base"), d);
     if (d->reusable) {
         // Companion freelist: free slot indices on their own stack.
         auto flstk = AllocStk(forlocal);
         auto fln = Unique2(cat(name, "_fl"));
         L("k_rhdr ", fln, " = { ", Top(flstk), ", 0 };");
-        SaveBase(forlocal, flstk, cat(fln, ".base"));
+        SaveBase(forlocal, flstk, cat(fln, ".base"), d);
         vpool[d] = { fln, flstk };
     }
     return Dst { DK_STACK, stk, t, cat(name, ".len") };
@@ -868,12 +905,16 @@ inline void CodeGen::GenRebind(Assign *a, Loc lv) {
         return;
     }
     assert(lv.val);
+    auto guarded = TaskHolderWrite(lv.t);
     if (Is<NullLit>(a->rhs)) {
+        if (guarded) CheckTaskHolderWrite(lv, a->line);
         if (IsResz(lv.t->ref->sub)) L("K_MEMZERO(&", lv.s, ", sizeof(", lv.s, "));");
         else L(lv.s, " = NULL;");
         return;
     }
-    L(lv.s, " = ", lv.ispref ? GenPrefVal(a->rhs) : GenX(a->rhs), ";");
+    auto value = lv.ispref ? GenPrefVal(a->rhs) : GenX(a->rhs);
+    if (guarded) CheckTaskHolderWrite(lv, a->line);
+    L(lv.s, " = ", value, ";");
 }
 
 // ------------------------------------------------------------------
@@ -953,6 +994,14 @@ inline vector<string> CodeGen::GenForward(Call *c, const vector<TypeExpr *> &ret
 inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
     auto sp = curspec;
     assert(sp);
+    if (task_flow) {
+        if (!vals.empty()) GenAny(vals[0], FreshLv("f->result", sp->rets[0]));
+        EmitExitRestores(0);
+        MarkFlush();
+        L("return K_TASK_POLL_READY;");
+        termjump = true;
+        return;
+    }
     auto &si = *curinfo;
     string retv;
     // A single call forwards all its return values (§7.1).
@@ -982,7 +1031,7 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
                 if (!starts[i].empty())
                     LandValue(cat("k_dst", i), DstTop0(i), starts[i], sp->rets[i],
                               cat("(*k_rl", i, ")"));
-            Epilogue(retv);
+            Epilogue(retv, sp->sf->task_suspends);
             return;
         }
     }
@@ -1037,7 +1086,7 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
             L("*k_r", i, " = ", tv, ";");
         }
     }
-    Epilogue(retv);
+    Epilogue(retv, sp->sf->task_suspends);
 }
 
 // Writes the count into the prefix bytes reserved at `pref`, in front of
@@ -1078,12 +1127,22 @@ inline void CodeGen::EmitNrvoFinish(const NrvoDest &nd) {
     EmitPrefixPatch(nd.pref, nd.ls, nd.stk, cat(nd.hdr, ".len"), cat(nd.hdr, ".base"));
 }
 
-inline void CodeGen::Epilogue(const string &retv) {
-    EmitExitRestores(0);
+inline void CodeGen::Epilogue(const string &retv, bool suspending) {
+    EmitExitRestores(0, suspending);
     MarkFlush();   // The caller and every later callee read stack tops from memory.
     for (auto &s : fdstsaves) L(s);
     L(retv.empty() ? "return;" : cat("return ", retv, ";"));
     termjump = true;
+}
+
+inline void CodeGen::GenTaskReturn(Return *r) {
+    const auto &rets = curspec->task_exit->rets;
+    if (!rets.empty()) GenAny(r->vals[0], FreshLv("(*k_task_result)", rets[0]));
+    L("*k_task_completed = true;");
+    // The driver checks completion before using any transition outputs.
+    string unused;
+    if (curinfo->cret >= 0) unused = cat("(", CT(curspec->rets[curinfo->cret]), "){0}");
+    Epilogue(unused);
 }
 
 // The dummy C return value used on propagate paths. `rfval` names the

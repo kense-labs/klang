@@ -10,6 +10,7 @@
 <summary>Table of contents</summary>
 
 - [Running the suite](#running-the-suite)
+- [Paired K and Rust benchmark](#paired-k-and-rust-benchmark)
 - [Fixture layout](#fixture-layout)
 - [Configurations and backends](#configurations-and-backends)
 - [Expected output and diagnostics](#expected-output-and-diagnostics)
@@ -26,9 +27,220 @@ analysis runs between the messages. Build and run it with:
 
 ```sh
 cmake -S . -B build-lsp -DK_BUILD_LSP_TESTS=ON
-cmake --build build-lsp --target k_lsp_test --config Debug
-ctest --test-dir build-lsp -C Debug -R lsp_call_hierarchy --output-on-failure
+cmake --build build-lsp --config Debug
+ctest --test-dir build-lsp -C Debug -R '^(lsp_|cordis_)' --output-on-failure
 ```
+
+The Cordis tests hold providers across replacement and exercise failed
+activation, ABI mismatches, and release of provider state. The standalone
+native host swaps a linked provider and a shared library through the same
+service lifecycle as the LSP. A second host verifies the linked path
+without the dynamic loader. With Python available, `lsp_cordis_protocol`
+checks manifest selection and shutdown against the built `k lsp` executable.
+It compares selected artifact, tracked-input, and graph digests with
+Python's SHA-256, checks graph equivalence after manifest reordering, and
+verifies that invalid dependency paths are reported before any provider
+starts. It checks that a failed switch preserves the active graph.
+`cordis_source_transform` runs the optional build driver against an ordinary
+K compiler. It checks a multi-module transform, retained binary artifacts,
+UTF-8 diagnostic mapping, stale locks, ABI rejection, invalid output paths,
+input drift, and concurrent publication to the same directory.
+[Optional build driver](design/embedded_languages.md#optional-build-driver)
+With `K_BUILD_CORDIS_PYTHON=ON`, `cordis_python_guest` exercises a real
+CPython provider and its separately locked runtime bridge. It covers typed
+inputs and results, UTF-8 diagnostics, exceptions, overflow, offline
+builds, and a relocated bundle. [CPython adapter](design/embedded_languages.md#optional-cpython-adapter)
+
+With `K_BUILD_CORDIS_TYPESCRIPT=ON`, `cordis_typescript_guest` checks and
+builds real TypeScript blocks using locked compiler and runtime inputs. It
+covers `enum` lowering, exact BigInt and typed-array conversions, UTF-8 error
+columns, remapped stack lines, and a relocated executable run with an empty
+search path. [TypeScript adapter](design/embedded_languages.md#optional-typescript-adapter)
+`cordis_typescript_project` exercises the separately locked frontend and
+execution services with static and dynamic ESM imports, top-level `await`,
+Promise rejection, mapped dependency errors, and project-root module loading.
+The test runs with an empty executable search path.
+[TypeScript project runner](design/functions_and_typescript_runtime.md#optional-project-runner)
+
+`cordis_locked_build` uses the same lock in `k check` and `k build`
+with `--offline`. It checks ABI rejection, changes during analysis,
+and preservation of old outputs on error. It extracts the graph from
+the resulting executable and checks cache reuse and invalidation when
+the macOS executable cache is available.
+The `cordis_tcp_receive` test runs a loopback TCP receive through `k run`
+and `k build`. A task yields before awaiting the native receive. The test
+covers a received byte, EOF, a TCP reset, and cancellation before start,
+during provider replacement, and on scope exit. The fixture delays
+completion during replacement to verify that the socket and old provider
+stay live while another K task runs.
+`cordis_application_stream` generates startup and replacement locks with
+`k cordis resolve`. A K application opens the optional host, handles real
+TCP data in both backends and checks its active graph. It checks that the
+queue policy starts before the stream provider and denies a socket request
+above its limit. Stale locks, an ABI mismatch and an input changed during
+provider startup exercise rollback in reverse order. The replacement serves
+a new request while the old socket is still pending. A full queue stops
+reads, and the retired stream provider and its policy stop in reverse order
+after the pump and reader are released.
+
+With the optional ONNX Runtime SDK enabled, `cordis_onnx_inference`
+exercises the real CPU provider in TinyCC and native builds. Frozen ONNX
+graphs with distinct weights check exact outputs, input copying, request
+limits, cancellation and failed and successful model replacement. The
+workspace checks follow both overlapping arenas and the resource held by
+a task whose request handle has already closed. A
+second fixture feeds a loopback TCP payload into the inference service
+selected as a dependency. [Build recipe](design/cordis_microkernel.md#locked-cpu-inference)
+`cordis_inference_gateway` drives both K backends with real TCP clients.
+It verifies split input, multiple output frames with exact numeric values,
+oversized requests, admission limits and deadlines. A gated test provider
+parks during replacement and cancellation, allowing the test to check
+that both completed and cancelled requests release retired generations
+after their final callback. The fixture also exercises the original
+inference ABI prefix, which omits allocator telemetry.
+[Wire protocol](design/cordis_microkernel.md#loopback-inference-gateway)
+
+Measure the gateway with Python 3.11 or newer using the staged release
+and the optional native libraries. On macOS, for example, run:
+
+```sh
+python bench/inference_gateway.py --install dist/klang \
+  --host build/libk_cordis_application.dylib \
+  --provider build/libk_cordis_onnx.so \
+  --runtime /path/to/onnxruntime/lib/libonnxruntime.dylib \
+  --out build/inference_gateway.json
+```
+
+The benchmark uses a fresh `K_HOME`, verifies each prediction, and
+alternates TinyCC and native runs. The default model widths are 2, 512
+and 32768, configurable with `--widths`. One additional workload warms
+the smallest model and replaces it with the largest. The report stores
+both model digests and sizes, raw latencies, startup to readiness,
+sequential loopback throughput, p95/p99, and process peak RSS. It also
+records allocator snapshots and the elapsed time of the request that
+triggers replacement.
+
+The `cordis_tcp_stream` test drives a two-slot stream through `k run`
+and `k build`. It fills the queue, verifies that the submission count stays
+constant until a slot is freed, and checks FIFO delivery into smaller slices.
+It covers EOF, buffered bytes followed by a socket error, cancellation
+before polling, releasing a reader during a receive, and provider
+replacement during drain. The TCP fixtures check that native poll counts
+stay fixed while the peer is idle and that a later payload wakes the waiter.
+
+After staging a release with `scripts/package_release.py`, run
+`python scripts/archive_release.py dist/klang dist/klang.tar.gz`.
+Use a `.zip` suffix for a ZIP release. The release workflow sets
+`SOURCE_DATE_EPOCH` to the source commit time. The archiver uses that
+timestamp and sorts entries by path so the same packaged bytes can produce
+the same archive with the same compression toolchain. Compare clean build
+payloads separately to verify the compiler and linked artifacts.
+
+### Rebuilding core and bundled releases
+
+On macOS, run the core release verifier with Python 3.12 or later,
+CMake, Ninja, and the selected Xcode toolchain.
+
+```sh
+python3 scripts/reproduce_core.py --out build/repro-core --version 0.0.0-repro
+```
+
+The verifier captures the working source into two fresh source and Ninja
+build directories. `inputs.json` records the commit, worktree files and
+vendored inputs, compiler and linker fingerprints, SDK version and
+settings digest, configure options, archive epoch and packaging tools.
+Local worktree changes are included and identified in the record.
+Pass `--lock build/repro-core/inputs.json` to require the same inputs
+in a later invocation with a new output directory and the same version
+and epoch options.
+
+Use `--profile bundled` to build in physics, gfx, audio and UI.
+`--deps` accepts a directory holding the pinned `k_box3d.tar.gz`,
+`k_sdl.tar.gz` and `k_nuklear.tar.gz` files, or a CMake FetchContent
+cache with the same archives. Each lane checks the archive digests
+against the package declarations, then extracts its own source trees.
+
+```sh
+python3 scripts/reproduce_core.py --profile bundled --deps build/_deps \
+  --out build/repro-bundled --version 0.0.0-repro --jobs 6 --serial
+```
+
+The verifier compares the staged payload by path, mode and SHA-256,
+then compares both archive digests. It moves each configured source and
+build tree aside, extracts its archive, and runs `k check`, `k run`, and
+`k build` with an empty `K_HOME`. The JIT and native runs both match the
+tour's expected output. The first macOS native build must reuse the
+packaged runtime object with the release's selected system Clang and SDK.
+An isolated copy with a corrupt object must rebuild locally and produce
+the same output. A separate offline check imports the packaged Cordis
+application module. `report.json` records download and installed
+bytes by component, cold and warm build timings, cache bytes before and
+after pruning, and the first differing input or payload entry on failure.
+The bundled smoke test exercises the linked packages and the JIT without
+a display or audio device. Each build has its own logs and payload inventory.
+Use `--serial` to time the lanes one at a time on the same host.
+
+The release workflow runs this check on macOS arm64 and includes the
+verified core archive beside the bundled platform archives.
+
+### Rebuilding the Linux cloud release
+
+On Linux with glibc, use Python 3.12 or later, CMake, Ninja, Clang and
+binutils. Supply a local `Microsoft.ML.OnnxRuntime` 1.24.4 `.nupkg`. The
+verifier checks its pinned SHA-256 and extracts the matching arm64 or x64
+SDK independently for each build. The host, engine, providers, prebuilt
+gateway and ONNX Runtime license and notices ship in the cloud archive.
+[ONNX Runtime package](https://www.nuget.org/packages/Microsoft.ML.OnnxRuntime/1.24.4)
+
+```sh
+python3 scripts/reproduce_core.py --profile cloud \
+  --onnx-package /path/to/onnxruntime.1.24.4.nupkg \
+  --out build/repro-cloud --version 0.0.0-repro --jobs 6 --serial
+```
+
+Both extracted archives must produce the same expected prediction using
+the shipped native gateway and TinyCC. The loopback test also covers invalid
+requests, admission limits and deadlines. The input record includes the
+Linux distribution, glibc and toolchain versions. Rebuild on the same
+pinned build image when comparing release digests.
+The release workflow runs the cloud check on Linux arm64 and x64 and
+retains the verified archives along with their manifests and logs.
+[Gateway protocol](design/cordis_microkernel.md#loopback-inference-gateway)
+
+### Testing the gateway memory limit
+
+Use a disposable Linux container with Python 3 and compatible system
+libraries for the target archive. Run with `--network none --memory=96m
+--memory-swap=96m` on a Docker host with cgroup v2. Mount the repository
+and the extracted cloud release read-only. These two invocations check
+the startup gate, successful inference and replacement under the budget,
+and a replacement whose intermediate tensor triggers the kernel OOM
+killer. Use the Python interpreter as the container entrypoint for the
+second invocation so the observer can read the cgroup's `oom_kill` counter
+after the gateway exits.
+
+```sh
+python3 test/cordis_gateway.py --installed /install --memory-budget-mib 96
+python3 test/cordis_gateway_memory.py --install /install --memory-budget-mib 96
+```
+
+[Gateway deployment memory budget](design/cordis_microkernel.md#linux-deployment-memory-budget)
+
+For supervised recovery, provision a separate empty worker cgroup as
+described in the deployment guide. The test driver and supervisor run
+outside the worker group. Set its limit to 96 MiB, disable swap, enable
+`memory.oom.group`, and delegate process migration. Run the following in
+a throwaway environment with the extracted cloud release and Python 3.
+
+```sh
+python3 test/cordis_gateway_supervisor.py --install /install \
+  --worker-cgroup /sys/fs/cgroup/cordis/worker
+```
+
+The fixture checks stable predictions on the same port after a real OOM,
+durable suppression across supervisor restarts, ordinary `SIGKILL`, and
+the retry bound when the stable model itself exhausts memory.
+[Supervised OOM rollback](design/cordis_microkernel.md#supervised-oom-rollback)
 
 Run `python test/run_tests.py --profile baseline --cc native --require-clang`
 after a normal compiler build. CI runs this on Windows, macOS and Linux.
@@ -99,6 +311,58 @@ process and how many programs go into one executable (by default, a number
 that leaves every job some batches); `--batch 1` gives each file its own
 process and each program its own executable.
 
+## Paired K and Rust benchmark
+
+Stage a core release with `scripts/package_release.py`. Use Python 3.12 or
+later, Clang, and the Rust 1.98.1 toolchain pinned in
+[`bench/paired_workloads.json`](../bench/paired_workloads.json). The runner
+uses Cargo from the same toolchain as `rustc`. On macOS, run both series
+consecutively on the same host with the same staged release. Use the system
+Clang driver so K can exercise its executable cache with the selected SDK.
+
+```sh
+rustc_path="$(rustup which --toolchain 1.98.1 rustc)"
+python3.12 bench/run_bench.py paired --exe dist/klang/k \
+  --cc /usr/bin/clang --rustc "$rustc_path" --first k --out build/paired-k-first
+python3.12 bench/run_bench.py paired --exe dist/klang/k \
+  --cc /usr/bin/clang --rustc "$rustc_path" --first rust --out build/paired-rust-first
+```
+
+The manifest fixes the source digests, workload sizes, and expected output
+before measurement. The matched score covers integer summation, expression
+parsing, CSR graph traversal and CSV log scanning. The holdout set covers
+image blur, S-expression parsing, an LRU cache and binary file copy. JSON
+response generation and word counting form the idiomatic score. The
+S-expression implementation uses each language's own allocation strategy,
+so its results appear under idiomatic holdout. The C++ references generate
+the compute and data structure outputs, and Python computes the file fixture
+digests and CSV statistics independently. Both binaries must match every
+expected output. File copy also checks the resulting file's SHA-256.
+
+Each size uses two warmup pairs and seven measured pairs by default. The
+runner alternates which executable starts each pair. It measures process
+startup and task execution, with a warmed filesystem for the I/O cases and
+ordinary buffered writes. `Rust time / K time` is the geometric mean of the
+paired ratios, with equal weight per size and a 95% bootstrap interval that
+resamples pairs within each size. The p95 is the maximum at the default
+sample count. Use `--reps` for longer series. Repeat across hosts before
+generalizing the results.
+
+Both native builds run offline with empty project caches on the first
+build, and with the same inputs and cache on the warm rebuild. K uses `-O2`
+with Clang and compiles its runtime object on the first build. The
+dependency-free Rust builds use the shipped standard library and Cargo
+with `opt-level = 2` and one codegen unit. Both retain executable symbols.
+The installation, standalone executables and build outputs are measured
+in logical bytes, counting hard links once per tree.
+The Rust footprint reflects the installed sysroot, including any extra
+components. The Clang executable and macOS SDK are recorded separately.
+
+Each output directory holds `report.md`, `report.json`, and the manifest
+copy. JSON includes individual wall times, peak RSS, build commands, disk
+use, tool fingerprints, and the separate `k run` compile-and-run series.
+Use a new output directory for every run.
+
 ## Fixture layout
 
 Test fixtures are grouped by category; `run_tests.py` stays at the root of `test/`:
@@ -132,7 +396,7 @@ Test fixtures are grouped by category; `run_tests.py` stays at the root of `test
 | `cli_paths.py` | Tests command-line and import paths. `-o` may target a directory that does not yet exist, for generated C or a `k build` executable. Package sources may be `"."` or `".."`, and an `--include` path may start with a separator. An unresolved import must report the searched locations. Other cases pass a directory as the source or to `embed_file`, and run a compiler without a source tree beside it, which must find the standard library it was configured with and report that `--gen-runtime-header` finds no runtime sources. Called by the main runner. |
 | `extern_types.py` | One imported extern interface and C adapter with unused and partially used functions: slice, reference-pointee and return types are available to the header at O0/O2 through native C and TinyCC, with no implementation needed for an unused extern. Called by the main runner. |
 | `extern_dylib.py` | An extern block bound from a shared library that the test builds. Every parameter shape goes through the runtime's binding, with the library opened by a spelling relative to the resource directory and by a bare name on the loader's path, both under the JIT (with no C toolchain available) and in a built program. The generated C is the same across compiles and binds only the members that are called. A missing library or symbol is a runtime error naming the spelling tried, and unused members need neither. A package declaring both kinds of extern builds its native part only for a program that calls its static one. The sidecar's `dylibs` lists map a name to the spelling each platform opens, with the program's mapping taking precedence over a package's, and a malformed entry or a name that no extern block declares is refused. Called by the main runner. |
-| `runtime_cache.py`, `runtime_cache_cc.c` | Concurrent first builds share one completed runtime object; a failed compile cannot poison the cache, retry and reuse work, and dry runs leave the cache untouched. A controlled C compiler exercises both driver flag styles in debug and release configurations. Called by the main runner. |
+| `runtime_cache.py`, `runtime_cache_cc.c` | Concurrent projects share a completed runtime object. A failed compile leaves diagnostics and retry succeeds. The report accounts for distinct cache groups, pruning skips an object while the linker holds it, and an evicted object rebuilds offline. A controlled C compiler exercises both driver flag styles in debug and release configurations. Called by the main runner. |
 | `native_toolchain.py` | A CMake interface package, runtime and program use one toolchain. Cache paths with and without spaces also exercise response-file arguments, using MinGW GCC on Windows when available. Called by the main runner. |
 | `native_cache.py` | When several programs that use one package with C are built for the first time at once, that C is compiled only once. The other builds wait on the lock of the package's build directory and link the objects the first build made; the controlled C compiler of `runtime_cache_cc.c` checks that those objects are complete. A warm build compiles nothing. Both driver flag styles are tested. Called by the main runner. |
 | `native_rebuild.py` | Tests when native code is rebuilt. Editing a program's C triggers rebuilding for `k build` and `k run`; naming the program by another path does not. Adding an extern fn without changing C rebuilds the JIT library. Other cases cover two C files with the same name in different directories, `--debug` and release builds side by side, and extern fns omitted from a library's symbol table. CMake tests cover reconfiguration after `cmake_options` changes, an undefined `cmake_target` reported during configuration, and a C++ target. Generated CMake files must keep their timestamps when unchanged, and a program's own CMake target must work regardless of how the program is named. Called by the main runner. |
@@ -205,6 +469,17 @@ behind a commit mark that each trim moves, and that macOS growth needs no
 runtime-handled faults, before or after a trim. Both run in both
 profiles. The normal suite also checks
 user-visible worker error diagnostics.
+
+The direct `test/runtime/runtime_tasks_lifecycle.c` regression checks bounded
+round-robin driving, callback re-entry, completion and error, cancellation
+before start, and shutdown while foreign operations still hold resources.
+The `runtime_task_readiness.c` regression injects completion at the arm
+and wait boundaries, checks that parked tasks leave room for cooperative
+peers, verifies external shutdown and drain, and exercises the original
+foreign task descriptor layout.
+The extern-library fixture exercises the same driver through an owning K
+closure, with a deterministic completion callback. The native Cordis test
+checks that a retired provider remains callable until the task drains.
 
 The `gfx/` tests exercise the gfx package under `packages/gfx`.
 They always parse, typecheck and generate C. When the

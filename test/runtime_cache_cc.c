@@ -27,6 +27,18 @@ static int marker_exists(const char *name) {
     return 1;
 }
 
+static int wait_for_marker(const char *name) {
+    for (int tries = 0; !marker_exists(name); ++tries) {
+        if (tries == 3000) return 0;
+        #ifdef _WIN32
+            Sleep(10);
+        #else
+            usleep(10000);
+        #endif
+    }
+    return 1;
+}
+
 static int complete(const char *object) {
     char contents[16] = {0};
     FILE *f = object ? fopen(object, "rb") : NULL;
@@ -89,15 +101,13 @@ int main(int argc, char **argv) {
             fputs("intentional runtime compile failure\n", stderr);
             return 5;
         }
-        for (int tries = 0; !marker_exists("release"); ++tries) {
-            if (tries == 3000) return 6;
-            #ifdef _WIN32
-                Sleep(10);
-            #else
-                usleep(10000);
-            #endif
-        }
+        if (!wait_for_marker("release")) return 6;
         return write_text(out, "complete") ? 0 : 7;
+    }
+    if (object && marker_exists("pause-link")) {
+        char marker[4096];
+        snprintf(marker, sizeof marker, "%s/link-started", getenv("K_CACHE_TEST"));
+        if (!write_text(marker, object) || !wait_for_marker("finish-link")) return 11;
     }
     if (!complete(object)) {
         fputs("linked an incomplete runtime object\n", stderr);

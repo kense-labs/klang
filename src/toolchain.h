@@ -38,6 +38,7 @@ struct Toolchain {
     string desc;      // For people: "MSVC 19.44.35207 (toolset 14.44.35207)".
     string id;        // For the cache: name-version-hash of the path and style.
     string how;       // Where it was found: on PATH, in Visual Studio, --cc, ...
+    string banner;    // GCC-style driver's full version output, including its target.
 };
 
 struct ToolInfo {
@@ -139,9 +140,8 @@ inline bool WriteFileMakingDirs(const string &path, const string &text) {
     filesystem::create_directories(filesystem::path(path).parent_path(), ec);
     auto f = fopen(path.c_str(), "wb");
     if (!f) return false;
-    fwrite(text.data(), 1, text.size(), f);
-    fclose(f);
-    return true;
+    auto written = fwrite(text.data(), 1, text.size(), f);
+    return fclose(f) == 0 && written == text.size();
 }
 
 // Writes `text` to `path` unless the file holds it already, so that its
@@ -313,7 +313,9 @@ inline Toolchain DescribeToolchain(const string &name, const string &style, cons
         auto toolset = getenv("VCToolsVersion");
         t.desc = cat("MSVC ", t.version, toolset ? cat(" (toolset ", toolset, ")") : string());
     } else {
-        t.version = ToolVersion(cc, { "--version" });
+        auto r = RunProcess({ cc, "--version" });
+        if (r.started && r.code == 0) t.banner = std::move(r.output);
+        t.version = VersionIn(FirstLine(t.banner));
         t.desc = cat(name, " ", t.version);
     }
     t.id = cat(name, "-", t.version, "-", Hex8(cat(cc, "|", style)));

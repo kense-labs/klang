@@ -65,10 +65,12 @@ inline void TypeExpr::Dump(string &s, size_t limit) const {
             if (IsRefOrSlice(p)) return true;
         return false;
     };
+    if (owns) s += "own ";
     if (cq) s += "const ";
     auto SubDump = [&](const TypeExpr *inner) {
         // An index type takes no postfix of its own: `(u32 in a)[>..]`.
-        auto parens = inner->kind == TY_FN || inner->cq || inner->ix ||
+        auto parens = inner->kind == TY_FN || inner->cq || inner->owns || inner->ix ||
+                      (inner->kind == TY_STRUCT && inner->struc->st->callable_arity >= 0) ||
                       (cq && chainhasrs(inner));
         if (parens) s += "(";
         inner->Dump(s, limit);
@@ -90,7 +92,36 @@ inline void TypeExpr::Dump(string &s, size_t limit) const {
             break;
         case TY_FLT:  s += FltStorageName(fltstorage); break;
         case TY_BOOL: s += "bool"; break;
-        case TY_STRUCT: s += struc->st->qname; ArgsDump(struc->args); break;
+        case TY_STRUCT:
+            if (struc->st->callable_arity >= 0) {
+                auto argc = (size_t)struc->st->callable_arity;
+                const auto types = CallableSignature(this);
+                s += "fn";
+                if (auto storage = CallableStorage(this)) {
+                    s += "[";
+                    if (storage->arr->sizeexpr) storage->arr->sizeexpr->Dump(s, 0);
+                    else Append(s, storage->arr->size);
+                    s += "]";
+                } else s += "&";
+                s += "(";
+                for (size_t i = 0; i < argc; ++i) {
+                    if (i) s += ", ";
+                    struc->args[i]->Dump(s, limit);
+                }
+                s += ")";
+                auto results = types.size() - argc;
+                if (results) s += " -> ";
+                if (results > 1) s += "(";
+                for (size_t i = argc; i < types.size(); ++i) {
+                    if (i > argc) s += ", ";
+                    struc->args[i]->Dump(s, limit);
+                }
+                if (results > 1) s += ")";
+            } else {
+                s += struc->st->qname;
+                ArgsDump(struc->args);
+            }
+            break;
         case TY_ENUM:
             s += enu->en->qname;
             ArgsDump(enu->args);
@@ -294,6 +325,45 @@ inline void ArrayLit::Dump(string &s, int ind) const {
 }
 
 inline void StructLit::Dump(string &s, int ind) const {
+    if (auto fn = Closure()) {
+        auto env = type->struc->st;
+        s += "fn";
+        if (!env->fields.empty()) {
+            s += "[";
+            for (size_t i = 0; i < inits.size(); i++) {
+                if (i) s += ", ";
+                auto &f = env->fields[i];
+                Append(s, f.name, ": ");
+                f.type->Dump(s);
+                auto init = inits[i].val;
+                auto original = Is<Ident>(init);
+                if (!original || original->name != f.name) {
+                    s += " = ";
+                    init->Dump(s, ind);
+                }
+            }
+            s += "]";
+        }
+        s += "(";
+        for (size_t i = 1; i < fn->params.size(); i++) {
+            if (i > 1) s += ", ";
+            auto &p = fn->params[i];
+            if (p.isvar) s += "var ";
+            Append(s, p.name, ": ");
+            p.type->Dump(s);
+        }
+        s += ")";
+        if (fn->has_rets) {
+            s += " -> ";
+            for (size_t i = 0; i < fn->rets.size(); i++) {
+                if (i) s += ", ";
+                fn->rets[i]->Dump(s);
+            }
+        }
+        s += " ";
+        fn->closure_body->Dump(s, ind);
+        return;
+    }
     type->Dump(s);
     s += " { ";
     for (size_t i = 0; i < inits.size(); i++) {
@@ -324,11 +394,13 @@ inline void ConstFor::Dump(string &s, int ind) const {
         }
         s += "]";
     } else {
-        s += source == ES_FIELDS ? "fields<" : source == ES_VARIANTS ? "variants<" : "types<";
+        s += source == ES_DECORATED ? "decorated<" : source == ES_FIELDS ? "fields<" :
+             source == ES_VARIANTS ? "variants<" : "types<";
         for (size_t i = 0; i < types.size(); i++) {
             if (i) s += ", ";
             types[i]->Dump(s);
         }
+        if (decorator_ns) Append(s, ", namespace ", decorator_ns->empty() ? "::" : *decorator_ns);
         s += ">";
     }
     s += " ";
@@ -407,7 +479,24 @@ inline void Dot::Dump(string &s, int ind) const {
 }
 
 inline void Call::Dump(string &s, int ind) const {
-    DumpOperand(s, callee, ind, true);
+    if (task_await == TaskAwait::Yield) {
+        s += "await yield_now(";
+        if (!args.empty()) args[0]->Dump(s, ind);
+        s += ")";
+        return;
+    }
+    if (task_await == TaskAwait::Child) {
+        s += "await ";
+        DumpOperand(s, Is<Dot>(callee)->obj, ind, false);
+        return;
+    }
+    if (auto id = Is<Ident>(callee); id && id->name == kTaskAwait) {
+        s += "await ";
+        DumpOperand(s, args[0], ind, false);
+        return;
+    }
+    auto d = Is<Dot>(callee);
+    DumpOperand(s, d && d->name == kClosureInvoke ? d->obj : callee, ind, true);
     if (!tyargs.empty()) {
         s += "<";
         for (size_t i = 0; i < tyargs.size(); i++) {
@@ -419,6 +508,7 @@ inline void Call::Dump(string &s, int ind) const {
     s += "(";
     auto first = true;
     for (size_t i = 0; i < args.size(); i++) {
+        if (dumpwritten && decorator_forward) break;
         if (dumpwritten && IsDefaultArg(i)) continue;
         if (!first) s += ", ";
         first = false;
@@ -663,9 +753,26 @@ inline void IncDec::Dump(string &s, int ind) const {
     s += TName(op);
 }
 
+inline void DumpDecorators(string &s, const vector<DecoratorApplication> &decorators, int ind) {
+    for (const auto &decorator : decorators) {
+        s += "@";
+        decorator.type->Dump(s);
+        if (!decorator.args.empty()) {
+            s += "(";
+            for (size_t i = 0; i < decorator.args.size(); ++i) {
+                if (i) s += ", ";
+                decorator.args[i]->Dump(s, ind);
+            }
+            s += ")";
+        }
+        NL(s, ind);
+    }
+}
+
 inline void DumpFields(string &s, const vector<Field> &fields, int ind) {
     for (auto &f : fields) {
         NL(s, ind + 1);
+        DumpDecorators(s, f.decorators, ind + 1);
         if (f.ispad) {
             s += "pad";
             if (f.padsize >= 0) Append(s, " ", f.padsize);
@@ -691,6 +798,7 @@ inline void DumpFields(string &s, const vector<Field> &fields, int ind) {
 }
 
 inline void FnDecl::Dump(string &s, int ind) const {
+    DumpDecorators(s, sf->decorators, ind);
     if (sf->isdeprecated) {
         s += "deprecated ";
         if (!sf->deprecatemsg.empty()) {
@@ -713,12 +821,14 @@ inline void FnDecl::Dump(string &s, int ind) const {
     if (sf->issimd) s += "simd ";
     if (sf->isinline) s += "inline ";
     if (sf->isrec) s += "recursive ";
+    if (sf->async_body) s += "async ";
     s += sf->isthread ? "thread_fn " : "fn ";
     s += sf->isnested ? sf->name : sf->qname;   // See VarDecl::Dump.
     DumpGenerics(s, sf->generics);
     s += "(";
     for (size_t i = 0; i < sf->params.size(); i++) {
         if (i) s += ", ";
+        if (sf->params[i].borrows) s += "borrow ";
         if (sf->params[i].isvar) s += "var ";
         s += sf->params[i].name;
         if (sf->params[i].type) { s += ": "; sf->params[i].type->Dump(s); }
@@ -728,11 +838,12 @@ inline void FnDecl::Dump(string &s, int ind) const {
         }
     }
     s += ")";
-    if (sf->has_rets) {
+    auto &rets = sf->async_body ? sf->async_rets : sf->rets;
+    if (sf->async_body ? !rets.empty() : sf->has_rets) {
         s += " -> ";
-        for (size_t i = 0; i < sf->rets.size(); i++) {
+        for (size_t i = 0; i < rets.size(); i++) {
             if (i) s += ", ";
-            sf->rets[i]->Dump(s);
+            rets[i]->Dump(s);
         }
     }
     if (sf->isextern) {
@@ -741,10 +852,38 @@ inline void FnDecl::Dump(string &s, int ind) const {
         return;
     }
     s += " ";
-    sf->body->Dump(s, ind);
+    (sf->async_body ? sf->async_body : sf->decorator_written ? sf->decorator_written : sf->body)->Dump(s, ind);
 }
 
 inline void StructDecl::Dump(string &s, int ind) const {
+    DumpDecorators(s, st->decorators, ind);
+    if (st->decorator_target != DecoratorTarget::None) {
+        Append(s, "decorator ", st->qname, "(");
+        for (size_t i = 0; i < st->fields.size(); ++i) {
+            if (i) s += ", ";
+            const auto &field = st->fields[i];
+            Append(s, field.name, ": ");
+            field.type->Dump(s);
+        }
+        s += ") on ";
+        if (auto signature = st->decorator_signature) {
+            if (st->decorator_target == DecoratorTarget::AsyncFunction) s += "async ";
+            signature->Dump(s);
+        } else {
+            s += DecoratorTargetName(st->decorator_target);
+        }
+        if (auto wrapper = st->decorator_wrapper) {
+            s += " {";
+            NL(s, ind + 1);
+            s += "wrap ";
+            wrapper->body->Dump(s, ind + 1);
+            NL(s, ind);
+            s += "}";
+        } else {
+            s += ";";
+        }
+        return;
+    }
     if (st->isroot) s += "root ";
     Append(s, "struct ", st->qname);
     DumpGenerics(s, st->generics);
@@ -755,6 +894,7 @@ inline void StructDecl::Dump(string &s, int ind) const {
 }
 
 inline void EnumDecl::Dump(string &s, int ind) const {
+    DumpDecorators(s, en->decorators, ind);
     Append(s, "enum ", en->qname);
     DumpGenerics(s, en->generics);
     s += " {";
@@ -779,7 +919,49 @@ inline void AliasDecl::Dump(string &s, int) const {
     s += ";";
 }
 
-inline void Ast::Dump(string &s) const {
+// In a combined dump, a prefix appears before the qualified declaration
+// has set the parser's namespace. Preserve the lexical references it used
+// in its file. Field annotations already appear inside their declarations.
+struct DecoratorDumpScope {
+    deque<string> qualified;
+    vector<pair<string_view *, string_view>> saved;
+
+    void Qualify(string_view &name, string_view ns) {
+        if (ns.empty()) return;
+        qualified.push_back(cat(ns, "::", name));
+        saved.emplace_back(&name, name);
+        name = qualified.back();
+    }
+
+    void Type(Ast &ast, TypeExpr *t) {
+        if (t->kind != TY_UNRESOLVED) return;
+        auto &n = *t->named;
+        if (SplitName(n.name, n.ns).qualified) return;
+        if (auto st = ast.LookupStruct(n.name, n.ns)) Qualify(n.name, st->ns);
+        else if (auto en = ast.LookupEnum(n.name, n.ns)) Qualify(n.name, en->ns);
+        else if (auto al = ast.LookupAlias(n.name, n.ns)) Qualify(n.name, al->ns);
+    }
+
+    void Prepare(Ast &ast, const vector<DecoratorApplication> &decorators) {
+        if (decorators.empty()) return;
+        function<void(Node *)> value = [&](Node *n) {
+            if (auto id = Is<Ident>(n); id && !SplitName(id->name, id->ns).qualified)
+                if (auto g = ast.LookupGlobal(id->name, id->ns)) Qualify(id->name, g->ns);
+            if (auto cast = Is<AsCast>(n)) Type(ast, cast->type);
+            n->Children(value);
+        };
+        for (const auto &decorator : decorators) {
+            Type(ast, decorator.type);
+            for (auto arg : decorator.args) value(arg);
+        }
+    }
+
+    ~DecoratorDumpScope() {
+        for (auto [name, original] : saved) *name = original;
+    }
+};
+
+inline void Ast::Dump(string &s) {
     // The members of an extern block (§7.10) are consecutive declarations
     // with its library, printed back inside the block; two blocks of one
     // library in a row print as one, which declares the same.
@@ -798,6 +980,10 @@ inline void Ast::Dump(string &s) const {
             openlib = lib;
         }
         if (!openlib.empty()) s += "    ";
+        DecoratorDumpScope scope;
+        if (fd) scope.Prepare(*this, fd->sf->decorators);
+        else if (auto sd = Is<StructDecl>(d)) scope.Prepare(*this, sd->st->decorators);
+        else if (auto ed = Is<EnumDecl>(d)) scope.Prepare(*this, ed->en->decorators);
         d->Dump(s, 0);
         if (Is<VarDecl>(d)) s += ";";  // Globals; other decl kinds self-terminate.
         s += "\n";
@@ -833,7 +1019,8 @@ inline void DumpDocs(Ast &ast, string &s) {
         if (auto fd = Is<FnDecl>(d)) {
             doc(cat("fn ", fd->sf->qname), fd->sf->doc);
         } else if (auto sd = Is<StructDecl>(d)) {
-            doc(cat("struct ", sd->st->qname), sd->st->doc);
+            doc(cat(sd->st->decorator_target != DecoratorTarget::None ? "decorator " : "struct ",
+                    sd->st->qname), sd->st->doc);
             fields(string(sd->st->qname), sd->st->fields);
         } else if (auto ed = Is<EnumDecl>(d)) {
             doc(cat("enum ", ed->en->qname), ed->en->doc);

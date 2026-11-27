@@ -735,15 +735,16 @@ inline VarDef *TypeCheck::NewVar(string_view name, TypeExpr *type, Line l, bool 
 inline VarDef *TypeCheck::LookupVar(string_view name, string_view ns, Node *use) {
     auto top = (int)frames.size() - 1;
     for (auto i = (int)vars.size() - 1; i >= frames[top].varbase; i--)
-        if (vars[i]->name == name) return vars[i];
+        if (vars[i]->name == name) return vars[i]->type == fntype ? nullptr : vars[i];
     VarDef *found = nullptr;
     ForOuterVars(top, [&](VarDef *v) {
         if (v->name != name) return false;
-        v->captured = true;
         found = v;
         return true;
     });
     if (found) {
+        if (found->type == fntype) return nullptr;
+        found->captured = true;
         if (use) NoteEnvRead(found);
         return found;
     }
@@ -1944,6 +1945,16 @@ inline void TypeCheck::CheckWhile(While *x) {
     JoinBreakFlow(sc, true);
 }
 
+// A direct component path names storage without loading the descriptor.
+// Other paths can evaluate a reference to the root and need that value.
+inline VarDef *TypeCheck::TaskRootComponent(Node *n) {
+    auto field = Is<Dot>(n);
+    auto base = field && field->fieldidx >= 0 ? Is<Ident>(field->obj) : nullptr;
+    auto owner = base ? base->vdef : nullptr;
+    if (!owner || !owner->type || ClassOf(owner->type) != SC_ROOT) return nullptr;
+    return owner->components[field->fieldidx];
+}
+
 inline void TypeCheck::CheckFor(ForLoop *x) {
     FlagScope rs(inreturn, false);   // No part of a value being returned.
     auto byref = x->byref;
@@ -2102,13 +2113,19 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
     // what a holder of the activation's holds is what the passes before
     // stored there too, which the elements later iterations read may be.
     auto readback = IsRefOrSlice(bindtype) && elemtype && (!byref || elemtype->kind == TY_REF);
-    if (readback) iterprov.writable = SlotLoadWritable(elemtype, iterprov.writable);
     auto seqprov = iterprov;
+    auto named_view = x->iterkind == IK_SLICE ? Is<Ident>(x->iter) : nullptr;
+    auto view = named_view ? named_view->vdef : nullptr;
+    auto sequential = elemtype && ClassOf(elemtype) != SC_FIXED;
     auto head = SaveFlow();
     auto sc = CheckLoopPasses(x, head, [&] {
+        iterprov = seqprov;
+        if (view && view->type->kind == TY_SLICE)
+            iterprov.SetProv(RefProvOf(view));
         if (readback) {
+            iterprov.writable = SlotLoadWritable(elemtype, iterprov.writable);
             auto slotread = SlotReadable(elemtype);
-            auto rb = ReadBackRoot(elemtype, seqprov, seqprov.byteview,
+            auto rb = ReadBackRoot(elemtype, iterprov, iterprov.byteview,
                                    intemp ? &contents : nullptr, slotread, true);
             iterprov.TakeAlts(rb);
             for (auto &a : iterprov.alts) a.slotread = slotread;
@@ -2140,6 +2157,50 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
         }
         CheckLoopBody(x->body);
     });
+    x->task_resumable = ContainsTaskAwait(x->body);
+    x->task_sequential = x->task_resumable && sequential;
+    x->task_shared_owner = nullptr;
+    if (x->task_resumable && x->iterkind != IK_RANGE && x->iterkind != IK_COUNT) {
+        // Index the extent again on each iteration. A named owner either
+        // stays in place or gets storage scoped to the task.
+        auto resident = [&](TypeExpr *type) {
+            return sequential || byref ? TaskResidentStorage(type) : IsFlat(type);
+        };
+        function<VarDef *(Node *)> stable = [&](Node *n) -> VarDef * {
+            if (!resident(n->exprtype)) return nullptr;
+            if (auto id = Is<Ident>(n)) return id->vdef;
+            if (auto component = TaskRootComponent(n)) return component;
+            if (auto field = Is<Dot>(n); field && field->IsField()) {
+                auto base = field->obj->exprtype;
+                if (ClassOf(base) == SC_FIXED || (base->kind == TY_STRUCT && GetStructInst(base)->frameobj))
+                    return stable(field->obj);
+            }
+            return nullptr;
+        };
+        auto slice = Is<SliceExpr>(x->iter);
+        auto source = slice ? slice->obj : x->iter;
+        auto type = source->exprtype;
+        auto owner = type->kind == TY_ARRAY ? stable(source) : nullptr;
+        auto local_slice = view && !view->isglobal && view->type->kind == TY_SLICE &&
+                           resident(elemtype);
+        // The outer invocation protects a borrowed array for the entire
+        // loop, including the original owner of an inline slice.
+        auto named = Is<Ident>(source);
+        auto input_array = named && !named->vdef->isglobal && IsPlainRef(type) &&
+                           type->ref->sub->kind == TY_ARRAY && TaskInputBorrow(type) &&
+                           resident(type->ref->sub) && !seqprov.unknown && !seqprov.alts.empty() &&
+                           all_of(seqprov.alts.begin(), seqprov.alts.end(), [&](const RootAlt &a) {
+                               return TaskInputLifetime(a.root, CurRealFrame().spec);
+                           });
+        if (owner && owner->isglobal && (sequential || slice) &&
+            TaskSharedStorage(type) && TaskResidentStorage(owner->type)) x->task_shared_owner = owner;
+        auto unstable_global = owner && owner->isglobal &&
+                               (sequential ? type->arr->akind != A_VAR : slice && type->arr->akind != A_FIXED) &&
+                               !x->task_shared_owner;
+        if ((sequential && elemtype->kind == TY_REF) ||
+            (!local_slice && !input_array && (!owner || unstable_global)))
+            Error(x, "a suspending sequence loop needs stable storage for its elements and references");
+    }
     JoinBreakFlow(sc, true);
 }
 
@@ -2306,6 +2367,9 @@ inline void TypeCheck::CheckDefer(Defer *d) {
     if (frames.back().isdefault || !real.sf || !real.spec)
         Error(d, "defer outside of a function: a global initializer has no scope exit (§6.6)");
     real.spec->hasdefer = true;
+    auto spec = real.spec;
+    auto growbase = cur.growlog.size();
+    auto storebase = storeevents.size();
     auto saved = SaveFlow();
     for (auto &e : saved.locals)
         if (e.var->isvar) e.var->narrowed = nullptr;
@@ -2315,6 +2379,32 @@ inline void TypeCheck::CheckDefer(Defer *d) {
     PushScope(SK_DEFER, d);
     deferbodies++;
     CheckBlockVal(d->body, nullptr, false);
+    if (spec->sf->task_flow) {
+        auto external = [&](VarDef *v) {
+            if (v && v->componentowner) v = v->componentowner;
+            return v && (v->isglobal || (v->ownerspec && v->ownerspec != spec));
+        };
+        for (auto i = growbase; i < cur.growlog.size(); ++i)
+            d->task_external_effect |= external(cur.growlog[i].root);
+        for (auto i = storebase; i < storeevents.size(); ++i) {
+            auto container = storeevents[i].container;
+            if (container && container->componentowner) container = container->componentowner;
+            d->task_external_effect |= container && container->isglobal;
+        }
+        // Rebinding a global optional to null need not produce a store with
+        // a source root. Include it and callees' recorded optional rebinds.
+        function<void(Node *)> rebinds = [&](Node *n) {
+            if (auto a = Is<Assign>(n); a && a->op == T_DOTASSIGN)
+                if (auto id = Is<Ident>(a->lval)) d->task_external_effect |= external(id->vdef);
+            if (auto call = Is<Call>(n)) {
+                if (call->spec && !call->spec->record.reboundoptionals.empty()) d->task_external_effect = true;
+                for (auto callee : call->dispatch)
+                    if (!callee->record.reboundoptionals.empty()) d->task_external_effect = true;
+            }
+            RunChildren(n, rebinds);
+        };
+        rebinds(d->body);
+    }
     deferbodies--;
     PopScope();
     RestoreFlow(saved);
@@ -2399,6 +2489,7 @@ inline void TypeCheck::CheckDefers() {
         if (auto c = Is<Call>(n)) {
             if (c->builtin < 0) add(to, c->spec);
             for (auto k : c->dispatch) add(to, k);
+            for (auto task : c->scope_tasks) add(to, task);
             for (auto &[t, k] : c->fmtspecs) add(to, k);
         }
         RunChildren(n, [&](Node *ch) { collect(ch, to); });
@@ -2406,6 +2497,7 @@ inline void TypeCheck::CheckDefers() {
     for (auto sp : ast.fnspecs) {
         if (!sp->body) continue;
         collect(sp->body, callees[sp]);
+        add(callees[sp], sp->task_cleanup);
         if (!sp->needs.empty()) rfvia[sp] = sp;
     }
     for (auto changed = true; changed;) {
@@ -2588,6 +2680,7 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
             CheckValue(vd->inits[0], nullptr);
         }
         auto call = Is<Call>(vd->inits[0]);
+        if (!reachable && call && call->task_stage) return;
         if (!call || call->rettypes.size() != vd->names.size())
             Error(vd, cat((int64_t)vd->names.size(), vd->results ? " targets" : " names",
                           " need that many values", call ? cat(", and the call gives ",
@@ -2659,6 +2752,7 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
                 if (!ann && IsNonFixedLValue(v)) vd->inits[i] = AutoRef(vd->inits[i], v);
             }
         }
+        if (auto call = Is<Call>(vd->inits[i]); !reachable && call && call->task_stage) return;
         if (IsUntypedEmptyArray(v.type) && !ann) {
             // `var out = [];` -- a grow-only array whose element type the
             // first push, append or assignment into it supplies (§4.2).
@@ -2786,6 +2880,9 @@ inline Val TypeCheck::CheckAssignedValue(Assign *a, TypeExpr *target, TypeExpr *
         CheckGrowsSince(base, built, cat("the value assigned to ", ExprStr(a->lval)), target);
         CheckBuiltUses(a->rhs, a->lval, target, built, arr);
     }
+    if ((arr || ClassOf(target) == SC_FIXED) && HasRelRefT(target) &&
+        HoldsLimitedArray(target, [&](TypeExpr *ft) { return FieldRuns(ft); }))
+        CheckTaskRebuild(a->rhs, a->lval, target, dest.roots);
     if (v.type->kind == TY_VOID && reachable)
         Error(a, "the right-hand side has no value");
     return v;

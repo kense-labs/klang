@@ -6,8 +6,10 @@ read_line taking off a carriage return only before a newline, never one the
 builder held before or one at EOF, and keeping a NUL byte and a 70,000-byte
 line, longer than stdio's buffer; read_stdin(out, max) appending at most max
 bytes a call, past its 64 KB buffer too, and reading nothing for a max of 0;
-and on POSIX write_file_atomic keeping the permissions of the file it
-replaces."""
+read_file appending regular files and pipe data, and scoped readers
+appending bounded chunks without losing the builder prefix; and on POSIX
+write_file_atomic keeping the
+permissions of the file it replaces."""
 import os
 from pathlib import Path
 import stat
@@ -36,6 +38,26 @@ fn main() {
     } else if argv[1] == "pieces" {
         let max, _ = parse_int(argv[2]);
         while read_stdin(got, max) { print(got.len); }
+    } else if argv[1] == "file" {
+        got.append("prefix");
+        print(read_file(argv[2], got), " ", got.len);
+        write_stdout(got);
+        return;
+    } else if argv[1] == "reader" {
+        let limit, _ = parse_int(argv[3]);
+        got.append("prefix");
+        let opened = with_read_file(argv[2]) { read =>
+            assert(read(got, -1) == -1);
+            assert(read(got, 0) == 0 && got.len == 6);
+            loop {
+                let n = read(got, limit);
+                assert(n >= 0 && n <= limit && n <= 65536);
+                if n == 0 { break; }
+            }
+        };
+        print(opened, " ", got.len);
+        write_stdout(got);
+        return;
     } else {
         print(write_file_atomic(argv[1], "new"));
         return;
@@ -86,6 +108,36 @@ def check_runtime_io(exe, base, *, jit):
                 if code != 0 or out.split() != [str(n) for n in want]:
                     raise RuntimeError(f"runtime io: the {how} program reading {data!r} with "
                                        f"{mode}: wanted {want}, got exit {code}:\n{out}{err}")
+            payload = b"a\x00\r\n\x1a" * 60000 + b"end"
+            files = [(root / "missing", None, b""), (root, None, b"")]
+            for name, content in (("empty", b""), ("block", payload[:65536]),
+                                  ("over_block", payload[:65539]),
+                                  ("initial_read", payload[:131072]), ("large", payload)):
+                path = root / name
+                path.write_bytes(content)
+                files.append((path, content, b""))
+            if not tc.IS_WINDOWS and Path("/dev/fd").is_dir():
+                files.append((Path("/dev/fd/0"), payload, payload))
+            for path, content, stdin in files:
+                r = subprocess.run([str(a) for a in (*argv, "file", path)], cwd=root, env=env,
+                                   input=stdin, capture_output=True, timeout=300)
+                data = b"prefix" + (content or b"")
+                expected = f"{str(content is not None).lower()} {len(data)}\n".encode() + data
+                if r.returncode or r.stdout != expected:
+                    raise RuntimeError(f"runtime io: {how} read_file {path} left "
+                                       f"{len(r.stdout)} output bytes, exit {r.returncode}: "
+                                       f"{tc.decode(r.stderr)}")
+            for name, content, limit in (("missing", None, 31), ("empty", b"", 31),
+                                         ("block", payload[:65536], 31),
+                                         ("large", payload, 90000)):
+                r = subprocess.run([str(a) for a in (*argv, "reader", root / name, limit)],
+                                   cwd=root, env=env, capture_output=True, timeout=300)
+                data = b"prefix" + (content or b"")
+                expected = f"{str(content is not None).lower()} {len(data)}\n".encode() + data
+                if r.returncode or r.stdout != expected:
+                    raise RuntimeError(f"runtime io: {how} scoped reader {name} left "
+                                       f"{len(r.stdout)} bytes, exit {r.returncode}: "
+                                       f"{tc.decode(r.stderr)}")
         if tc.IS_WINDOWS:
             return
         for mode in (0o600, 0o755):

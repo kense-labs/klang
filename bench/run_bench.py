@@ -37,6 +37,7 @@ or those rows measure an unoptimized compiler.
   python bench/run_bench.py --report-only            # regenerate results.md from saved
                                                      # measurements, e.g. after editing
                                                      # notes.md
+  python bench/run_bench.py paired --help            # frozen K and Rust comparison
 """
 
 import argparse
@@ -1052,4 +1053,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["paired"]:
+        from paired import main as paired_main
+        sys.exit(paired_main(sys.argv[2:]))
     sys.exit(main())

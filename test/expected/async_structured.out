@@ -1,0 +1,35 @@
+condition true
+child cleanup 20
+branch 40
+child cleanup 1
+iteration 0 42
+iteration 1 42
+child cleanup 3
+iteration 2 48
+parent 48
+joined 48
+condition false
+child cleanup 1
+iteration 0 3
+iteration 1 3
+parent 3
+skipped 3
+condition true
+child cleanup 20
+branch 0
+parent 0
+condition false
+child cleanup 1
+iteration 0 3
+iteration 1 3
+parent 3
+bound 2
+bound 5
+counted 2 0
+counted 3 1
+counted 4 2
+range 521
+loop cleanup
+early 7
+loop cleanup
+break 8

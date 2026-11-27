@@ -283,6 +283,8 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                 Error(c, "default<T>() needs exactly one explicit type argument");
             auto t = Subst(c->tyargs[0]);
             ValidateType(t, c->line, VT_LOCAL);
+            if (t->kind == TY_STRUCT && t->struc->st->task_join)
+                Error(c, "a task must be constructed by calling its async fn");
             // A relative reference's is the null of its zero offset, whatever
             // the width, and as a value the plain reference a load gives.
             auto vt = ValueType(t);
@@ -597,6 +599,9 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                                         d.kind == B_PUSH ? "pushed into " : "allocated in ",
                                         ExprStr(args[0])),
                                     recvarr);
+                if ((d.kind == B_ALLOC_INDEX || d.kind == B_ALLOC_REF) && HasRelRefT(elem) &&
+                    HoldsLimitedArray(elem, [&](TypeExpr *ft) { return FieldRuns(ft); }))
+                    CheckTaskRebuild(an, args[0], elem, rv.AsRoots());
                 break;
             }
             case 'a': {  // An array/slice of the receiver's element type.
@@ -1655,15 +1660,16 @@ inline void TypeCheck::GrowOnlyShrinkAt(Node *c, const string &op, VarDef *vd,
 // its root joins the literal's. It is storage wherever the literal lands,
 // so it never points into a grow-shrink array (§5.2), even where FitsAt has
 // no destination to check it against: in an argument, which passes none
-// since parameters die before their arguments' roots, or in a result.
-inline void TypeCheck::NoteLitElem(LitDeep &deep, Node *at, const Val &v, TypeExpr *t) {
+// since parameters die before their arguments' roots, or in a result. A
+// private task input slot has its own check at the consuming invocation.
+inline void TypeCheck::NoteLitElem(LitDeep &deep, Node *at, const Val &v, TypeExpr *t, bool scoped_task_input) {
     if (!t) return;
     auto isrs = IsRefOrSlice(t);
     if (!isrs && !HoldsPlainRef(t)) return;
     if (v.isnull) return;
     const Roots &roots = isrs ? v.AsRoots() : ContentsOf(v);
     auto reach = false;
-    if (auto gs = StoredIntoGrowShrink(v, roots, t, !isrs, &reach))
+    if (auto gs = scoped_task_input ? nullptr : StoredIntoGrowShrink(v, roots, t, !isrs, &reach))
         Error(at, NeverStoredError(gs, MayPointWording(roots, gs), reach));
     deep.roots.Add(roots);
     deep.byteview = deep.byteview || v.byteview;
@@ -2500,6 +2506,10 @@ inline bool TypeCheck::GlobalReach::Holds(VarDef *x, Line *where) {
 // A store on record. A copy of a container's contents holds what that one
 // does; its own roots add only what is not among those (Covered).
 inline bool TypeCheck::GlobalReach::Event(const StoreEvent &e) {
+    // A copied parameter begins with exactly the contents passed at each
+    // call. The class is broad inside the callee so it can describe several
+    // owners, but each argument's known roots keep their exactness here.
+    if (e.incoming && tc.IsClassRoot(e.root)) return Class(e.root, true, e.pointee, e.byteview);
     if (e.src) {
         if (Holds(e.src)) return true;
         if (Covered(e.src, e.root, e.exact)) return false;
@@ -2516,6 +2526,257 @@ inline bool TypeCheck::GlobalReach::Covered(VarDef *src, VarDef *root, bool exac
     for (auto &c : src->contents.alts)
         if (c.root == root && (exact || !c.exact)) return true;
     return false;
+}
+
+// The erased value borrows the environment itself. Assignment through aliases
+// can change its contents after conversion, so check the stores to that
+// storage and follow the actual arguments behind any parameter classes.
+inline void TypeCheck::CheckBorrowedCallableCaptures() {
+    if (borrowed_callable_environments.empty()) return;
+    map<VarDef *, vector<const StoreEvent *>> stores;
+    for (const auto &event : madestores) stores[event.container].push_back(&event);
+
+    struct CaptureProof {
+        TypeCheck &tc;
+        const map<VarDef *, vector<const StoreEvent *>> &stores;
+        set<VarDef *> environments, holders, classes;
+        Line failed;
+
+        bool Environment(VarDef *root, TypeExpr *type) {
+            if (!environments.insert(root).second) return true;
+            if (tc.DirectCallableEnvironment(root, type))
+                return !tc.HoldsPlainRef(type) || Holder(root);
+            if (!tc.IsClassRoot(root)) return false;
+            auto uses = tc.classuses.find(root);
+            if (uses == tc.classuses.end()) return false;
+            for (const auto &use : uses->second) {
+                if (use.roots.unknown || use.roots.None()) return false;
+                for (const auto &a : use.roots.alts)
+                    if (!a.exact || !Environment(a.root, type)) return false;
+            }
+            return true;
+        }
+
+        bool Root(const RootAlt &origin, VarDef *source = nullptr) {
+            if (tc.StableCallableCaptureRoot(origin)) return true;
+            auto v = origin.root;
+            if (!origin.exact) {
+                return source && (origin.from == source || v == source ||
+                                  (!v && source->isglobal)) && Holder(source);
+            }
+            if (!tc.IsClassRoot(v)) return false;
+            if (!classes.insert(v).second) return true;
+            auto uses = tc.classuses.find(v);
+            if (uses == tc.classuses.end()) return false;
+            for (const auto &use : uses->second) {
+                if (use.roots.unknown) return false;
+                for (const auto &a : use.roots.alts)
+                    if (!Root(a, use.src)) return false;
+            }
+            return true;
+        }
+
+        bool Holder(VarDef *v) {
+            if (!holders.insert(v).second) return true;
+            if (tc.IsClassRoot(v)) {
+                auto uses = tc.classuses.find(v);
+                if (uses == tc.classuses.end()) return false;
+                for (const auto &use : uses->second) {
+                    if (use.roots.unknown) return false;
+                    for (const auto &a : use.roots.alts)
+                        if (!a.exact || !a.root || !Holder(a.root)) return false;
+                }
+                return true;
+            }
+            if (v->contents.unknown) return false;
+            auto events = stores.find(v);
+            if (events == stores.end()) return true;
+            for (auto e : events->second) {
+                auto exact = e->exact || (e->incoming && tc.IsClassRoot(e->root));
+                if (Root({ e->root, exact }, e->src)) continue;
+                if (!failed.line) failed = e->at;
+                return false;
+            }
+            return true;
+        }
+    };
+
+    set<pair<VarDef *, TypeExpr *>> checked;
+    for (auto [root, type, conversion] : borrowed_callable_environments) {
+        if (!checked.emplace(root, type).second) continue;
+        CheckItem([&] {
+            CaptureProof proof { *this, stores, {}, {}, {}, {} };
+            if (!proof.Environment(root, type))
+                Error(proof.failed.line ? proof.failed : conversion,
+                      proof.failed.line || DirectCallableEnvironment(root, type)
+                          ? cat("borrowed callable captures need read-only references to stable fixed storage. ",
+                                root->name, " is borrowed at ", Where(conversion))
+                          : string("borrow_callable needs a closure in stable storage at every call site"));
+        });
+    }
+}
+
+inline const vector<TypeCheck::GlobalTaskEdge> &TypeCheck::GlobalTaskReferents(VarDef *holder) {
+    if (!task_global_stores) {
+        auto &index = task_global_stores.emplace();
+        for (size_t i = 0; i < madestores.size(); ++i) index[madestores[i].container].push_back(i);
+        auto consider = [&](VarDef *v) {
+            if (!v || !v->type || ClassOf(v->type) == SC_ROOT || IsRefOrSlice(v->type)) return;
+            if (TaskSharedStorage(v->type) || HoldsPlainRef(v->type)) task_global_storage.push_back(v);
+        };
+        for (auto declaration : ast.globals) for (auto global : declaration->defs) {
+            consider(global);
+            for (auto component : global->components) consider(component);
+        }
+    }
+    auto [entry, fresh] = task_global_referents.try_emplace(holder);
+    if (fresh) {
+        vector<TypeExpr *> pointees;
+        RefPointees(holder->type, pointees);
+        for (auto owner : task_global_storage) {
+            auto storage = LoadType(owner->type);
+            auto shared = TaskSharedStorage(storage);
+            auto fits = false;
+            auto follows_holder = false;
+            for (auto part : pointees) {
+                if (CanContain(storage, part)) {
+                    fits = true;
+                    follows_holder = follows_holder || TaskSealedHolder(part);
+                } else if (IsU8(part) && Viewable(storage)) {
+                    fits = true;
+                }
+            }
+            if (!fits || (!shared && !follows_holder)) continue;
+            GlobalReach reach { *this, owner, storage, *task_global_stores, {}, {} };
+            if (reach.Holds(holder)) entry->second.push_back({ owner, follows_holder });
+        }
+    }
+    return entry->second;
+}
+
+inline void TypeCheck::RecordGlobalTaskLoans(Node *at, VarDef *holder, vector<VarDef *> &loans) {
+    vector<VarDef *> pending { holder };
+    set<VarDef *> seen { holder };
+    RecordTaskLoan(loans, holder);
+    for (size_t i = 0; i < pending.size(); ++i) {
+        auto next = pending[i];
+        if (next->reusable || !TaskHolderStorage(next->type))
+            Error(at, cat("a task holder link needs stable storage for ", next->name));
+        for (auto [owner, follows_holder] : GlobalTaskReferents(next)) {
+            // A link back to the starting holder can reach another slot.
+            RecordTaskLoan(loans, owner);
+            if (follows_holder && seen.insert(owner).second) pending.push_back(owner);
+        }
+    }
+}
+
+inline void TypeCheck::AddGlobalTaskReferents(Call *constructor, vector<VarDef *> &loans) {
+    if (!constructor || !constructor->task_borrow_consumed) return;
+    for (const auto &[arg, type, roots, field] : constructor->task_arg_roots) {
+        if (!TaskInputHolderRef(type) && !TaskInputHolder(type)) continue;
+        for (const auto &origin : roots.alts) {
+            if (origin.root && origin.root->isglobal && TaskHolderStorage(origin.root->type))
+                RecordGlobalTaskLoans(arg, origin.root, loans);
+        }
+    }
+}
+
+inline vector<TaskSlotLoan> TypeCheck::PreciseTaskSlots(Call *constructor, const vector<VarDef *> &owners,
+                                                        const vector<VarDef *> &whole_loans, const Call *site,
+                                                        span<const SavedTaskBorrow> saved) {
+    vector<VarDef *> arrays;
+    for (auto owner : owners)
+        if (!owner->reusable && IsArrayKind(owner->type, A_LIMITED) && TaskHolderStorage(owner->type) &&
+            find(whole_loans.begin(), whole_loans.end(), owner) == whole_loans.end())
+            arrays.push_back(owner);
+    if (arrays.empty()) return {};
+
+    struct Source {
+        TypeExpr *type;
+        Roots direct, indirect;
+        TaskSlotSource value;
+        bool holder, graph;
+    };
+    vector<Source> sources;
+    unordered_map<VarDef *, const Roots *> snapshots;
+    if (site)
+        for (const auto &[v, roots] : site->task_loan_roots) snapshots.emplace(v, &roots);
+    auto add_source = [&](TypeExpr *type, const Roots &roots, const Roots &extra, TaskSlotSource place) {
+        auto ref = TaskInputHolderRef(type);
+        auto value = TaskInputHolder(type);
+        auto sampled = place.field >= 0 || place.local || place.operand.has_value();
+        Source source { type, roots, extra, place, sampled && (ref || value), value };
+        vector<VarDef *> pending;
+        set<VarDef *> seen;
+        auto visit = [&](VarDef *v) {
+            if (v && TaskHolderStorage(v->type) && seen.insert(v).second) pending.push_back(v);
+        };
+        if (source.holder || TaskHolderStorage(type)) {
+            for (const auto &origin : roots.alts) visit(origin.root);
+            for (const auto &origin : extra.alts) visit(origin.root);
+        }
+        for (size_t i = 0; i < pending.size(); ++i) {
+            auto owner = pending[i];
+            if (owner->isglobal) {
+                for (auto [target, follows] : GlobalTaskReferents(owner)) {
+                    source.indirect.Add({ target, true });
+                    if (follows) visit(target);
+                }
+            } else if (auto it = snapshots.find(owner); it != snapshots.end()) {
+                source.indirect.Add(*it->second);
+                for (const auto &origin : it->second->alts) visit(origin.root);
+            }
+        }
+        // Flat, direct holder references keep the fixed-size loan path.
+        if (ref)
+            source.graph = any_of(arrays.begin(), arrays.end(), [&](VarDef *owner) {
+                return source.indirect.Has(owner);
+            });
+        sources.push_back(std::move(source));
+    };
+    if (constructor && constructor->task_borrow_consumed) {
+        const auto &inputs = constructor->task_arg_roots;
+        map<int, const Roots *> extra;
+        for (const auto &[arg, type, roots, field] : inputs)
+            if (field < 0) extra.emplace(-2 - field, &roots);
+        for (const auto &[arg, type, roots, field] : inputs) {
+            if (field < 0) continue;
+            auto it = extra.find(field);
+            add_source(type, roots, it == extra.end() ? Roots {} : *it->second, { .field = field });
+        }
+    }
+    for (const auto &[type, roots, place] : saved) add_source(type, *roots, Roots {}, place);
+    // Other loans can require full protection for their backing owners.
+    for (auto owner : whole_loans)
+        if (TaskHolderStorage(owner->type))
+            add_source(owner->type, RootsOf(owner), Roots {}, {});
+
+    // A variable-size leaf has no sampled byte count. Keep the full loan
+    // if such a leaf can name storage inside the candidate owner.
+    auto samples = [&](const Source &source, VarDef *owner) {
+        if (!source.holder || (!source.direct.Has(owner) && !source.indirect.Has(owner))) return false;
+        auto exact = [](const RootAlt &origin) { return origin.exact; };
+        if (source.direct.unknown || source.indirect.unknown ||
+            !source.direct.All(exact) || !source.indirect.All(exact)) return false;
+        if (!source.graph) return true;
+        return !Reaches(source.type, [&](TypeExpr *part) {
+            if (!IsRefOrSlice(part) || IsRelRef(part)) return false;
+            auto storage = part->kind == TY_REF ? part->ref->sub : part->sub;
+            return ClassOf(storage) != SC_FIXED &&
+                   CanContain(LoadType(owner->type), PointeeOf(part));
+        });
+    };
+    erase_if(arrays, [&](VarDef *owner) {
+        return any_of(sources.begin(), sources.end(), [&](const Source &source) {
+            return (TaskResizeOverlaps(owner, source.direct) || TaskResizeOverlaps(owner, source.indirect)) &&
+                   !samples(source, owner);
+        });
+    });
+    vector<TaskSlotLoan> slots;
+    for (const auto &source : sources)
+        for (auto owner : arrays)
+            if (samples(source, owner)) slots.push_back({ owner, source.value, source.graph });
+    return slots;
 }
 
 // Whether a store into `holder`, from event `from` on, may have put a
@@ -4145,11 +4406,79 @@ inline void TypeCheck::CheckBuiltUses(Node *rhs, Node *lval, TypeExpr *target,
             [&](Call *c, FnSpec *sp) {
                 vector<VarDef *> named;
                 auto pending = NamedOutside(sp, named);
-                for (auto v : named)
-                    check(c, v, cat("call ", sp->sf->name),
-                          cat(sp->sf->name, pending ? ", still being checked, may use "
-                                                    : " uses ", v->name));
+                for (auto v : named) {
+                    if (c->scope_controller) {
+                        check(c, v, cat("call ", ExprStr(c)), cat("a task may use ", v->name));
+                    } else {
+                        check(c, v, cat("call ", sp->sf->name),
+                              cat(sp->sf->name, pending ? ", still being checked, may use "
+                                                        : " uses ", v->name));
+                    }
+                }
             });
+}
+
+// A self-relative replacement writes its final address as it evaluates the
+// RHS. A task driven by that expression must use independent storage.
+inline void TypeCheck::CheckTaskRebuild(Node *rhs, Node *lval, TypeExpr *target,
+                                        const Roots &built) {
+    if (ContainsTaskAwait(rhs))
+        Error(rhs, "cannot suspend while rebuilding a value with self-relative links and limited arrays");
+    if (built.None()) return;
+    auto overlaps = [&](const Roots &roots, TypeExpr *type) {
+        auto compatible = !type || MayHoldValueOf(target, type) || MayHoldValueOf(type, target);
+        if (roots.unknown && compatible) return true;
+        for (const auto &write : built.alts)
+            for (const auto &read : roots.alts) {
+                if (read.root && (read.root == write.root ||
+                                  (write.root && write.root->componentowner == read.root)))
+                    return true;
+                if (compatible && MayAliasRoots(read.root, read.exact, write.root, write.exact) != AL_NO)
+                    return true;
+            }
+        return false;
+    };
+    auto report = [&](Call *c, VarDef *v) {
+        Error(c, cat("a task may use ", v->name, " while ", ExprStr(lval),
+                     " is being rebuilt in place"));
+    };
+    auto check = [&](Call *c, VarDef *v) {
+        auto t = v->type;
+        if (!t) return;
+        if (overlaps(RootsOf(v), t)) report(c, v);
+        if (IsRefOrSlice(t) && !IsRelRef(t)) {
+            auto pt = PointeeOf(t);
+            if (overlaps(RefRootsOf(v), pt)) report(c, v);
+            t = pt;
+        }
+        if (!HoldsPlainRef(t)) return;
+        if (overlaps(v->contents, nullptr) || Reaches(t, [&](TypeExpr *part) {
+                if (!IsRefOrSlice(part) || IsRelRef(part)) return false;
+                auto pt = PointeeOf(part);
+                return MayHoldValueOf(target, pt) || MayHoldValueOf(pt, target) || IsU8(pt);
+            }))
+            report(c, v);
+    };
+    set<FnSpec *> visited;
+    function<void(Node *)> visit = [&](Node *n) {
+        EachUse(n, [](Ident *, Node *) {}, [&](Call *c, FnSpec *sp) {
+            auto scope = c->scope_controller ? c->scope_controller->task_scope : c;
+            for (auto owner : c->task_shared_owners) check(c, owner);
+            for (const auto &owners : scope->scope_loan_owners)
+                for (auto owner : owners) check(c, owner);
+            for (const auto &owners : scope->scope_resize_owners)
+                for (auto owner : owners) check(c, owner);
+            if (!visited.insert(sp).second) return;
+            if (sp->sf->task_join) {
+                vector<VarDef *> named;
+                NamedOutside(sp, named, true);
+                for (auto v : named) check(c, v);
+            } else if (!sp->sf->isextern) {
+                visit(sp->body);
+            }
+        });
+    };
+    visit(rhs);
 }
 
 // The code under n that CheckBuiltUses judges: `named` gets each Ident
@@ -4173,6 +4502,9 @@ template<typename F, typename G> void TypeCheck::EachUse(Node *n, F named, G cal
         if (auto c = Is<Call>(n)) {
             if (c->spec) called(c, c->spec);
             for (auto sp : c->dispatch) called(c, sp);
+            for (auto task : c->scope_tasks) called(c, task);
+            if (c->scope_controller && c->scope_operation != TaskScopeOperation::Finished)
+                for (auto task : c->scope_controller->task_scope->scope_tasks) called(c, task);
             for (auto &fs : c->fmtspecs) called(c, fs.second);
         }
         RunChildren(n, walk);
@@ -4227,13 +4559,14 @@ inline bool TypeCheck::FieldsApart(Node *use, Node *lval, TypeExpr *target) {
 // checked (a recursive cycle) is not known in full: it counts as naming
 // every global and every variable in scope on the path being checked, and
 // the result says so.
-inline bool TypeCheck::NamedOutside(FnSpec *spec, vector<VarDef *> &out) {
-    if (auto it = namedoutside.find(spec); it != namedoutside.end()) {
+inline bool TypeCheck::NamedOutside(FnSpec *spec, vector<VarDef *> &out, bool direct_components,
+                                   vector<Node *> *paths) {
+    if (auto it = namedoutside.find(spec); !direct_components && !paths && it != namedoutside.end()) {
         out = it->second;
         return false;
     }
     set<FnSpec *> walked;
-    vector<VarDef *> named;
+    vector<pair<VarDef *, Node *>> named;
     auto pending = false;
     function<void(FnSpec *)> visit = [&](FnSpec *sp) {
         if (sp->sf->isextern || !walked.insert(sp).second) return;
@@ -4246,7 +4579,16 @@ inline bool TypeCheck::NamedOutside(FnSpec *spec, vector<VarDef *> &out) {
         }
         // Rounds reuse the same annotated body; the record only tells us
         // whether a completed round exists to justify reading it.
-        EachUse(sp->body, [&](Ident *id, Node *) { named.push_back(id->vdef); },
+        EachUse(sp->body, [&](Ident *id, Node *path) {
+                    auto var = id->vdef;
+                    if (direct_components)
+                        for (auto field = Is<Dot>(path); field; field = Is<Dot>(field->obj))
+                            if (auto component = TaskRootComponent(field)) {
+                                var = component;
+                                break;
+                            }
+                    named.emplace_back(var, path);
+                },
                 [&](Call *, FnSpec *callee) { visit(callee); });
     };
     visit(spec);
@@ -4257,13 +4599,16 @@ inline bool TypeCheck::NamedOutside(FnSpec *spec, vector<VarDef *> &out) {
             if (c && seen.insert(c).second) out.push_back(c);
     };
     // A variable of an activation the call runs is created by it.
-    for (auto v : named)
-        if (v->isglobal || !walked.count(v->ownerspec)) add(v);
+    for (auto [v, path] : named)
+        if (v->isglobal || !walked.count(v->ownerspec)) {
+            add(v);
+            if (paths) paths->push_back(path);
+        }
     if (pending) {
         for (auto g : ast.globals)
             for (auto vd : g->defs) add(vd);
         for (auto vd : vars) add(vd);
-    } else {
+    } else if (!direct_components && !paths) {
         namedoutside[spec] = out;
     }
     return pending;

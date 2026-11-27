@@ -1347,68 +1347,113 @@ fn format_flt_mul(limbs: u64[>..]&, f: u64) {
     }
 }
 
+// ASCII digit values for every byte. 255 is outside every supported radix.
+let int_text::digits: const u8[256] = [
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+      0,   1,   2,   3,   4,   5,   6,   7,   8,   9, 255, 255, 255, 255, 255, 255,
+    255,  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,  20,  21,  22,  23,  24,
+     25,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35, 255, 255, 255, 255, 255,
+    255,  10,  11,  12,  13,  14,  15,  16,  17,  18,  19,  20,  21,  22,  23,  24,
+     25,  26,  27,  28,  29,  30,  31,  32,  33,  34,  35, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+    255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+];
+
 // The value of digit c in base, with letters of either case from 10; -1 if
 // c is not a digit below base.
 fn parse_digit(c: u8, base: i64) -> i64 {
-    let x = c as i64;
-    var d = -1;
-    if x >= '0' && x <= '9' { d = x - '0'; }
-    else if x >= 'a' && x <= 'z' { d = x - 'a' + 10; }
-    else if x >= 'A' && x <= 'Z' { d = x - 'A' + 10; }
-    if d >= base { return -1; }
-    return d;
+    let d = int_text::digits[c] as i64;
+    return if d < 36 && d < base { d } else { -1 };
 }
 
-// An optionally signed whole-string integer; false on anything else,
-// including a value outside i64 or a base outside 2..36.
+// For each radix b, the greatest n with b^n <= 2^63. A magnitude
+// of n digits then fits even in the smallest limit, i64.max.
+let int_text::safe_digits: const u8[37] = [
+     0,  0, 63, 39, 31, 27, 24, 22, 21, 19, 18, 18, 17, 17, 16, 16,
+    15, 15, 15, 14, 14, 14, 14, 13, 13, 13, 13, 13, 13, 12, 12, 12,
+    12, 12, 12, 12, 12,
+];
+
+// Accumulate digits whose count already proves the magnitude fits.
+fn int_text::digits_value(s: const u8[:], from: i64, to: i64, radix: u64) -> u64, bool {
+    var value: u64 = 0;
+    for i in from..to {
+        let digit = int_text::digits[s[i]] as u64;
+        if digit >= radix { return 0, false; }
+        value = value * radix + digit;
+    }
+    return value, true;
+}
+
+fn int_text::long_magnitude(s: const u8[:], start: i64, radix: u64, limit: u64, safe: i64) -> u64, bool {
+    var first = start;
+    while s.len - first >= 8 && hash_le64(s, first) == 0x3030303030303030 {
+        first += 8;
+    }
+    while first < s.len && s[first] == '0' { first++; }
+    let count = s.len - first;
+    // b^(safe + 1) exceeds 2^63 and b >= 2. More than safe + 2
+    // significant digits therefore require at least 2^64.
+    if count > safe + 2 { return 0, false; }
+    if count <= safe { return int_text::digits_value(s, first, s.len, radix); }
+    let tail = first + safe;
+    let prefix, ok = int_text::digits_value(s, first, tail, radix);
+    if !ok { return 0, false; }
+
+    // Only the last one or two significant digits can overflow.
+    let cutoff = limit / radix;
+    let last = limit - cutoff * radix;
+    var value = prefix;
+    for i in tail..s.len {
+        let digit = int_text::digits[s[i]] as u64;
+        if digit >= radix { return 0, false; }
+        if value >= cutoff && (value > cutoff || digit > last) { return 0, false; }
+        value = value * radix + digit;
+    }
+    return value, true;
+}
+
+fn int_text::magnitude(s: const u8[:], start: i64, base: i64, limit: u64) -> u64, bool {
+    let radix = base as u64;
+    let safe: i64 = int_text::safe_digits[base];
+    if s.len - start <= safe { return int_text::digits_value(s, start, s.len, radix); }
+    return int_text::long_magnitude(s, start, radix, limit, safe);
+}
+
+// Parse a whole integer when signedness is chosen at runtime. In signed
+// mode the returned bits represent an i64, including negative values.
+inline fn parse_int_bits(s: const u8[:], signed: bool, base: i64 = 10) -> u64, bool {
+    if base < 2 || base > 36 || s.len == 0 { return 0, false; }
+    let c = s[0];
+    let neg = signed && c == '-';
+    let start = if c == '+' || neg { 1 } else { 0 };
+    if start == s.len { return 0, false; }
+    let min_magnitude: u64 = 9223372036854775808;
+    let limit: u64 = if !signed { 18446744073709551615 }
+                     else if neg { min_magnitude }
+                     else { min_magnitude - 1 };
+    let value, ok = int_text::magnitude(s, start, base, limit);
+    let bits = if neg && value != 0 { 18446744073709551615 - value + 1 } else { value };
+    return bits, ok;
+}
+
+// An optionally signed whole-string i64.
 fn parse_int(s: u8[:], base: i64 = 10) -> i64, bool {
-    if base < 2 || base > 36 { return 0, false; }
-    var i = 0;
-    var neg = false;
-    if s.len > 0 && (s[0] == '-' || s[0] == '+') {
-        neg = s[0] == '-';
-        i = 1;
-    }
-    if i >= s.len { return 0, false; }
-    // The magnitude accumulates as a negative number: -2^63 has no positive
-    // counterpart, while every other magnitude has a negative one. `d < base`
-    // is checked first, so `base` is positive in the overflow test; dividing
-    // truncates toward zero, which is the ceiling for these negative bounds.
-    let min = -9223372036854775807 - 1;
-    var v = 0;
-    while i < s.len {
-        let d = parse_digit(s[i], base);
-        if d < 0 { return 0, false; }
-        if v < (min + d) / base { return 0, false; }
-        v = v * base - d;
-        i += 1;
-    }
-    if !neg {
-        if v == min { return 0, false; }
-        v = -v;
-    }
-    return v, true;
+    let bits, ok = parse_int_bits(s, true, base);
+    return bits as! i64, ok;
 }
 
-// A whole-string integer with an optional '+'; false on anything else,
-// including '-' or a value outside u64, or a base outside 2..36.
+// A whole-string u64 with an optional plus sign.
 fn parse_uint(s: u8[:], base: i64 = 10) -> u64, bool {
-    if base < 2 || base > 36 { return 0, false; }
-    var i = 0;
-    if s.len > 0 && s[0] == '+' { i = 1; }
-    if i >= s.len { return 0, false; }
-    let max: u64 = 18446744073709551615;
-    var v: u64 = 0;
-    while i < s.len {
-        let d = parse_digit(s[i], base);
-        if d < 0 { return 0, false; }
-        let b = base as u64;
-        let du = d as u64;
-        if v > (max - du) / b { return 0, false; }
-        v = v * b + du;
-        i += 1;
-    }
-    return v, true;
+    return parse_int_bits(s, false, base);
 }
 
 // A decimal float with optional sign, fraction and exponent, or the inf,

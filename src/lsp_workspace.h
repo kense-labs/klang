@@ -9,9 +9,6 @@
 namespace klang {
 
 // In main.cpp.
-vector<string> StdlibDirs(const string &stdlibdir, const string &exe);
-void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlibdirs,
-                  const string &exedir, const SourceProvider &sources);
 int RunOnCompilerStack(const function<int()> &fn);
 
 struct Document {
@@ -50,6 +47,7 @@ struct Workspace {
     vector<string> stdlibdirs;
     map<string, Document> open;     // By PathKey.
     vector<unique_ptr<Root>> roots;
+    CordisDiagnostics diagnostics;
     // The commands the client runs itself, which code lenses may name: the
     // protocol has no way to ask, so its initialization options list them
     // (`commands`).
@@ -292,6 +290,7 @@ struct Workspace {
     // replaces the analysis queries read. A cancelled one leaves the root
     // dirty for the next; one not cancellable runs to its end.
     void Analyze(Root &r, bool cancellable = true) {
+        auto provider = diagnostics.Pin();
         auto an = make_unique<Analysis>();
         an->ast = make_unique<Ast>();
         auto &ast = *an->ast;
@@ -304,7 +303,8 @@ struct Workspace {
                 // The parser and the checker go on past the errors they
                 // recover from, which the sink collects; the passes after
                 // the check want a program without any.
-                ParseProgram(ast, r.path, stdlibdirs, DirOf(exe), sources);
+                const ProgramLoadOptions load { stdlibdirs, DirOf(exe), PackageFetchMode::Offline };
+                ParseProgram(ast, r.path, load, sources);
                 ResolveTypeNames(ast);
                 an->parsed = true;
                 // The source's indexes stand on the tree as written, which
@@ -336,11 +336,16 @@ struct Workspace {
         } catch (Cancelled &) {
             return;
         }
+        vector<Diagnostic> additions;
+        if (provider) {
+            additions = CordisDiagnostics::Inspect(*provider, r.path, ast, an->diags);
+            if (cancellable && rpc.cancel.load(memory_order_relaxed)) return;
+        }
         r.dirty = false;
         r.files.clear();
         for (auto &[path, text] : ast.sources) r.files.insert(PathKey(path));
         if (!an->indexed) an->IndexFiles();
-        Publish(r, *an);
+        Publish(r, *an, additions, provider ? cat("cordis/", provider->id) : string());
         if (an->parsed || !r.analysis) {
             if (!an->built) an->Build();
             Reap(std::move(r.analysis));
@@ -418,7 +423,8 @@ struct Workspace {
         j.EndObject();
     }
 
-    static PublishedDiagnostic RenderDiagnostic(const Diagnostic &d, const Analysis &an, int fileidx) {
+    static PublishedDiagnostic RenderDiagnostic(const Diagnostic &d, const Analysis &an, int fileidx,
+                                                string_view source = "klang") {
         auto &files = an.files;
         JsonOut j;
         j.BeginObject();
@@ -426,7 +432,7 @@ struct Workspace {
         if (where.fileidx != fileidx) where = DiagLoc { fileidx, 1, 0, 0, 0 };
         WriteRangeOf(j, where, files[(size_t)fileidx].text);
         j.Member("severity", (int64_t)(d.warning ? 2 : 1));
-        j.Member("source", "klang");
+        j.Member("source", source);
         // The related lines at no known place stay part of the message.
         auto message = d.message;
         for (auto &r : d.related)
@@ -488,7 +494,7 @@ struct Workspace {
     // a file (UriOfPath), whatever spelling the editor opened it by. A
     // diagnostic at no place in the program (a file that cannot be opened)
     // is reported at the root file's first line.
-    void Publish(Root &r, const Analysis &an) {
+    void Publish(Root &r, const Analysis &an, span<const Diagnostic> additions, string_view source) {
         auto &ast = *an.ast;
         map<int, vector<const Diagnostic *>> perfile;
         vector<const Diagnostic *> nowhere;
@@ -517,6 +523,12 @@ struct Workspace {
                 j.EndObject();
                 diags.push_back({ j.s, j.s.size() });
             }
+        }
+        for (auto &d : additions) {
+            auto &file = an.files[(size_t)d.where.fileidx];
+            auto lines = file.text.Lines();
+            if (d.where.line > lines || d.where.endline > lines) continue;
+            published[file.uri].push_back(RenderDiagnostic(d, an, d.where.fileidx, source));
         }
         swap(r.published, published);
         for (auto &[uri, diags] : r.published) PublishDiagnostics(uri);

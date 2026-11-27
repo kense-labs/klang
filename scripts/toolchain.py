@@ -597,7 +597,7 @@ def _peak_windows(handle):
     return int(info.PeakWorkingSetSize)
 
 
-def run_measured(exe, args=(), *, stdin_path=None):
+def run_measured(exe, args=(), *, stdin_path=None, env=None, output_dir=None):
     """Run `exe` once and report wall time, peak memory, output and exit code.
 
     Output goes through files rather than pipes: it is read back whole anyway,
@@ -606,14 +606,15 @@ def run_measured(exe, args=(), *, stdin_path=None):
     while the process is still a handle we hold -- Windows reports zero for it
     once the process is gone, which is exactly when we want to ask."""
     exe = Path(exe)
-    outf, errf = exe.parent / (exe.name + ".stdout"), exe.parent / (exe.name + ".stderr")
+    output_dir = Path(output_dir) if output_dir is not None else exe.parent
+    outf, errf = output_dir / (exe.name + ".stdout"), output_dir / (exe.name + ".stderr")
     argv = [str(exe)] + [str(a) for a in args]
     if IS_WINDOWS:
         stdin_f = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
         try:
             with open(outf, "wb") as fo, open(errf, "wb") as fe:
                 start = time.perf_counter()
-                p = subprocess.Popen(argv, stdin=stdin_f, stdout=fo, stderr=fe)
+                p = subprocess.Popen(argv, stdin=stdin_f, stdout=fo, stderr=fe, env=env)
                 p.wait()
                 ms = (time.perf_counter() - start) * 1000.0
                 # Popen keeps the process handle open until it is collected, so
@@ -631,7 +632,7 @@ def run_measured(exe, args=(), *, stdin_path=None):
              os.O_RDONLY, 0o644),
         ]
         start = time.perf_counter()
-        pid = os.posix_spawn(str(exe), argv, os.environ, file_actions=actions)
+        pid = os.posix_spawn(str(exe), argv, os.environ if env is None else env, file_actions=actions)
         _, status, usage = os.wait4(pid, 0)
         ms = (time.perf_counter() - start) * 1000.0
         # ru_maxrss is bytes on the BSDs, kilobytes on Linux.

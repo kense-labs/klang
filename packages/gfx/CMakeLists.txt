@@ -45,6 +45,8 @@ FetchContent_Declare(k_nuklear
     URL_HASH SHA256=3760831cb8957fe0208f3af7b16b45d525480afb602dfd39671125077258ef25
     SOURCE_SUBDIR klang-source-only)
 FetchContent_MakeAvailable(k_sdl k_nuklear)
+set_property(DIRECTORY PROPERTY K_PACKAGE_LICENSES
+    "sdl\t${k_sdl_SOURCE_DIR}/LICENSE.txt" "nuklear\t${k_nuklear_SOURCE_DIR}/LICENSE")
 
 # --- SDL ---------------------------------------------------------------------
 # Static only. SDL_DEPS_SHARED stays on: on Linux SDL then links only the C

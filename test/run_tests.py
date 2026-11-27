@@ -1771,6 +1771,67 @@ def main():
         elif r.check_loop_shapes(cfile.read_text()):
             r.ok(f"loop shapes {f.name}")
     r.show_task(loop_shapes)
+
+    def async_poll_shape():
+        f = HERE / "codegen" / "async_single_suspend.k"
+        for level in ("-O0", "-O2"):
+            cfile = gendir / f"async-poll-{level[1:]}.c"
+            code, out, err = r.klang(level, "-o", cfile, f)
+            if code != 0:
+                r.fail(f"async poll {level}", out + err)
+                return
+            text = cfile.read_text()
+            polls = re.findall(r"^static k_task_poll \w+\(\w+ \*f, bool cancelling\) \{\n(.*?)^\}",
+                               text, re.M | re.S)
+            suspended = [poll for poll in polls if re.search(
+                r"case 1: goto (k_task_resume_\d+);.*?f->wait\.s0\.value = [^;]+;"
+                r".*?return K_TASK_POLL_PENDING;\s*\1:;.*?= f->wait\.s0\.value;"
+                r".*?f->result = [^;]+;\s*return K_TASK_POLL_READY;", poll, re.S)]
+            if len(suspended) != 1 or text.count("if (!k_task_join_local(&f, &") != 3:
+                r.fail(f"async poll {level}", "expected driver entry and a typed resume after a pending poll")
+                return
+        r.ok("async poll shape")
+    r.show_task(async_poll_shape)
+
+    def async_child_poll_shape():
+        fixture = HERE / "codegen" / "async_await_child.k"
+        for level in ("-O0", "-O2"):
+            cfile = gendir / f"async-child-{level[1:]}.c"
+            code, out, err = r.klang(level, "-o", cfile, fixture)
+            if code != 0:
+                r.fail(f"async child poll {level}", out + err)
+                return
+            text = cfile.read_text()
+            polls = re.findall(r"^static k_task_poll \w+\(\w+ \*f, bool cancelling\) \{\n(.*?)^\}",
+                               text, re.M | re.S)
+            pending = r"(\w+) = k_task_child_poll\(&f->child\);\s*if \(\1 != K_TASK_POLL_READY\) return \1;"
+            waiting = [poll for poll in polls if re.search(pending, poll)]
+            typed = [poll for poll in waiting if re.search(
+                pending + r"[^}]*f->wait\.s\d+\.child\.result", poll)]
+            if len(waiting) != 3 or len(typed) != 2 or text.count("return k_task_child_drain(&f->child);") != 3:
+                r.fail(f"async child poll {level}", "expected pending propagation, typed results and child drain")
+                return
+        r.ok("async child poll shape")
+    r.show_task(async_child_poll_shape)
+
+    def partial_slice_checks():
+        f = HERE / "optimizer" / "bce_partial_slices.k"
+        cfile = gendir / "partial-slices-shapes.c"
+        code, out, err = r.klang("-O1", "-o", cfile, f)
+        if code != 0:
+            r.fail("partial slice checks", out + err)
+            return
+        text = cfile.read_text()
+        lines = [i for i, line in enumerate(f.read_text().splitlines(), 1) if "// bce:keep" in line]
+        expected = (r"t\d+ > t\d+", r"t\d+ < 0", r"t\d+ < t\d+")
+        for line, want in zip(lines, expected, strict=True):
+            check = re.search(r"if \(([^\n]*)\) k_abort\(K_E_SLICE, k_file\d+, "
+                              rf"{line}\);", text)
+            if not check or not re.fullmatch(want, check[1]):
+                r.fail("partial slice checks", f"line {line}: expected {want}, got {check[1] if check else None}")
+                return
+        r.ok("partial slice checks")
+    r.show_task(partial_slice_checks)
     # An inline fn returning two values stays a call in K and is declared
     # K_INLINE in the C, for the C compiler to inline (§7.13).
     def inline_fn_c():
@@ -2149,6 +2210,8 @@ def main():
                     r.ok(f"runtime {name}")
         r.show_task(runtime_lifecycle, "runtime_threads_lifecycle", "threads")
         r.show_task(runtime_lifecycle, "runtime_trim_memory", "runtime")
+        r.show_task(runtime_lifecycle, "runtime_tasks_lifecycle", "runtime")
+        r.show_task(runtime_lifecycle, "runtime_task_readiness", "runtime")
 
         # Library builds' C hosts, each built with the C the compiler writes for
         # its program (--header). host_exit's ends the program with k_exit
@@ -2299,7 +2362,7 @@ def main():
                     r.fail(f"mul_add-clang{gopt} {name}.k", out + err)
                     continue
                 ctext = src.read_text(encoding="utf-8")
-                if not re.search(r"#define K_MUL_ADD_MODE fused\nGS_SIMD_TARGET1 static [^\n]*"
+                if not re.search(r"#define K_MUL_ADD_MODE fused\nK_SIMD_TARGET1 static [^\n]*"
                                  r"\bdirect_g\w*_simd1\(", ctext):
                     r.fail(f"mul_add-clang{gopt} {name}.k", "no fused mode around the AVX2 version")
                     continue
@@ -2403,6 +2466,10 @@ def main():
         checks.append(("version", code == 0 and version.match(out) is not None, out + err))
         code, out2, err = tc.run_capture([exe, "--version"])
         checks.append(("--version", code == 0 and out2 == out, out2 + err))
+        for budget in ["-1", "1MiB", "99999999999999999999999999999"]:
+            code, out, err = tc.run_capture([exe, "cache", "prune", "--budget", budget])
+            checks.append((f"bad cache budget {budget}", code == 1 and
+                           not out and "integer byte budget" in err, out + err))
         # A word that is no command, option or file is a mistyped command.
         code, out, err = tc.run_capture([exe, "biuld", str(probe)])
         checks.append(("a mistyped command", code == 1 and "unknown command biuld" in err and
@@ -2436,7 +2503,7 @@ def main():
             # fish names a long option without its dashes.
             names = ["-l debug", "-l check"] if shell == "fish" else ["--debug", "--check"]
             checks.append((f"completion {shell}", code == 0 and
-                           all(v in out for v in ["build", "format", ".k", *names]),
+                           all(v in out for v in ["build", "cache", "format", ".k", *names]),
                            out[:400] + err))
             if shell in ("bash", "zsh") and shutil.which(shell) and os.name != "nt":
                 script = gendir / f"completion.{shell}"
@@ -2492,7 +2559,7 @@ def main():
         checks.append(("--help", code == 0 and "build" in overview and
                        "--multi-test" not in overview, overview + err))
         pages = overview
-        for cmd in ["run", "build", "check", "fetch", "format", "toolchain", "version", "lsp",
+        for cmd in ["run", "build", "check", "fetch", "cache", "cordis", "format", "toolchain", "version", "lsp",
                     "completion"]:
             code, out, err = tc.run_capture([exe, cmd, "--help"])
             checks.append((f"{cmd} --help", code == 0 and
@@ -2800,7 +2867,8 @@ def main():
         try:
             check_extern_dylib(exe, cc, gendir, jit=jit, runtime=r.runtime, extra=extra)
             r.ok("extern dylib: a block's members bound from a shared library by name, "
-                 "missing library and symbol, unused members, a package with both kinds")
+                 "missing library and symbol, unused members, a package with both kinds, "
+                 "and exactly-once release of a scoped C handle")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("extern dylib", str(e))
     if cc:
@@ -2840,10 +2908,13 @@ def main():
     r.show_task(git_packages)
 
     def runtime_cache():
-        from runtime_cache import check_runtime_cache
+        from runtime_cache import check_executable_cache, check_runtime_cache
         try:
             check_runtime_cache(exe, cc, gendir)
-            r.ok("runtime cache: concurrent builds, failed compile, retry and reuse")
+            r.ok("runtime cache: concurrent projects, failed compile, accounting, pruning with "
+                 "a live link and offline rebuild")
+            if check_executable_cache(exe, gendir):
+                r.ok("executable cache: unchanged builds, invalidation and concurrent reuse")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("runtime cache", str(e))
     if cc:
@@ -2859,12 +2930,26 @@ def main():
     if cc:
         r.show_task(native_cache)
 
+    def locked_native_cache():
+        from native_cache import check_locked_native_cache
+        try:
+            skipped = check_locked_native_cache(exe, cc, gendir, jit=jit)
+            if skipped:
+                r.say(f"skip locked native cache ({skipped})")
+            else:
+                r.ok("locked native cache: reuse, accounting, active leases and offline rebuild")
+        except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
+            r.fail("locked native cache", str(e))
+    if cc:
+        r.show_task(locked_native_cache)
+
     def runtime_io():
         from runtime_io import check_runtime_io
         try:
             check_runtime_io(exe, gendir, jit=jit)
             r.ok("runtime io: stdin's bytes as they came, read_line into a builder holding a "
-                 "carriage return, a NUL byte and a 70,000-byte line, write_file_atomic "
+                 "carriage return, a NUL byte and a 70,000-byte line, read_file appending "
+                 "binary data and preserving its prefix on failure, write_file_atomic "
                  "keeping a file's permissions")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("runtime io", str(e))

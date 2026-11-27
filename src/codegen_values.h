@@ -345,13 +345,13 @@ inline string CodeGen::FieldPtr(const string &base, const vector<Field> &fields,
 
 // Reads of the length come from a loop-hoisted local where there is one;
 // `lenlv`, which the operations that change the length write, does not.
-inline CodeGen::ArrView CodeGen::ArrayView(const Loc &lv) {
-    auto v = RawArrayView(lv);
+inline CodeGen::ArrView CodeGen::ArrayView(const Loc &lv, bool reenter) {
+    auto v = RawArrayView(lv, reenter);
     if (!lv.hlen.empty()) v.len = lv.hlen;
     return v;
 }
 
-inline CodeGen::ArrView CodeGen::RawArrayView(const Loc &lv) {
+inline CodeGen::ArrView CodeGen::RawArrayView(const Loc &lv, bool reenter) {
     auto t = lv.t;
     ArrView v;
     if (t->kind == TY_SLICE) {
@@ -387,11 +387,13 @@ inline CodeGen::ArrView CodeGen::RawArrayView(const Loc &lv) {
             assert(!lv.val);
             auto ls = LenStore(t->arr);
             if (ls == IS_VARINT) {
-                // Sequential unless elements are fixed; length prefix is
-                // dynamic, so materialize both once.
-                auto p = T();
-                L("uint8_t *", p, " = (", lv.s, ") + K_ULEB_SIZE(", lv.s, ");");
-                v.elems = p;
+                auto elems = cat("(", lv.s, " + K_ULEB_SIZE(", lv.s, "))");
+                if (reenter) v.elems = std::move(elems);
+                else {
+                    auto p = T();
+                    L("uint8_t *", p, " = ", elems, ";");
+                    v.elems = p;
+                }
                 v.len = cat("K_ULEB_READ(", lv.s, ")");
             } else {
                 v.elems = cat("((", lv.s, ") + ", IntSize(ls), ")");
@@ -498,14 +500,15 @@ inline void CodeGen::UseFieldView(Dot *d, Loc &lv) {
 // into a huge native frame by HoistAggregateDecls or by a C compiler's
 // inliner. Reuse follows the existing scope watermarks, including
 // break/continue/return-from.
-inline void CodeGen::FixedLocal(TypeExpr *t, string &name, const string &init, bool forlocal) {
+inline void CodeGen::FixedLocal(TypeExpr *t, string &name, const string &init, bool forlocal,
+                               const VarDef *owner) {
     if (!LargeFixedOnStack(t)) {
         L(CT(t), " ", name, init.empty() ? ";" : cat(" = ", init, ";"));
         return;
     }
     auto stk = AllocStk(forlocal);
     L(CT(t), " *", name, " = (", CT(t), " *)", Top(stk), ";");
-    SaveBase(forlocal, stk, cat("(uint8_t *)", name));
+    SaveBase(forlocal, stk, cat("(uint8_t *)", name), owner);
     Bump(stk, cat("sizeof(", CT(t), ")"));
     name = cat("(*", name, ")");
     if (init == "{0}") L("K_MEMZERO(&", name, ", sizeof(", name, "));");
@@ -642,24 +645,36 @@ inline string CodeGen::FltStr(double v, bool f32) {
 // Indexed element location with bounds check (elided when the BCE pass
 // proved it redundant, or for provably in-range constant indices into
 // fixed arrays).
-inline CodeGen::Loc CodeGen::IndexLoc(Loc lv, Node *idxnode, Line ln, bool nobc) {
+inline CodeGen::Loc CodeGen::IndexLoc(Loc lv, Node *idxnode, Line ln, bool nobc, bool task_place) {
     if (lv.t->kind == TY_REF) DerefLoc(lv);
     auto v = ArrayView(lv);
-    if (HasStmts(idxnode)) {
+    if (!task_place && HasStmts(idxnode)) {
         auto elems = T(), len = T();
         L(v.typedelems ? CT(v.elem) : string("uint8_t"), " *", elems, " = ", v.elems, ";");
         L("int64_t ", len, " = ", v.len, ";");
         v.elems = elems;
         v.len = len;
     }
-    string idx;
-    if (locnow && Is<Ident>(idxnode)) {
-        idx = GenX(idxnode);
-        if (!IsCName(idx)) idx = Snapshot(idxnode->exprtype, idx);
-    } else {
-        idx = GenPure(idxnode);
-    }
-    if (lv.t->kind == TY_SLICE) {
+    auto checked = [&] {
+        string idx;
+        if (!task_place && locnow && Is<Ident>(idxnode)) {
+            idx = GenX(idxnode);
+            if (!IsCName(idx)) idx = Snapshot(idxnode->exprtype, idx);
+        } else {
+            idx = GenPure(idxnode);
+        }
+        auto il = Is<IntLit>(idxnode);
+        auto statlen = lv.t->kind == TY_ARRAY && lv.t->arr->akind == A_FIXED
+                           ? ArrSize(lv.t->arr) : -1;
+        if (nobc || (il && statlen >= 0 && il->val >= 0 && il->val < statlen)) return idx;
+        return cat("K_IDX((int64_t)(", idx, "), ", v.len, ", ", LocArgs(ln), ")");
+    };
+    // A fixed named array's address follows its root. Only the index
+    // needs a spill, with its bounds check done before later operands.
+    auto ix = !task_place ? checked()
+            : TaskOperandType(idxnode) ? GenTaskOperand(idxnode, checked)
+            : Snapshot(ast.inttypes[IS_I64], checked());
+    if (lv.t->kind == TY_SLICE && !task_place) {
         // MSVC /O2 can discard stores through a copied slice header while
         // retaining earlier values in its fixed-array owner (typecheck's
         // slices() exercises this after K inlining). Loading the base
@@ -669,12 +684,6 @@ inline CodeGen::Loc CodeGen::IndexLoc(Loc lv, Node *idxnode, Line ln, bool nobc)
         L(IsBytesT(v.elem) ? "uint8_t" : CT(v.elem), " *", p, " = ", v.elems, ";");
         v.elems = p;
     }
-    string ix;
-    auto il = Is<IntLit>(idxnode);
-    auto statlen = lv.t->kind == TY_ARRAY && lv.t->arr->akind == A_FIXED
-                       ? ArrSize(lv.t->arr) : -1;
-    if (nobc || (il && statlen >= 0 && il->val >= 0 && il->val < statlen)) ix = idx;
-    else ix = cat("K_IDX((int64_t)(", idx, "), ", v.len, ", ", LocArgs(ln), ")");
     if (v.typedelems) {
         Loc r;
         r.t = v.elem;
@@ -787,7 +796,9 @@ inline CodeGen::Loc CodeGen::GenLoc(Node *n) {
     if (auto ix = Is<Index>(n)) {
         auto lv = GenLoc(ix->obj);
         if (lv.t->kind == TY_REF) DerefLoc(lv);
-        return IndexLoc(lv, ix->idx, ix->line, ix->nobc);
+        if (ix->task_place && lv.t->kind == TY_SLICE && TaskOperandType(ix->obj))
+            lv.s = GenTaskOperand(ix->obj, [&] { return lv.s; });
+        return IndexLoc(lv, ix->idx, ix->line, ix->nobc, ix->task_place);
     }
     // `&path` addressed as a location is the path itself: going through a
     // reference temporary would spell the value's stack a second way,
@@ -929,6 +940,7 @@ inline CodeGen::Loc CodeGen::RzTempLoc(TypeExpr *t, const string &h, const strin
 // A resizable-valued temporary (a call or control result): elements on a
 // fresh statement-scoped stack, header in a temp.
 inline CodeGen::Loc CodeGen::GenRzTmp(Node *n) {
+    TaskLiteralScope inputs(*this, n);
     auto t = n->exprtype;
     string stk;
     auto h = RzTemp(t, stk);
@@ -1355,8 +1367,10 @@ inline void CodeGen::GenBranch(Node *n, bool when, string lbl, int exitscope) {
     auto jump = [&](const string &c) {
         auto restores = false;
         if (exitscope >= 0)
-            for (auto i = exitscope; i < (int)cscopes.size(); i++)
-                restores = restores || !cscopes[i].saves.empty();
+            for (auto i = exitscope; i < (int)cscopes.size(); i++) {
+                auto &scope = cscopes[i];
+                restores = restores || !scope.saves.empty() || !scope.defers.empty() || scope.task_controller;
+            }
         if (!restores) {
             L(c.empty() ? "" : cat("if (", c, ") "), "goto ", lbl, ";");
             return;
@@ -1387,7 +1401,7 @@ inline void CodeGen::GenBranch(Node *n, bool when, string lbl, int exitscope) {
     }
     PushSc(SC_PLAIN);
     auto x = GenTruth(n);
-    if (!cscopes.back().saves.empty()) {
+    if (!cscopes.back().saves.empty() || !cscopes.back().defers.empty() || cscopes.back().task_controller) {
         auto t = T();
         L("uint8_t ", t, " = (uint8_t)(", x, " != 0);");
         x = t;
@@ -1556,21 +1570,21 @@ inline string CodeGen::CtlValX(Node *n) {
 
 // A non-control node's value routed to a destination.
 inline void CodeGen::LeafAny(Node *n, const Dst &d) {
+    TaskLiteralScope inputs(*this, n);
     if (d.k == DK_STACK) { GenConstruct(n, d.s, d.t, d.lenlv); return; }
     if (d.k == DK_LVALUE) {
         if (d.pool) { L(d.s, " = ", GenPrefVal(n), ";"); return; }
         if (GenIntoLimited(n, d.t, d.s, true)) return;   // The source may lie in d.s.
         // A literal holding relative references builds at the destination;
         // assigning it from a temporary would copy the temporary's offsets.
-        if ((Is<StructLit>(n) || Is<ArrayLit>(n)) && HasRelRef(n->exprtype)) {
+        auto fixedlit = Is<StructLit>(n) || Is<ArrayLit>(n);
+        if (fixedlit && HasRelRef(n->exprtype)) {
             FixedLitAt(n, d.s);
-        } else if (auto sl = Is<StructLit>(n); sl && d.fresh && d.t && PtrAbi(d.t) &&
-                   TEq(d.t, n->exprtype)) {
-            // Nothing reads a fresh destination: built there, not in a
-            // temporary copied over (StructLit::CgX). Without d.fresh,
+        } else if (fixedlit && d.fresh && d.t && PtrAbi(d.t) && TEq(d.t, n->exprtype)) {
+            // A fresh destination may be filled directly. Without d.fresh,
             // fixed_pointer_abi's from_global prints otherwise at -O2.
             if (HasUninitSlots(n->exprtype)) L("K_MEMZERO(&", d.s, ", sizeof(", d.s, "));");
-            StructLitAt(sl, d.s, false);
+            FixedLitAtLv(n, d.s, false);
         } else {
             // A named result already where it is returned to (OpenIbFixed)
             // needs nothing.
@@ -1592,6 +1606,7 @@ inline void CodeGen::LeafAny(Node *n, const Dst &d) {
 }
 
 inline string CodeGen::GenFixedArrayLit(ArrayLit *al) {
+    TaskLiteralScope inputs(*this, al);
     auto et = al->exprtype;
     if (et->kind == TY_SLICE) {
         // A literal in slice position: a temporary fixed array, sliced
@@ -1651,6 +1666,7 @@ inline string CodeGen::GenPtr(Node *n, string *stkout) {
     // one is built below as any other value, which gives it its capacity.
     if (auto s = Is<StrLit>(n); s && n->exprtype->arr->akind == A_VAR) return GenStrBytes(s);
     // Everything else constructs on a fresh temp stack.
+    TaskLiteralScope inputs(*this, n);
     string stk;
     auto base = BytesTemp(stk);
     GenAny(n, Dst { DK_STACK, stk, n->exprtype });
@@ -1759,6 +1775,7 @@ inline string CodeGen::GenPureVal(Node *n) {
 // to the operand's type as the temp would have converted it: a literal 1
 // shifted at u64 must not shift as a C int.
 inline string CodeGen::GenOperandVal(Node *n, bool later) {
+    if (TaskOperandType(n)) return GenTaskOperand(n, [&] { return GenVal(n); });
     auto et = OperandT(n->exprtype);
     if (later || IsBytesT(et)) return GenPureVal(n);
     auto x = GenVal(n);
@@ -2020,7 +2037,8 @@ inline void CodeGen::ElemwiseOperands(Binary *b, string &l, string &r) {
     };
     // A scalar can alias any destination member, not just the member being
     // written: v = v * v.x must use the original x for every component.
-    if (scalar(b->left)) l = GenPureVal(b->left);
+    if (TaskOperandType(b->left)) l = GenTaskOperand(b->left, [&] { return GenVal(b->left); });
+    else if (scalar(b->left)) l = GenPureVal(b->left);
     else if (HasStmts(b->right)) {
         l = GenVal(b->left);
         auto lt = T();
@@ -2043,6 +2061,32 @@ inline string CodeGen::GenElemwise(Binary *b, const string &l, const string &r) 
 // the slice's C type) in that variable's members: the members are computed
 // from temps only, so writing one cannot change the other, and TinyCC is
 // spared building a temp and copying it.
+inline pair<string, string> CodeGen::GenSliceBounds(SliceExpr *se, const string &length) {
+    auto bound = [&](Node *b, bool fromend, const char *dflt) -> string {
+        if (!b) return dflt;
+        auto x = GenX(b);
+        if (fromend) return cat("(", length, " - (", x, "))");
+        return x;
+    };
+    auto lo = bound(se->lo, se->lo_from_end, "0");
+    auto lov = T(), hiv = T();
+    L("int64_t ", lov, " = ", lo, ";");
+    auto hi = bound(se->hi, se->hi_from_end, length.c_str());
+    L("int64_t ", hiv, " = ", hi, ";");
+    if (se->boundchecks) {
+        string bad;
+        auto check = [&](SliceExpr::BoundCheck flag, const string &lhs, const char *op,
+                         const string &rhs) {
+            if (se->boundchecks & flag) Append(bad, bad.empty() ? "" : " || ", lhs, op, rhs);
+        };
+        check(SliceExpr::CheckLower, lov, " < ", "0");
+        check(SliceExpr::CheckOrder, hiv, " < ", lov);
+        check(SliceExpr::CheckUpper, hiv, " > ", length);
+        L("if (", bad, ") k_abort(K_E_SLICE, ", LocArgs(se->line), ");");
+    }
+    return { lov, hiv };
+}
+
 inline string CodeGen::GenSlice(SliceExpr *se, const string &into) {
     auto lv = GenLoc(se->obj);
     if (lv.t->kind == TY_REF) DerefLoc(lv);
@@ -2050,43 +2094,30 @@ inline string CodeGen::GenSlice(SliceExpr *se, const string &into) {
     auto elems = T();
     L(v.typedelems ? CT(v.elem) : string("uint8_t"), " *", elems, " = ", v.elems, ";");
     v.elems = elems;
-    auto lenv = T();
-    L("int64_t ", lenv, " = ", v.len, ";");
-    auto bound = [&](Node *b, bool fromend, const char *dflt) -> string {
-        if (!b) return dflt;
-        auto x = GenX(b);
-        if (fromend) return cat("(", lenv, " - (", x, "))");
-        return x;
-    };
-    auto lo = bound(se->lo, se->lo_from_end, "0");
-    auto lov = T(), hiv = T();
-    L("int64_t ", lov, " = ", lo, ";");
-    auto hi = bound(se->hi, se->hi_from_end, lenv.c_str());
-    L("int64_t ", hiv, " = ", hi, ";");
-    if (!se->nobc)
-        L("if (", lov, " < 0 || ", hiv, " < ", lov, " || ", hiv, " > ", lenv,
-          ") k_abort(K_E_SLICE, ", LocArgs(se->line), ");");
+    auto len = T();
+    L("int64_t ", len, " = ", v.len, ";");
+    auto [lov, hiv] = GenSliceBounds(se, len);
     // Adapted contexts (slice constructing an array) leave an array
     // exprtype on the node; the slice value's own type comes from the
     // source element.
     auto et = se->exprtype->kind == TY_SLICE ? se->exprtype : ast.SliceOf(v.elem, se->line);
-    string data, len;
+    string data, count;
     if (IsFix(v.elem)) {
         auto dp = v.typedelems ? v.elems
                                : cat("(", CT(v.elem), " *)(", v.elems, ")");
         data = cat(dp, " + ", lov);
-        len = cat(hiv, " - ", lov);
+        count = cat(hiv, " - ", lov);
     } else {
         // Whole-array slices only (TC): elements are sequential bytes.
         data = v.elems;
-        len = lenv;
+        count = len;
     }
     if (!into.empty()) {
-        L(into, ".data = ", data, "; ", into, ".len = ", len, ";");
+        L(into, ".data = ", data, "; ", into, ".len = ", count, ";");
         return into;
     }
     auto t = T();
-    L(CT(et), " ", t, " = { ", data, ", ", len, " };");
+    L(CT(et), " ", t, " = { ", data, ", ", count, " };");
     return t;
 }
 

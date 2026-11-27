@@ -54,6 +54,8 @@ inline string GenericsText(const vector<GenericParam> &gs) {
 
 // A type's declaration as its header line.
 inline string DeclDetail(const SStruct *st) {
+    if (st->decorator_target != DecoratorTarget::None)
+        return cat("decorator ", st->qname, " on ", DecoratorTargetName(st->decorator_target));
     return cat(st->isroot ? "root " : "", "struct ", st->qname, GenericsText(st->generics));
 }
 inline string DeclDetail(const SEnum *en) { return cat("enum ", en->qname, GenericsText(en->generics)); }
@@ -138,6 +140,7 @@ inline string FnHeader(const SFunction *sf) {
     if (sf->isinline) s += "inline ";
     if (sf->issimd) s += "simd ";
     if (sf->isrec) s += "recursive ";
+    if (sf->async_body) s += "async ";
     s += sf->isthread ? "thread_fn " : "fn ";
     Append(s, sf->qname, GenericsText(sf->generics), "(");
     for (size_t i = 0; i < sf->params.size(); i++) {
@@ -149,11 +152,12 @@ inline string FnHeader(const SFunction *sf) {
         if (p.defaultval) s += " = ...";
     }
     s += ")";
-    if (sf->has_rets && !sf->rets.empty()) {
+    const auto &rets = sf->async_body ? sf->async_rets : sf->rets;
+    if (!rets.empty() && (sf->async_body || sf->has_rets)) {
         s += " -> ";
-        for (size_t i = 0; i < sf->rets.size(); i++) {
+        for (size_t i = 0; i < rets.size(); i++) {
             if (i) s += ", ";
-            s += TypeText(sf->rets[i]);
+            s += TypeText(rets[i]);
         }
     }
     return s;
@@ -276,11 +280,11 @@ inline const SFunction *CalleeOf(const Call *c) {
     return nullptr;
 }
 
-// The first clone of a name the check resolved to a variable or a function.
+// The first clone of a name the check resolved to a variable, function or field.
 inline const Ident *ResolvedIdent(const Analysis &an, const Occurrence &occ) {
     auto c = an.Find(occ.node, [](const Node *n) {
         auto x = Is<Ident>(n);
-        return x && (x->vdef || x->fnref);
+        return x && (x->vdef || x->fnref || x->fieldref);
     });
     return c ? Is<Ident>(c) : nullptr;
 }
@@ -424,7 +428,8 @@ inline vector<SFunction *> LocalFnsAt(const Analysis &an, const FileIndex &f, si
     auto around = FunctionsAround(an, f, offset);
     for (size_t fi = 0; fi < around.size(); fi++) {
         auto sf = around[fi];
-        if (!sf->body) continue;
+        auto source = sf->decorator_written ? sf->decorator_written : sf->body;
+        if (!source) continue;
         vector<SFunction *> best;
         function<void(Node *)> walk = [&](Node *n) {
             if (!n || !contains(n)) return;
@@ -443,7 +448,7 @@ inline vector<SFunction *> LocalFnsAt(const Analysis &an, const FileIndex &f, si
             }
             n->Children(walk);
         };
-        walk(sf->body);
+        walk(source);
         if (!best.empty()) return best;
     }
     return {};
@@ -644,7 +649,10 @@ inline HoverText HoverIdent(const Located &loc, const Occurrence &occ) {
         return h;
     }
     if (auto ci = ResolvedIdent(an, occ)) {
-        if (ci->vdef) {
+        if (auto field = ci->fieldref) {
+            h.header = cat(field->isconst ? "let " : "", field->name, ": ", TypeText(field->type));
+            h.doc = DocText(field->doc);
+        } else if (ci->vdef) {
             h.header = VarDefHeader(ci->vdef);
             if (auto vd = an.VarDeclOf(ci->vdef)) h.doc = DocText(vd->doc);
             auto types = an.TypesOf(occ.node, 4);
@@ -930,8 +938,10 @@ inline Place DefinitionOf(const Located &loc, const Occurrence &occ) {
         case Occurrence::IDENT: {
             auto id = Is<Ident>(occ.node);
             if (auto v = PatternVariantOf(an, occ)) return PlaceOfLine(an, v->line, v->name.size());
-            if (auto ci = ResolvedIdent(an, occ))
+            if (auto ci = ResolvedIdent(an, occ)) {
+                if (auto field = ci->fieldref) return PlaceOfLine(an, field->line, field->name.size());
                 return ci->vdef ? PlaceOfVarDef(an, ci->vdef) : PlaceOfFn(an, ci->fnref);
+            }
             if (occ.callee)
                 if (auto call = ResolvedCall(loc, occ)) {
                     auto sf = CalleeOf(call);
@@ -1190,6 +1200,10 @@ inline int SemanticTokenOf(const Located &loc, const Occurrence &occ, int &modif
             auto id = Is<Ident>(occ.node);
             if (PatternVariantOf(an, occ)) return ST_ENUMMEMBER;
             if (auto ci = ResolvedIdent(an, occ)) {
+                if (auto field = ci->fieldref) {
+                    modifiers = readonly(!field->isconst);
+                    return ST_PROPERTY;
+                }
                 if (ci->fnref) return ST_FUNCTION;
                 modifiers = readonly(ci->vdef->isvar);
                 return ci->vdef->isparam ? ST_PARAMETER : ST_VARIABLE;
@@ -2388,7 +2402,11 @@ inline int FormatDocument(Workspace &ws, const Json &params, JsonOut &j, string 
     auto it = ws.open.find(PathKey(PathOfUri(uri)));
     if (uri.empty() || it == ws.open.end()) return 0;
     auto &text = it->second.text;
-    auto res = Format(text, it->second.path);
+    FormatResult res;
+    RunOnCompilerStack([&] {
+        res = Format(text, it->second.path);
+        return 0;
+    });
     if (!res.ok) {
         if (res.internal.empty()) return 0;
         error = cat("internal error formatting ", it->second.path, ": ", res.internal);

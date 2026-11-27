@@ -424,6 +424,7 @@ fn format_uint<B>(out: B&, v: u64, base: i64, width: i64, padc: u8)   // B: u8[>
 fn format_flt(out: u8[>..]&, v: f64, decimals: i64)        // fixed decimals, the exact value rounded half up; inf/-inf/nan as print writes them
 fn parse_int(s: u8[:], base: i64 = 10) -> i64, bool        // optional sign, whole string; false outside i64 or base 2..36
 fn parse_uint(s: u8[:], base: i64 = 10) -> u64, bool       // optional '+', whole string; false on '-' or outside u64 or base 2..36
+fn parse_int_bits(s: const u8[:], signed: bool, base: i64 = 10) -> u64, bool
 fn parse_flt(s: u8[:]) -> f64, bool                        // sign, fraction, exponent, or inf/-inf/nan; correctly rounded
 fn format_uleb(out: u8[>..]&, v: i64)                     // LEB128 (3.6), 1-10 bytes
 fn parse_uleb(s: u8[:]) -> i64, i64                       // value and byte count; 0, 0 if malformed or not shortest
@@ -452,8 +453,12 @@ The builtins `format`/`str`/`print` do the plain rendering of scalars and
 strings; the functions here add control over the output, and parsing. In
 base 10, `format_int` and `format_uint` write the same text as `format`
 (after any padding) and run as fast. `format_int` and `format_uint` abort
-when `base` is outside 2..36; `parse_int` and `parse_uint` return `false`
-for such a base. `parse_flt` gives the double nearest to the decimal, as C's
+when `base` is outside 2..36. The integer parsers return `0, false` for
+an invalid base, malformed input or overflow. Use `parse_int_bits` when
+the input determines whether the number is signed. It uses the same
+syntax and range as `parse_int` in signed mode and `parse_uint` in unsigned
+mode. In signed mode, `bits as! i64` recovers the signed value.
+`parse_flt` gives the double nearest to the decimal, as C's
 `strtod` does, so a float's text from `print` or `format` reads back as the
 same value, including the `inf`, `-inf` and `nan` they write for the
 non-finite values. Strings are `u8` arrays: input is a `u8[:]`, output goes
@@ -1134,6 +1139,7 @@ A small interface to `src/runtime/runtime_os.h`:
 
 ```klang
 fn read_file(path: const u8[:], out: u8[>..]&) -> bool     // appends the whole file
+fn with_read_file<Body>(path: const u8[:]) -> bool         // lends a bounded reader to Body
 fn write_file(path: const u8[:], data: const u8[:]) -> bool
 fn write_file_atomic(path: const u8[:], data: const u8[:]) -> bool   // the old file or all of the new
 fn append_file(path: const u8[:], data: const u8[:]) -> bool
@@ -1160,6 +1166,42 @@ fn time_ns() -> i64         fn clock_ns() -> i64
 fn sleep(seconds: f64)      fn sleep_ms(ms: i64)
 fn random_seed() -> u64                              // entropy, for rng
 fn random_bytes(out: u8[:]) -> bool                  // cryptographic; false: the OS gave none
+```
+
+### Scoped file readers
+
+`with_read_file(path) { read => … }` opens a binary stream for the duration
+of the block. It returns `false` if opening fails, in which case the body
+does not run. When opening succeeds, the scope owns the stream and closes it
+on normal exit, a return from the enclosing function, or a recoverable
+`exception::throw` leaving the scope. The block receives an operation
+`read(out: u8[>..]&, max: i64 = 65536) -> i64`, a compile-time
+function value that it can call or forward while the scope is live.
+
+A positive result is the number of bytes appended. Each call appends at
+most `min(max, 65536)` bytes and advances the stream by the amount read.
+With a positive limit, zero means EOF. A zero limit returns zero without
+reading. A negative limit or a read failure returns `-1` and leaves the
+builder as it was. A partial result may precede an error, which a later
+call reports. The caller controls buffering by choosing when to clear or
+reuse its builder.
+
+<!-- fragment -->
+```klang
+import os;
+
+fn copy_to_stdout(path: const u8[:]) -> bool {
+    return with_read_file(path) { read =>
+        var chunk: u8[>..] = [];
+        loop {
+            let n = read(chunk);
+            if n < 0 { return false; }
+            if n == 0 { break; }
+            write_stdout(chunk);
+            chunk.clear();
+        }
+    };
+}
 ```
 
 `trim_memory` asks the OS to discard complete pages beyond every current

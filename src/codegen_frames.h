@@ -147,6 +147,7 @@ inline void CodeGen::FindKnownRootParams() {
                     } else opaque(c->spec);
                 }
                 for (auto k : c->dispatch) { edge(k); opaque(k); }
+                for (auto task : c->scope_tasks) { edge(task); opaque(task); }
                 for (auto [t, k] : c->fmtspecs) { edge(k); opaque(k); }
                 for (size_t i = 0; i < c->fvparams.size(); i++)
                     bind(c->fvparams[i], i < c->args.size() ? c->args[i] : nullptr);
@@ -253,6 +254,7 @@ inline void CodeGen::FindSplitRootParams() {
                             forwards[p].push_back(c->spec->params[i]);
                 } else opaque(c->spec);
                 for (auto k : c->dispatch) opaque(k);
+                for (auto task : c->scope_tasks) opaque(task);
                 for (auto [t, k] : c->fmtspecs) opaque(k);
                 for (auto [fv, v] : c->fvremap)
                     if (auto it = standsfor.find(v); it != standsfor.end()) fixed.insert(it->second);
@@ -339,6 +341,19 @@ inline void CodeGen::CollectSpecs() {
         for (auto t : sp->needs)
             if (!fromids.count(t)) fromids[t] = (int)fromids.size() + 1;
     }
+    if (!ast.callable_layouts.empty()) {
+        auto find_targets = [&](auto &self, Node *n) -> void {
+            if (!n) return;
+            if (auto c = Is<Call>(n); c && c->callable_target) {
+                auto &targets = callable_targets[Mangle(c->rettypes[0])];
+                if (find(targets.begin(), targets.end(), c->callable_target) == targets.end())
+                    targets.push_back(c->callable_target);
+            }
+            RunChildren(n, [&](Node *child) { self(self, child); });
+        };
+        for (auto sp : livespecs) find_targets(find_targets, sp->body);
+        ast.ForEachRootTree([&](Node *n) { find_targets(find_targets, n); });
+    }
     // Scan each finished body once. The call edges are local to this
     // analysis; only the summaries needed by emission survive it. Preserve
     // first-appearance order for captures, which fixes the C parameter order.
@@ -355,6 +370,7 @@ inline void CodeGen::CollectSpecs() {
     for (auto sp : livespecs) {
         auto &si = sinfo[sp];
         auto &calls = callees[sp];
+        if (sp->task_cleanup) calls.push_back({ sp->task_cleanup, nullptr });
         set<const VarDef *> seen;
         set<TypeExpr *> namedtypes;
         set<pair<FnSpec *, const Call *>> seencalls;
@@ -400,6 +416,10 @@ inline void CodeGen::CollectSpecs() {
             // (GenAdtAdapted).
             if (auto from = AdtFrom(n)) si.needssp |= NeedsStack(from);
             if (auto c = Is<Call>(n)) {
+                if (c->callable_call) {
+                    si.needssp = true;
+                    si.readsalltops = true;
+                }
                 if (c->spec && c->spec->sf->isextern && c->spec->sf->readsalltops)
                     si.readsalltops = true;
                 auto add = [&](FnSpec *k) {
@@ -409,6 +429,7 @@ inline void CodeGen::CollectSpecs() {
                 };
                 if (c->builtin < 0) add(c->spec);
                 for (auto d : c->dispatch) add(d);
+                for (auto task : c->scope_tasks) add(task);
                 // Formatting a user type calls its format overload, and print
                 // and thread_spawn assemble their text or packet on a stack.
                 for (auto &fs : c->fmtspecs) add(fs.second);
@@ -637,6 +658,11 @@ inline string CodeGen::SigParams(FnSpec *sp, bool decls, bool er) {
     }
     if (si.needssp) add("int64_t k_sp");
     if (si.located) add("const k_loc *k_at");
+    if (sp->task_exit) {
+        add("bool *k_task_completed");
+        if (!sp->task_exit->rets.empty())
+            add(cat(CT(sp->task_exit->rets[0]), " *k_task_result"));
+    }
     if (s.empty()) s = "void";
     return s;
 }
@@ -1043,10 +1069,16 @@ inline void CodeGen::PushSc(int kind) {
     cscopes.push_back(s);
 }
 
-inline void CodeGen::EmitRestores(const CScope &s) {
+inline void CodeGen::RestoreStack(const StackSave &save) {
+    if (save.task_owned) L("k_task_stack_close(&", save.stack, ");");
+    else L(Top(save.stack), " = ", save.base, ";");
+}
+
+inline void CodeGen::EmitRestores(const CScope &s, bool suspending) {
+    if (s.task_controller) EmitTaskScopeClose(s.task_controller);
     if (s.defers.empty()) {
         for (auto i = (int)s.saves.size() - 1; i >= 0; i--)
-            L(Top(s.saves[i].first), " = ", s.saves[i].second, ";");
+            RestoreStack(s.saves[i]);
         return;
     }
     // A deferred body registered after k saves runs after those made later
@@ -1056,8 +1088,10 @@ inline void CodeGen::EmitRestores(const CScope &s) {
     auto defers = s.defers;
     auto di = (int)defers.size() - 1;
     for (auto k = (int)saves.size(); k >= 0; k--) {
-        for (; di >= 0 && (int)defers[di].first == k; di--) EmitDeferBody(defers[di].second);
-        if (k > 0) L(Top(saves[k - 1].first), " = ", saves[k - 1].second, ";");
+        for (; di >= 0 && (int)defers[di].first == k; di--)
+            if (!suspending || !defers[di].second->task_transfer)
+                EmitDeferBody(defers[di].second);
+        if (k > 0) RestoreStack(saves[k - 1]);
     }
     assert(di < 0);
 }
@@ -1103,8 +1137,8 @@ inline void CodeGen::PopSc() {
 }
 
 // Restores for exiting down to (and including) scope index `to`.
-inline void CodeGen::EmitExitRestores(int to) {
-    for (auto i = (int)cscopes.size() - 1; i >= to; i--) EmitRestores(cscopes[i]);
+inline void CodeGen::EmitExitRestores(int to, bool suspending) {
+    for (auto i = (int)cscopes.size() - 1; i >= to; i--) EmitRestores(cscopes[i], suspending);
 }
 
 // Allocates a data stack index; `forlocal` skips the statement scopes
@@ -1122,10 +1156,18 @@ inline string CodeGen::AllocStk(bool forlocal) {
     return SpIdx(k);
 }
 
-inline void CodeGen::SaveBase(bool forlocal, const string &stk, const string &basevar) {
+inline void CodeGen::SaveBase(bool forlocal, const string &stk, const string &basevar, const VarDef *owner,
+                              bool task_owned) {
     for (auto i = (int)cscopes.size() - 1; i >= 0; i--) {
         if (forlocal && cscopes[i].kind == SC_STMT) continue;
-        cscopes[i].saves.push_back({ stk, basevar });
+        auto base = basevar;
+        if (task_flow && owner && !task_owned) {
+            // The local's header is dead on resume. Give its eventual
+            // scope exit an independently resettable watermark.
+            base = T();
+            L("uint8_t *", base, " = ", basevar, ";");
+        }
+        cscopes[i].saves.push_back({ stk, std::move(base), owner, task_owned });
         return;
     }
     assert(false);

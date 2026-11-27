@@ -72,7 +72,7 @@ inline const VarDef *CodeGen::AliasTarget(VarDef *d, Node *init, Node *&path) {
     auto cache_ref = [&](TypeExpr *t) {
         return IsFatRef(t) || (t->kind == TY_REF && IsRoot(t->ref->sub));
     };
-    if (!d || !init || !curspec || d->isvar || d->isglobal || d->reusable || !d->type ||
+    if (!d || !init || !curspec || d->isvar || d->isglobal || d->reusable || d->task_saved_ref || !d->type ||
         !cache_ref(d->type) || d->type->ref->optional || PrefVar(d) || d->captured ||
         capturedvars.count(d))
         return nullptr;
@@ -590,7 +590,7 @@ inline void CodeGen::EmitSimdVersions(FnSpec *sp, const string &name, const stri
         versions[lv] = Unique(cat(name, "_simd", lv));
         names.push_back(versions[lv]);
         Append(code, "#if K_SIMD >= ", lv,
-               "\n#undef K_MUL_ADD_MODE\n#define K_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
+               "\n#undef K_MUL_ADD_MODE\n#define K_MUL_ADD_MODE fused\nK_SIMD_TARGET", lv,
                " static ", ret, " ", versions[lv], "(", params, ") {\n", fnbody,
                "}\n#undef K_MUL_ADD_MODE\n#define K_MUL_ADD_MODE K_MUL_ADD_BASE\n#endif\n");
     }
@@ -606,7 +606,300 @@ inline void CodeGen::EmitSimdVersions(FnSpec *sp, const string &name, const stri
     Append(code, "    }\n#endif\n", fnbody, "}\n\n");
 }
 
+inline void CodeGen::EmitForeignTaskJoin(FnSpec *sp) {
+    if (taskcode.count(sp)) return;
+    auto initial = sp->argtypes[0];
+    auto result = sp->rets[0];
+    if (IsLargeFixed(result)) Fail(sp->sf->line, "native task result exceeds native poll storage limit");
+    usestasks = true;
+    ResetFnState();
+    curspec = sp;
+    curinfo = &sinfo[sp];
+    auto &info = sinfo[sp];
+    auto params = SigParams(sp, true);
+    auto name = info.cname;
+    auto frame = Unique(cat(name, "_frame"));
+    auto poll = Unique(cat(name, "_poll"));
+    auto cancel = Unique(cat(name, "_cancel"));
+    auto drain = Unique(cat(name, "_drain"));
+    auto finish = Unique(cat(name, "_finish"));
+    auto arm = Unique(cat(name, "_arm"));
+    auto ops = Unique(cat(name, "_ops"));
+    taskcode.emplace(sp, TaskCode { frame, ops, false });
+    auto ret = SigRet(sp);
+    SpecText entry { sp, false, code.size(), 0, { name } };
+    Append(code, "typedef struct {\n    ", CT(initial), " initial;\n");
+    Append(code, "    ", CT(result), " result;\n");
+    if (info.located) Append(code, "    const k_loc *at;\n");
+    Append(code, "} ", frame, ";\n");
+    auto bind = [&](string_view type, const string &fn, string_view rest = {}) {
+        Append(code, "static ", type, " ", fn, "(void *context", rest, ") {\n    ", frame,
+               " *f = (", frame, " *)context;\n    const k_foreign_task *op = k_foreign_task_get(f->initial.",
+               Sanitize("token"), ");\n");
+    };
+    bind("k_task_poll", poll);
+    Append(code, "    return op && op->result_size == sizeof(f->result) ?\n",
+           "        op->poll(op->frame, &f->result) : K_TASK_POLL_ERROR;\n}\n");
+    bind("void", cancel);
+    Append(code, "    if (op && op->request_cancel) op->request_cancel(op->frame);\n}\n");
+    bind("bool", drain);
+    Append(code, "    return !op || op->drain(op->frame);\n}\n");
+    bind("void", finish, ", k_task_state state, bool started");
+    Append(code, "    if (op) op->finish(op->frame, state, started);\n}\n");
+    bind("bool", arm, ", const k_task_waker *waker");
+    Append(code, "    return k_foreign_task_arm(op, waker);\n}\n");
+    Append(code, "static const k_task_ops ", ops, " = { ", poll, ", ", cancel, ", ", drain, ", ", finish,
+           ", ", arm, " };\nstatic ", ret, " ", name, "(", params, ") {\n    ", frame,
+           " f;\n    f.initial = ", LocalName(sp->params[0]), ";\n");
+    Append(code, "    if (!k_task_join_local(&f, &", ops, ")) k_abort(K_E_TAG, ", LocArgs(sp->sf->line), ");\n");
+    Append(code, info.cret >= 0 ? "    return f.result;\n" : "    *k_r0 = f.result;\n", "}\n\n");
+    entry.end = code.size();
+    spectexts.push_back(std::move(entry));
+    curspec = nullptr;
+    curinfo = nullptr;
+}
+
+inline void CodeGen::EmitTaskJoin(FnSpec *sp) {
+    if (sp->sf->task_foreign) { EmitForeignTaskJoin(sp); return; }
+    // The checked synthetic calls keep poll stages live and expose their
+    // stack requirements. Execute them through the driver at the ABI level.
+    auto [existing, inserted] = taskcode.try_emplace(sp);
+    if (!inserted) {
+        if (existing->second.frame.empty()) Fail(sp->sf->line, "await requires a finite child task frame");
+        return;
+    }
+    auto &task = existing->second;
+    usestasks = true;
+    if (auto call = Is<Call>(sp->body->tail); call && call->spec->sf->task_flow) {
+        EmitTaskFlowJoin(sp, call->spec, task);
+        return;
+    }
+    struct Suspension {
+        FnSpec *stage;
+        TypeExpr *saved;
+        Call *awaited;
+        FnSpec *child;
+    };
+    vector<Suspension> sites;
+    auto resume = sp->body->tail ? Is<Call>(sp->body->tail)->spec : nullptr;
+    auto check_size = [&](TypeExpr *type) {
+        if (type && IsLargeFixed(type)) Fail(sp->sf->line, "task frame value exceeds native poll storage limit");
+    };
+    bool has_child = false, has_cleanup = sp->task_cleanup != nullptr;
+    for (const auto &site : sp->sf->task_suspensions) {
+        if (site.stage_stmt >= sp->body->stmts.size()) break;
+        auto checked_call = [](Node *n) {
+            if (auto vd = Is<VarDecl>(n)) n = vd->inits[0];
+            auto call = Is<Call>(n);
+            assert(call && call->spec);
+            return call;
+        };
+        auto stage = checked_call(sp->body->stmts[site.stage_stmt])->spec;
+        if (!stage->record.mayreturn) {
+            resume = stage;
+            break;
+        }
+        auto awaited = site.child_stmt ? checked_call(sp->body->stmts[*site.child_stmt]) : nullptr;
+        auto child = awaited ? awaited->spec : nullptr;
+        if (child) EmitTaskJoin(child);  // Its frame is embedded and must be defined first.
+        auto saved = stage->rets[0];
+        check_size(saved);
+        sites.push_back({ stage, saved, awaited, child });
+        has_child |= child != nullptr;
+        has_cleanup |= stage->task_cleanup != nullptr;
+    }
+    bool suspends = !sites.empty();
+    assert(resume);
+    auto initial = sp->argtypes[0];
+    auto result = sp->rets.empty() ? nullptr : sp->rets[0];
+    check_size(initial);
+    check_size(result);
+
+    ResetFnState();
+    curspec = sp;
+    curinfo = &sinfo[sp];
+    auto params = SigParams(sp, true);
+    auto &info = sinfo[sp];
+    auto name = info.cname;
+    auto frame = task.frame = Unique(cat(name, "_frame"));
+    auto poll = Unique(cat(name, "_poll"));
+    auto ops = task.ops = Unique(cat(name, "_ops"));
+    task.suspends = suspends;
+    task.has_child = has_child;
+    auto ret = SigRet(sp);
+    SpecText entry { sp, false, code.size(), 0, { name } };
+    Append(code, "typedef struct {\n    ", CT(initial), " initial;\n");
+    if (suspends) {
+        Append(code, "    int suspended;\n    union {\n");
+        for (size_t i = 0; i < sites.size(); ++i) {
+            const auto &site = sites[i];
+            Append(code, "        struct { ", CT(site.saved), " saved; ");
+            if (site.child) Append(code, taskcode.at(site.child).frame, " child_frame; ");
+            Append(code, "} s", i, ";\n");
+        }
+        Append(code, "    } wait;\n");
+    }
+    if (has_child) Append(code, "    k_task_child child;\n");
+    if (result) Append(code, "    ", CT(result), " result;\n");
+    if (info.needssp) Append(code, "    int64_t sp;\n");
+    if (info.located) Append(code, "    const k_loc *at;\n");
+    Append(code, "} ", frame, ";\nstatic k_task_poll ", poll, "(void *context) {\n    ",
+           frame, " *f = (", frame, " *)context;\n");
+    auto emit_poll_call = [&](FnSpec *stage, const vector<string> &inputs,
+                              const vector<string> &outputs, string_view indent) {
+        const auto &stageinfo = sinfo[stage];
+        if (stageinfo.hasrf || !stageinfo.freevars.empty())
+            Fail(stage->sf->line, "a task poll cannot return to or capture a different activation");
+        auto call = cat(stageinfo.cname, "(");
+        for (size_t i = 0; i < inputs.size(); ++i)
+            Append(call, i ? ", " : "", PtrAbi(stage->argtypes[i]) ? "&" : "", inputs[i]);
+        for (size_t i = 0; i < outputs.size(); ++i)
+            if ((int)i != stageinfo.cret) Append(call, ", &", outputs[i]);
+        if (stageinfo.needssp) Append(call, ", f->sp");
+        if (stageinfo.located) Append(call, ", f->at");
+        if (stage->task_exit) {
+            assert(stage->task_exit == sp);
+            Append(code, indent, "bool completed = false;\n");
+            Append(call, ", &completed");
+            if (result) Append(call, ", &f->result");
+        }
+        Append(code, indent);
+        if (stageinfo.cret >= 0) Append(code, outputs[stageinfo.cret], " = ");
+        Append(code, call, ");\n");
+        if (stage->task_exit) Append(code, indent, "if (completed) return K_TASK_POLL_READY;\n");
+        NoteStackCall(stage, sp->sf->line);
+    };
+    auto init_poll_frame = [&](FnSpec *owner, string_view access, string_view indent, string_view sp_arg,
+                               string_view loc_arg) {
+        const auto &emitted = taskcode.at(owner);
+        if (emitted.suspends) Append(code, indent, access, "suspended = 0;\n");
+        if (emitted.has_child) Append(code, indent, access, "child = (k_task_child){0};\n");
+        if (emitted.pending_input_cleanup) Append(code, indent, access, "forwarded = false;\n");
+        if (emitted.has_storage)
+            Append(code, indent, "K_MEMZERO(", access, "stacks, sizeof(", access, "stacks));\n");
+        if (sinfo[owner].needssp) Append(code, indent, access, "sp = ", sp_arg, ";\n");
+        if (sinfo[owner].located) Append(code, indent, access, "at = ", loc_arg, ";\n");
+    };
+    auto state = [](size_t i) { return cat("f->wait.s", i, "."); };
+    // Use one set of transition temporaries even when the C compiler does
+    // not reuse stack slots for locals in disjoint switch cases.
+    if (sites.size() > 1) {
+        Append(code, "    union {\n");
+        for (size_t i = 1; i < sites.size(); ++i) {
+            const auto &site = sites[i];
+            Append(code, "        struct { ", CT(site.saved), " saved; ");
+            if (site.child) Append(code, CT(site.child->argtypes[0]), " child; ");
+            Append(code, "} s", i, ";\n");
+        }
+        Append(code, "    } next;\n");
+    }
+    if (suspends) Append(code, "    switch (f->suspended) {\n");
+    string_view indent = suspends ? "        " : "    ";
+    for (size_t i = 0; i <= sites.size(); ++i) {
+        auto stage = i < sites.size() ? sites[i].stage : resume;
+        if (suspends) Append(code, "    case ", i, ": {\n");
+        vector<string> inputs { i ? state(i - 1) + "saved" : "f->initial" };
+        if (i && sites[i - 1].child) {
+            const auto &prior = sites[i - 1];
+            auto child_frame = state(i - 1) + "child_frame.";
+            NoteStackCall(prior.child, prior.awaited->line);
+            if (sinfo[prior.child].needssp) Append(code, indent, child_frame, "sp = f->sp;\n");
+            Append(code, indent, "k_task_poll child = k_task_child_poll(&f->child);\n",
+                   indent, "if (child != K_TASK_POLL_READY) return child;\n");
+            if (stage->argtypes.size() == 2) inputs.push_back(child_frame + "result");
+        }
+        if (i == sites.size()) {
+            emit_poll_call(stage, inputs,
+                           stage->rets.empty() ? vector<string>() : vector<string> { "f->result" }, indent);
+            Append(code, indent, stage->record.mayreturn ? "return K_TASK_POLL_READY;\n"
+                                                       : "return K_TASK_POLL_ERROR;\n");
+            if (suspends) Append(code, "    }\n");
+            break;
+        }
+
+        const auto &next = sites[i];
+        auto saved = state(i) + "saved";
+        auto child_frame = state(i) + "child_frame.";
+        // Transition outputs must not alias the previous union member while
+        // the stage is reading it through the pointer ABI.
+        auto scratch = cat("next.s", i, ".");
+        vector<string> outputs { i ? scratch + "saved" : saved };
+        if (next.child) outputs.push_back(i ? scratch + "child" : child_frame + "initial");
+        emit_poll_call(stage, inputs, outputs, indent);
+        if (i) {
+            Append(code, indent, saved, " = ", scratch, "saved;\n");
+            if (next.child) Append(code, indent, child_frame, "initial = ", scratch, "child;\n");
+        }
+        Append(code, indent, "f->suspended = ", i + 1, ";\n");
+        if (next.child) {
+            auto child_loc = info.located ? "f->at" :
+                sinfo[next.child].located ? CallerLoc(next.awaited->line) : "";
+            init_poll_frame(next.child, child_frame, indent, "f->sp", child_loc);
+            Append(code, indent, "if (!k_task_child_init(&f->child, &", state(i), "child_frame, &",
+                   taskcode.at(next.child).ops, ")) return K_TASK_POLL_ERROR;\n",
+                   "    } /* fall through */\n");
+        } else {
+            Append(code, indent, "return K_TASK_POLL_PENDING;\n    }\n");
+        }
+    }
+    if (suspends) Append(code, "    default: return K_TASK_POLL_ERROR;\n    }\n");
+    Append(code, "}\n");
+
+    auto cancel = has_child ? Unique(cat(name, "_cancel")) : "NULL";
+    auto drain = has_child ? Unique(cat(name, "_drain")) : "k_task_drain_local";
+    auto finish = has_cleanup ? Unique(cat(name, "_finish")) : "NULL";
+    auto arm = has_child ? Unique(cat(name, "_arm")) : "NULL";
+    if (has_child) {
+        Append(code, "static void ", cancel, "(void *context) {\n    k_task_child_cancel(&((", frame,
+               " *)context)->child);\n}\nstatic bool ", drain, "(void *context) {\n    ",
+               frame, " *f = (", frame, " *)context;\n    switch (f->suspended) {\n");
+        for (size_t i = 0; i < sites.size(); ++i) {
+            auto child = sites[i].child;
+            if (!child) continue;
+            Append(code, "    case ", i + 1, ":\n");
+            if (sinfo[child].needssp) Append(code, "        ", state(i), "child_frame.sp = f->sp;\n");
+            Append(code, "        return k_task_child_drain(&f->child);\n");
+        }
+        Append(code, "    default: return true;\n    }\n}\n");
+        Append(code, "static bool ", arm, "(void *context, const k_task_waker *waker) {\n    ",
+               "return k_task_child_arm(&((", frame, " *)context)->child, waker);\n}\n");
+    }
+    if (has_cleanup) {
+        Append(code, "static void ", finish,
+               "(void *context, k_task_state state, bool started) {\n    ", frame, " *f = (", frame,
+               " *)context;\n    if (state == K_TASK_SUCCEEDED) return;\n");
+        if (sp->task_cleanup) {
+            Append(code, "    if (!started) {\n");
+            emit_poll_call(sp->task_cleanup, { "f->initial" }, {}, "        ");
+            Append(code, "        return;\n    }\n");
+        }
+        if (suspends) {
+            Append(code, "    switch (f->suspended) {\n");
+            for (size_t i = 0; i < sites.size(); ++i)
+                if (auto cleanup = sites[i].stage->task_cleanup) {
+                    Append(code, "    case ", i + 1, ":\n");
+                    emit_poll_call(cleanup, { state(i) + "saved" }, {}, "        ");
+                    Append(code, "        break;\n");
+                }
+            Append(code, "    default: break;\n    }\n");
+        }
+        Append(code, "}\n");
+    }
+    Append(code, "static const k_task_ops ", ops, " = { ", poll, ", ", cancel, ", ", drain,
+           ", ", finish, ", ", arm, " };\nstatic ", ret, " ", name, "(", params, ") {\n",
+           "    ", frame, " f;\n    f.initial = ", PtrAbi(initial) ? "*" : "", LocalName(sp->params[0]), ";\n");
+    init_poll_frame(sp, "f.", "    ", "k_sp", "k_at");
+    Append(code, "    if (!k_task_join_local(&f, &", ops, ")) k_abort(K_E_TAG, ", LocArgs(sp->sf->line), ");\n");
+    if (result) Append(code, info.cret >= 0 ? "    return f.result;\n" : "    *k_r0 = f.result;\n");
+    Append(code, "}\n\n");
+    entry.end = code.size();
+    spectexts.push_back(std::move(entry));
+    curspec = nullptr;
+    curinfo = nullptr;
+}
+
 inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
+    if (sp->sf->task_join) { EmitTaskJoin(sp); return; }
     curspec = sp;
     curinfo = &sinfo[sp];
     emiter = er;
@@ -614,9 +907,25 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
     spexpr = curinfo->needssp ? "k_sp" : "0";
     FindRefAliases(sp);
     PlanTopClasses(sp);
+    if (task_flow) cachetops = false;
     markers = true;
     PushSc(SC_FN);
-    auto params = SigParams(sp, true, er);
+    string params;
+    if (task_flow) {
+        paramcopies.clear();
+        params = cat(task_flow->frame, " *f, bool cancelling");
+        vnames[sp->params[0]] = "f->initial";
+        if (curinfo->needssp) L("int64_t k_sp = f->sp;");
+        if (curinfo->located) L("const k_loc *k_at = f->at;");
+        L("switch (f->suspended) {");
+        L("case 0: break;");
+        for (size_t i = 0; i < task_flow->sites.size(); ++i)
+            L("case ", i + 1, ": goto ", task_flow->sites[i].resume, ";");
+        L("default: return K_TASK_POLL_ERROR;");
+        L("}");
+    } else {
+        params = SigParams(sp, true, er);
+    }
     // The spellings are only known once SigParams has named the parameters.
     if (reftops) {
         for (size_t i = 0; i < sp->params.size(); i++) {
@@ -642,7 +951,7 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
     // In the element-run form named results are not built at the
     // destination: the callee-side copy at return is the specified cost
     // of operating on the whole value first (§7.3).
-    if (!er) DetectNrvo(sp);
+    if (!er && !task_flow) DetectNrvo(sp);
     if (fromids.count(sp)) {
         // This is a long-distance return target with nonfixed returns:
         // record our destinations for in-flight values (§7.9).
@@ -675,13 +984,16 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
         }
     }
     if (!termjump) {
-        if (curinfo->cret >= 0) {
+        if (task_flow) {
+            if (sp->rets.empty()) GenNormalReturn({});
+            else L("return K_TASK_POLL_ERROR;");
+        } else if (curinfo->cret >= 0) {
             L("K_UNREACHABLE(", LocArgs(sp->sf->line), ");");
             auto d = T();
             L(CT(sp->rets[curinfo->cret]), " ", d, " = {0};");
             L("return ", d, ";");
         } else {
-            Epilogue("");
+            Epilogue("", sp->sf->task_suspends);
         }
     }
     cscopes.clear();
@@ -708,10 +1020,10 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
     for (auto &p : poolbases)
         Append(fnbody, "    uint8_t *", p.second, " = ", gnames[p.first], ".base;\n");
     fnbody += bodyout;
-    auto name = er ? ernames[sp] : curinfo->cname;
+    auto name = task_flow ? task_flow->poll_body : er ? ernames[sp] : curinfo->cname;
     // Where the function lies in the C, for MergeSpecs, taken once its
     // result type is: nothing emitted for that belongs to the function.
-    auto ret = SigRet(sp);
+    auto ret = task_flow ? string("k_task_poll") : SigRet(sp);
     SpecText st { sp, er, code.size(), 0, { name } };
     if (sp->sf->issimd) EmitSimdVersions(sp, name, params, fnbody, st.names);
     else Append(code, "static ", FnAttrs(sp), ret, " ", name, "(", params, ") {\n", fnbody,

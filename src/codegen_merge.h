@@ -243,6 +243,11 @@ inline void CodeGen::MergeSpecs() {
     }
     rewrite(string_view(code).substr(p), merged);
     code = std::move(merged);
+    if (!callable_code.empty()) {
+        string thunks;
+        rewrite(callable_code, thunks);
+        callable_code = std::move(thunks);
+    }
     // A prototype names the function it declares, and a target's channels
     // its number, and nothing else does: a line naming a function that is
     // not kept goes.

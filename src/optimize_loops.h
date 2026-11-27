@@ -43,7 +43,7 @@ struct LoopShaper {
 
     void Run(Ast &ast) {
         for (auto sp : ast.fnspecs)
-            if (sp->live && sp->body) Walk(sp->body);
+            if (sp->live && sp->body && !sp->sf->task_flow) Walk(sp->body);
     }
 
     void Walk(Node *n) {

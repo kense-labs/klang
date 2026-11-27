@@ -53,9 +53,8 @@ def check_native_toolchain(exe, base, *, jit):
             return "no cmake"
         want = {info["cc"]["id"]}
 
-        def ids(pattern, strip_config=False):
-            return {p.name.rsplit("-", 1)[0] if strip_config else p.name
-                    for p in home.glob(pattern) if p.is_dir()}
+        def ids(pattern):
+            return {p.name for p in home.glob(pattern) if p.is_dir()}
 
         app = root / ("app" + tc.EXE_SUFFIX)
         code, out, err = run([exe, "build", "-o", app, source])
@@ -63,11 +62,12 @@ def check_native_toolchain(exe, base, *, jit):
         code, out, err = run([app])
         require(code == 0 and out.split() == ["12", "-15"], f"the built program:\n{out}{err}")
         packages = ids("build/pkg/local/*/*")
-        runtimes = ids("build/runtime/*/*", strip_config=True)
-        require(packages == want and runtimes == want,
-                f"k build used toolchains {sorted(packages)} for the package and "
-                f"{sorted(runtimes)} for the runtime, where k toolchain reports "
-                f"{sorted(want)}")
+        runtimes = list((home / "build/runtime").glob("v1-*/release/k_runtime.*"))
+        runtimes = [p for p in runtimes if p.suffix in (".o", ".obj")]
+        require(packages == want, f"k build used {sorted(packages)}, k toolchain reports {sorted(want)}")
+        code, out, err = run([exe, "build", "--dry-run", "--cc", info["cc"]["path"], "-o", app, source])
+        require(code == 0 and len(runtimes) == 1 and str(runtimes[0]) in out + err,
+                f"the reported compiler did not select the same runtime object:\n{out}{err}")
         if jit:
             code, out, err = run([exe, "run", source])
             require(code == 0 and out.split() == ["12", "-15"], f"k run:\n{out}{err}")

@@ -58,6 +58,16 @@ function commaSep1(rule) {
   return seq(sep1(rule, ','), optional(','));
 }
 
+function functionSignature($) {
+  return seq(
+    '(', commaSep($._type), ')',
+    optional(seq('->', choice(
+      field('result', $._type),
+      seq('(', commaSep(field('result', $._type)), ')'),
+    ))),
+  );
+}
+
 // The binary operators, loosest first, over the operand rule given: the
 // expression grammar's operands, or a `const if` condition's.
 function binaryExpressions(operand) {
@@ -132,6 +142,10 @@ module.exports = grammar({
       $.struct_declaration,
       $.enum_declaration,
       $.type_alias_declaration,
+      $.decorator_declaration,
+      $.decorated_function_declaration,
+      $.decorated_struct_declaration,
+      $.decorated_enum_declaration,
       $.function_declaration,
       $.extern_block,
       $.variable_declaration,
@@ -180,6 +194,7 @@ module.exports = grammar({
     ),
 
     field_declaration: $ => seq(
+      repeat(field('decorator', $.decorator_application)),
       optional(choice('let', 'const')),
       field('name', $.identifier),
       ':',
@@ -218,9 +233,50 @@ module.exports = grammar({
       optional(seq(':', field('bound', $._type))),
     ),
 
+    decorator_declaration: $ => seq(
+      'decorator',
+      field('name', $._qualified_name),
+      '(',
+      commaSep($.decorator_parameter),
+      ')',
+      'on',
+      choice(
+        seq(field('target', $.decorator_target),
+          choice(';', seq('{', 'wrap', field('wrapper', $.block), '}'))),
+        seq(field('target', alias($._data_decorator_target, $.decorator_target)), ';'),
+      ),
+    ),
+
+    decorator_parameter: $ => seq(field('name', $.identifier), ':', field('type', $._type)),
+
+    decorator_target: $ => prec.right(1, seq(optional('async'), 'fn', optional(functionSignature($)))),
+
+    _data_decorator_target: _ => choice('struct', 'enum', 'field'),
+
+    decorated_function_declaration: $ => seq(
+      repeat1(field('decorator', $.decorator_application)),
+      field('function', $.function_declaration),
+    ),
+
+    decorated_struct_declaration: $ => seq(
+      repeat1(field('decorator', $.decorator_application)),
+      field('struct', $.struct_declaration),
+    ),
+
+    decorated_enum_declaration: $ => seq(
+      repeat1(field('decorator', $.decorator_application)),
+      field('enum', $.enum_declaration),
+    ),
+
+    decorator_application: $ => seq(
+      '@',
+      field('name', $._qualified_name),
+      optional(field('arguments', $.argument_list)),
+    ),
+
     function_declaration: $ => seq(
       repeat($.function_modifier),
-      choice('fn', 'thread_fn'),
+      choice('fn', 'thread_fn', seq('async', 'fn')),
       field('name', $._qualified_name),
       optional(field('type_parameters', $.type_parameters)),
       field('parameters', $.parameters),
@@ -267,10 +323,36 @@ module.exports = grammar({
     parameters: $ => seq('(', commaSep($.parameter), ')'),
 
     parameter: $ => seq(
-      optional('var'),
+      optional(choice('var', 'borrow')),
       field('name', $.identifier),
       optional(seq(':', field('type', $._type))),
       optional(seq('=', field('default', $._expression))),
+    ),
+
+    closure_expression: $ => seq(
+      'fn',
+      optional(field('captures', $.closure_captures)),
+      field('parameters', $.closure_parameters),
+      optional(seq('->', field('result', sep1($._type, ',')))),
+      field('body', $.block),
+    ),
+
+    closure_captures: $ => seq('[', commaSep($.closure_capture), ']'),
+
+    closure_capture: $ => seq(
+      field('name', $.identifier),
+      ':',
+      field('type', $._type),
+      optional(seq('=', field('value', $._expression))),
+    ),
+
+    closure_parameters: $ => seq('(', commaSep($.closure_parameter), ')'),
+
+    closure_parameter: $ => seq(
+      optional('var'),
+      field('name', $.identifier),
+      ':',
+      field('type', $._type),
     ),
 
     // Globals and locals; `.=` binds a reference.
@@ -292,10 +374,13 @@ module.exports = grammar({
     _type_no_index: $ => choice(
       $._postfix_type,
       $.const_type,
+      $.owned_type,
     ),
 
     // `const` qualifies the first reference or slice built on the base type.
     const_type: $ => seq('const', $._postfix_type),
+
+    owned_type: $ => seq('own', choice($.const_type, $._postfix_type)),
 
     _postfix_type: $ => choice(
       $.primitive_type,
@@ -320,18 +405,14 @@ module.exports = grammar({
 
     type_arguments: $ => seq('<', commaSep1($._type), '>'),
 
-    function_type: $ => prec.right(1, seq(
-      'fn',
-      optional(seq(
-        '(',
-        commaSep($._type),
-        ')',
-        optional(seq('->', choice(
-          field('result', $._type),
-          seq('(', commaSep(field('result', $._type)), ')'),
-        ))),
-      )),
-    )),
+    function_type: $ => {
+      const signature = functionSignature($);
+      return prec.right(1, seq('fn', optional(choice(
+        signature,
+        seq('&', signature),
+        seq('[', field('capacity', $._expression), ']', signature),
+      ))));
+    },
 
     parenthesized_type: $ => seq('(', $._type, ')'),
 
@@ -453,7 +534,7 @@ module.exports = grammar({
       )),
     ),
 
-    // Compile-time expansion over fields, variants, types, or constants.
+    // Compile-time expansion over structural declarations or explicit lists.
     const_for_statement: $ => seq($._const_for_head, field('body', $.block)),
 
     _const_for_head: $ => seq(
@@ -463,7 +544,7 @@ module.exports = grammar({
       commaSep1(field('name', $.identifier)),
       '>',
       'in',
-      field('source', choice($.const_for_types, $.const_for_constants)),
+      field('source', choice($.const_for_types, $.const_for_constants, $.const_for_decorated)),
     ),
 
     const_for_types: $ => seq(
@@ -474,6 +555,19 @@ module.exports = grammar({
     ),
 
     const_for_constants: $ => seq('[', commaSep($._expression), ']'),
+
+    const_for_decorated: $ => seq(
+      'decorated',
+      '<',
+      field('decorator', $._type),
+      ',',
+      choice(
+        seq('namespace', field('namespace', choice($.identifier, '::'))),
+        field('owner', $._type),
+      ),
+      optional(','),
+      '>',
+    ),
 
     // Compile-time selection on a constant condition: `const if c { … }
     // else const if d { … } else { … }`.
@@ -544,6 +638,7 @@ module.exports = grammar({
     _value_expression: $ => choice(
       $.binary_expression,
       $.unary_expression,
+      $.await_expression,
       $._postfix_expression,
     ),
 
@@ -571,9 +666,10 @@ module.exports = grammar({
       $.array_literal,
       $.struct_literal,
       $.variant_constant,
+      $.closure_expression,
     ),
 
-    _expression_name: $ => choice($.identifier, $.scoped_identifier),
+    _expression_name: $ => choice($.identifier, alias('await', $.identifier), $.scoped_identifier),
 
     binary_expression: $ => binaryExpressions($._value_expression),
 
@@ -581,6 +677,16 @@ module.exports = grammar({
       field('operator', choice('-', '!', '~', '&')),
       field('operand', $._value_expression),
     )),
+
+    await_expression: $ => prec(PREC.UNARY, seq(
+      'await',
+      field('operand', choice($.identifier, alias($._await_call, $.call_expression))),
+    )),
+
+    _await_call: $ => seq(
+      field('function', $.identifier),
+      field('arguments', $.argument_list),
+    ),
 
     // `as!` converts unchecked.
     cast_expression: $ => prec(PREC.POSTFIX, seq(

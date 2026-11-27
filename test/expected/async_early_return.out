@@ -1,0 +1,41 @@
+branch 10
+outer 11
+branch result 10
+iteration 12
+after yield 12
+outer 12
+loop result 12
+child started
+child cleanup
+after yield 19
+outer 19
+normal result 19
+terminal cleanup
+terminal result 41
+dead suspension 50 51
+inferred result 54 55
+void cleanup
+void resumed
+void cleanup
+child started
+child cleanup
+parent cleanup
+child result 41
+child started
+child cleanup
+scope owner cleanup
+scope result 42
+scratch cleanup 2
+scratch owner cleanup
+scratch result 1
+outer 10
+cancelled after yield
+child started
+child cleanup
+after yield 12
+outer 12
+cancelled with child
+child started
+child cleanup
+parent cleanup
+nested join 41

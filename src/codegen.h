@@ -337,7 +337,8 @@ struct CodeGen {
     }
     // Declare a value, replacing name with its C lvalue when stored on a
     // data stack. A binding survives its block; a temporary its statement.
-    void FixedLocal(TypeExpr *t, string &name, const string &init = "", bool forlocal = false);
+    void FixedLocal(TypeExpr *t, string &name, const string &init = "", bool forlocal = false,
+                    const VarDef *owner = nullptr);
     // A limited array of static capacity, `T[..k]`: a C value of a length
     // and k slots, which any other array or slice of T constructs by copy
     // (§4.2, AdaptToFixed).
@@ -385,7 +386,6 @@ struct CodeGen {
     };
     map<pair<const void *, int>, Layout> layouts;   // StructInst / (EnumInst, variant).
 
-    int64_t PadAlign(TypeExpr *t);
     Layout LayoutFields(const vector<Field> &fields, const vector<TypeExpr *> &ftypes);
     const Layout &StructLayout(StructInst *si);
     const Layout &VariantLayout(EnumInst *ei, int vi);
@@ -520,6 +520,9 @@ struct CodeGen {
     };
     unordered_map<FnSpec *, SpecInfo> sinfo;
     vector<FnSpec *> livespecs;
+    map<string, vector<FnSpec *>> callable_targets;
+    map<pair<FnSpec *, bool>, string> callable_thunks;
+    string callable_code;
 
     // Data stack accounting (codegen_stacks.h). What each emitted function
     // asks for: the calls it hands a stack index, with that index relative
@@ -644,15 +647,21 @@ struct CodeGen {
     vector<string> dsttop0;              // k_dst<i>'s top on entry, once needed.
 
     enum { SC_PLAIN, SC_FN, SC_LOOP, SC_BLOCK, SC_IB, SC_STMT };
+    struct StackSave {
+        string stack, base;
+        const VarDef *owner;
+        bool task_owned = false;
+    };
     struct CScope {
         int kind;
         int stkbase;
-        vector<pair<string, string>> saves;   // (stack expr, base var) to restore.
+        vector<StackSave> saves;
         // The `defer` bodies registered in this scope (§6.6), each with how
         // many saves came before it: an exit runs them among the restores,
         // latest first, each before the release of the storage declared
         // before it (EmitRestores).
         vector<pair<size_t, Defer *>> defers;
+        const VarDef *task_controller = nullptr;
         SFunction *ibsf = nullptr;            // SC_IB: which returns exit here.
         string brklbl, cntlbl;
         bool usedbrk = false, usedcnt = false;
@@ -838,13 +847,15 @@ struct CodeGen {
     vector<string> BraceFields(const string &ct);
     static vector<string> SplitBraceInit(const string &init);
     void PushSc(int kind);
-    void EmitRestores(const CScope &s);
+    void EmitRestores(const CScope &s, bool suspending = false);
+    void RestoreStack(const StackSave &save);
     void PopSc();
-    void EmitExitRestores(int to);
+    void EmitExitRestores(int to, bool suspending = false);
     void RegisterDefer(Defer *d);
     void EmitDeferBody(Defer *d);
     string AllocStk(bool forlocal);
-    void SaveBase(bool forlocal, const string &stk, const string &basevar);
+    void SaveBase(bool forlocal, const string &stk, const string &basevar, const VarDef *owner = nullptr,
+                  bool task_owned = false);
 
     // Globals keep their names for the whole run; locals are named per
     // function (a captured variable gets an independent name as the hidden
@@ -962,8 +973,8 @@ struct CodeGen {
     // pointer for zero bytes, which memcpy may not be handed.
     static const char *CopyFn() { return "k_memcpy"; }
 
-    ArrView ArrayView(const Loc &lv);
-    ArrView RawArrayView(const Loc &lv);
+    ArrView ArrayView(const Loc &lv, bool reenter = false);
+    ArrView RawArrayView(const Loc &lv, bool reenter = false);
     // The address of element `i` of a view: typed pointer arithmetic where
     // the elements are typed, byte arithmetic at the element size otherwise.
     string ElemAddr(const ArrView &v, const string &i) {
@@ -1028,7 +1039,7 @@ struct CodeGen {
     string IndexTypeCheck(const string &x, TypeExpr *t, Line ln);
     static string IntStr(int64_t v);
     static string FltStr(double v, bool f32);
-    Loc IndexLoc(Loc lv, Node *idxnode, Line ln, bool nobc);
+    Loc IndexLoc(Loc lv, Node *idxnode, Line ln, bool nobc, bool task_place = false);
     Index *LeadingCheck(Node *arm);
     bool SamePath(Node *a, Node *b);
     bool SameCheck(Index *a, Index *b);
@@ -1146,6 +1157,7 @@ struct CodeGen {
     void ElemwiseOperands(Binary *b, string &l, string &r);
     string GenElemwise(Binary *b, const string &l, const string &r);
     string GenSlice(SliceExpr *se, const string &into = "");
+    pair<string, string> GenSliceBounds(SliceExpr *se, const string &length);
 
     // ------------------------------------------------------------------
     // Construction (§4.2/§4.3): writes a value front-to-back at a stack's
@@ -1372,7 +1384,8 @@ struct CodeGen {
     void EmitPrefixPatch(const string &pref, IntStorage ls, const string &stk, const string &count,
                          const string &elems);
     void EmitNrvoFinish(const NrvoDest &nd);
-    void Epilogue(const string &retv);
+    void Epilogue(const string &retv, bool suspending = false);
+    void GenTaskReturn(Return *r);
     void PropagateReturn(const string &rfval);
     void GenFromReturn(Return *r);
 
@@ -1392,6 +1405,10 @@ struct CodeGen {
     vector<string> EmitCall(Call *c, Dst d0, vector<Dst> *alldst = nullptr);
     void EmitCallInto(Call *c, vector<Dst> &dsts);
     vector<string> EmitExternCall(Call *c, FnSpec *sp);
+    string CallableThunk(FnSpec *target, bool owning);
+    void CopyCallableCapture(TypeExpr *t, const string &source, const string &destination);
+    vector<string> EmitCallableConversion(Call *c);
+    vector<string> EmitRuntimeCall(Call *c);
     string ExternProto(FnSpec *sp);
     vector<Node *> CallArgNodes(Call *c, size_t nparams);
     // Returns whether it lent the callee a variable of the caller's
@@ -1556,6 +1573,69 @@ struct CodeGen {
     void ResetFnState();
     string EnsureEr(FnSpec *sp);
     void EmitSpec(FnSpec *sp, bool er = false);
+    void EmitTaskJoin(FnSpec *sp);
+    void EmitForeignTaskJoin(FnSpec *sp);
+    struct TaskCode {
+        string frame, ops;
+        bool suspends = false;
+        bool has_child = false;
+        bool has_storage = false;
+        bool pending_input_cleanup = false;
+    };
+    unordered_map<FnSpec *, TaskCode> taskcode;
+    struct TaskFlowSite {
+        Call *call;
+        string resume;
+    };
+    struct TaskFlowCode {
+        string frame, poll_body;
+        vector<TaskFlowSite> sites;
+        unordered_map<const Call *, size_t> indices;
+        unordered_map<const ForLoop *, size_t> loops;
+        unordered_map<const VarDef *, size_t> storage;
+        unordered_map<const VarDef *, size_t> freelists;
+        unordered_map<const VarDef *, size_t> pinned;
+        unordered_map<Node *, TypeExpr *> operand_types;
+        unordered_map<Node *, string> operand_names;
+        set<Node *> prepared_literals;
+        bool pending_input_cleanup = false;
+    };
+    TaskFlowCode *task_flow = nullptr;
+    void EmitTaskFlowJoin(FnSpec *owner, FnSpec *stage, TaskCode &task);
+    vector<string> EmitTaskFlowAwait(Call *c);
+    bool TaskOwnsStack(const VarDef *v) { return v->task_storage || (v->task_pinned && IsLargeFixed(v->type)); }
+    string BindPinnedTaskLocal(VarDef *v, bool forlocal);
+    TypeExpr *TaskOperandType(Node *n);
+    string GenTaskOperand(Node *n, const function<string()> &evaluate);
+    struct TaskLiteralScope {
+        CodeGen &cg;
+        Node *literal = nullptr;
+        vector<Node *> prepared;
+        TaskLiteralScope(CodeGen &cg, Node *n);
+        ~TaskLiteralScope();
+    };
+    struct ScopedTaskCode { FnSpec *spec; string task, frame, loans; size_t loan_count; };
+    struct TaskScopeCode { string name; vector<ScopedTaskCode> tasks; Line line; };
+    unordered_map<const VarDef *, TaskScopeCode> taskscopes;
+    map<string, string> task_holder_visitors;
+    string task_holder_code;
+    string TaskHolderVisitor(TypeExpr *type);
+    void EmitTaskScopeBegin(Call *c);
+    size_t TaskLoanCount(const vector<VarDef *> &owners, span<const TaskSlotLoan> precise = {});
+    void EmitTaskLoans(const vector<VarDef *> &owners, const string &slots, const string &task,
+                       optional<Line> resize = {}, size_t index = 0, span<const TaskSlotLoan> precise = {});
+    void EmitSharedTaskLoans(const vector<VarDef *> &owners, span<const TaskSlotLoan> precise,
+                             const string &loans, const string &task, TypeExpr *initial_type,
+                             const string &initial, const Call *suspension = nullptr);
+    bool HasInlineTaskArray(TypeExpr *t);
+    void CheckTaskArrayShrink(const Loc &lv, Line line, const string &when = {});
+    void CheckTaskFixedReplacement(const Loc &lv, Line line);
+    bool TaskHolderWrite(TypeExpr *t);
+    void CheckTaskHolderWrite(const Loc &lv, Line line);
+    void CheckTaskHolderWrite(const string &address, const string &bytes, Line line);
+    void EmitTaskScopeClose(const VarDef *controller);
+    vector<string> EmitTaskScopeOperation(Call *c);
+    vector<string> TaskScopePollEffects(const TaskScopeCode &scope, Line line);
     // The instruction-set levels above the baseline a simd function has a
     // version for; runtime.h names them (K_SIMD_TARGET1, ...).
     static constexpr int SIMD_LEVELS = 2;
@@ -1617,13 +1697,12 @@ struct CodeGen {
     // runtime's extern support (runtime_ext.h), which is written against
     // the types in the first.
     string head;     // Types and data.
-    string result;   // Includes, prototypes and code.
+    string result;   // Prototypes and code.
+    bool usestasks = false;
     string ExportHeader();
 
-    // Extern-support C and user headers are inputs to this emission, not
-    // process state that the driver must install before constructing us.
     // A function the extern support declares gets no prototype here.
-    CodeGen(Ast &_ast, string_view runtime_ext_text, const vector<string> &headers,
+    CodeGen(Ast &_ast, string_view runtime_ext_text,
             bool _norfcheck = false, bool _library = false, bool _sharedlibrary = false,
             int64_t _maxstacks = 0, bool _noelide = false)
         : ast(_ast), library(_library), sharedlibrary(_sharedlibrary),
@@ -1632,6 +1711,7 @@ struct CodeGen {
             if (t->kind == TY_REF && t->ref->pool) poolglobals.insert(t->ref->pool);
         ComputeRelRootMax();
         CollectSpecs();
+        usestasks = ast.has_task_loans;
         for (auto sp : livespecs)
             for (auto fv : sinfo[sp].freevars) capturedvars.insert(fv);
         FindKnownRootParams();
@@ -1642,10 +1722,12 @@ struct CodeGen {
         EmitGlobalDecls();
         // Prototypes for every live specialization, then their bodies.
         for (auto sp : livespecs) {
+            if (sp->sf->task_flow) continue;
             auto ret = SigRet(sp), params = SigParams(sp, false);
             Append(protos, "static ", FnAttrs(sp), ret, " ", sinfo[sp].cname, "(", params, ");\n");
         }
-        for (auto sp : livespecs) EmitSpec(sp);
+        for (auto sp : livespecs) if (sp->sf->task_join) EmitTaskJoin(sp);
+        for (auto sp : livespecs) if (!sp->sf->task_join && !sp->sf->task_flow) EmitSpec(sp);
         EmitGlobalInit();
         // Element-run twins requested by call sites, the globals'
         // initializers included (may request more).
@@ -1657,6 +1739,10 @@ struct CodeGen {
         if (!library) EmitMain();
         MergeSpecs();
         if (usesthreads) predefs = "#define K_NEED_THREADS 1\n";
+        if (ast.has_task_loans) predefs += "#define K_NEED_TASK_LOANS 1\n";
+        if (ast.has_task_resize_loans) predefs += "#define K_NEED_TASK_RESIZE_LOANS 1\n";
+        if (ast.has_task_holder_loans) predefs += "#define K_NEED_TASK_HOLDER_LOANS 1\n";
+        if (!task_holder_visitors.empty()) predefs += "#define K_NEED_TASK_HOLDER_GRAPHS 1\n";
         // The instance block: with workers each thread reaches its own
         // through k_gl; without them there is only main's.
         Append(data, "typedef struct {\n", gblock.empty() ? "    uint8_t k_none;\n" : gblock,
@@ -1713,19 +1799,10 @@ struct CodeGen {
             }
             externs += "};\n";
         }
-        string includes;
-        for (auto inc : headers) {
-            // Forward slashes even for a Windows path: a backslash inside a
-            // header name is undefined, and every C compiler on Windows takes
-            // the slash form.
-            for (auto &c : inc) if (c == '\\') c = '/';
-            Append(includes, "#include \"", inc, "\"\n");
-        }
         Append(head, "\n/* ---- types ---- */\n#pragma pack(push, 1)\n", tdecls, pdata,
                "#pragma pack(pop)\n\n/* ---- data ---- */\n", data);
-        Append(result, "\n/* ---- includes ---- */\n", includes,
-               "\n/* ---- extern prototypes ---- */\n", externs,
-               "\n/* ---- prototypes ---- */\n", protos, "\n/* ---- code ---- */\n", code);
+        Append(result, "\n/* ---- extern prototypes ---- */\n", externs,
+               "\n/* ---- prototypes ---- */\n", protos, "\n/* ---- code ---- */\n", callable_code, task_holder_code, code);
     }
 };
 

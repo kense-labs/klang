@@ -1,0 +1,26 @@
+=================
+Owned C handles and foreign borrows
+=================
+
+extern fn open() -> own Handle;
+extern fn read(borrow handle: Handle) -> i32;
+
+---
+
+(source_file
+  (function_declaration
+    (function_modifier)
+    (identifier)
+    (parameters)
+    (owned_type
+      (named_type
+        (identifier))))
+  (function_declaration
+    (function_modifier)
+    (identifier)
+    (parameters
+      (parameter
+        (identifier)
+        (named_type
+          (identifier))))
+    (primitive_type)))

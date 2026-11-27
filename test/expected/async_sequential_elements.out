@@ -1,0 +1,11 @@
+entry a 2
+entry end 13
+grown 15
+item 0 a
+item 1 bb
+item 2 ccc
+item 3 d
+walked 5
+item 0 a
+packed 6
+linked 6

@@ -240,6 +240,7 @@ struct BCE {
             };
             if (c->spec && c->builtin < 0) reach(c->spec);
             for (auto d : c->dispatch) reach(d);
+            for (auto task : c->scope_tasks) reach(task);
             for (auto &fs : c->fmtspecs) reach(fs.second);
         }
         RunChildren(n, [&](Node *ch) { ScanVerified(ch, in, todo); });
@@ -2881,11 +2882,24 @@ struct BCE {
             return;
         }
         sltotal++;
-        auto ok = lent.ok && lot.ok && hit.ok &&
-                  Query(Zero(), lot.b, lot.off) &&
-                  Query(lot.b, hit.b, SatSub(hit.off, lot.off)) &&
-                  Query(hit.b, lent.b, SatSub(lent.off, hit.off));
-        if (ok) { se->nobc = true; slelided++; }
+        auto lower = lot.ok && Query(Zero(), lot.b, lot.off);
+        auto ordered = lot.ok && hit.ok && Query(lot.b, hit.b, SatSub(hit.off, lot.off));
+        auto upper = hit.ok && lent.ok && Query(hit.b, lent.b, SatSub(lent.off, hit.off));
+        auto ok = lower && ordered && upper;
+        if (ok) {
+            se->boundchecks = 0;
+            slelided++;
+        } else {
+            // For a partial proof, each relation must hold for the actual
+            // machine values independently of the checks that are still run.
+            auto exactlo = CmpAdmissible(lot), exacthi = CmpAdmissible(hit);
+            auto currentlen = lent.b.kind != BK_LEN || lent.b == LenBase(lent.b.id);
+            se->boundchecks = 0;
+            if (!(lower && exactlo)) se->boundchecks |= SliceExpr::CheckLower;
+            if (!(ordered && exactlo && exacthi)) se->boundchecks |= SliceExpr::CheckOrder;
+            if (!(upper && exacthi && currentlen && CmpAdmissible(lent)))
+                se->boundchecks |= SliceExpr::CheckUpper;
+        }
         RecordLine(se->line, ok);
         if (!ok) {
             string why;
@@ -2894,9 +2908,9 @@ struct BCE {
                           " is not one the analysis tracks here");
             else if (!lot.ok || !hit.ok)
                 why = "the analysis cannot relate the slice's bounds to the length";
-            else if (!Query(Zero(), lot.b, lot.off))
+            else if (!lower)
                 why = "nothing shows the lower bound >= 0";
-            else if (!Query(lot.b, hit.b, SatSub(hit.off, lot.off)))
+            else if (!ordered)
                 why = "nothing shows the lower bound <= the upper bound";
             else
                 why = cat("nothing shows the upper bound <= ", ExprText(se->obj), ".len");
@@ -2908,6 +2922,27 @@ struct BCE {
     // Condition facts. Only added when evaluating the condition could not
     // have changed tracked state (the caller checks HasKillEffects), since
     // the comparisons ran against pre-kill values otherwise.
+
+    // Move the subtrahend to the other side of a comparison with a constant.
+    // Both operands in [0, INT64_MAX] guarantee exact signed subtraction.
+    // Only the original terms need to fit a machine integer: the offset
+    // added to the right is a mathematical fact, not a generated operation.
+    bool MoveSubtrahend(Node *n, const Term &constant, Term &left, Term &right) {
+        auto sub = Is<Binary>(n);
+        if (!sub || sub->op != T_MINUS || effectfulterms.count(n) ||
+            !MachineInt(OpType(sub)) || OpType(sub)->intstorage != IS_I64 ||
+            !constant.ok || constant.b.kind != BK_ZERO ||
+            !SmallOff(constant.off))
+            return false;
+        auto x = TermOf(sub->left), y = TermOf(sub->right);
+        if (!CmpAdmissible(x) || !CmpAdmissible(y) || y.off <= -CCAP || y.off >= CCAP ||
+            !Query(Zero(), x.b, x.off) || !Query(Zero(), y.b, y.off))
+            return false;
+        y.off += constant.off;
+        left = x;
+        right = y;
+        return true;
+    }
 
     void CondFacts(Node *c, bool truth) {
         if (mode == M_KILLS) return;
@@ -2925,7 +2960,10 @@ struct BCE {
             return;
         if (!MachineInt(b->left->exprtype) || !MachineInt(b->right->exprtype)) return;
         auto lt = TermOf(b->left), rt = TermOf(b->right);
-        if (!lt.ok || !rt.ok || !CmpAdmissible(lt) || !CmpAdmissible(rt)) return;
+        if (OpType(b)->intstorage != IS_I64 ||
+            (!MoveSubtrahend(b->left, rt, lt, rt) && !MoveSubtrahend(b->right, lt, rt, lt))) {
+            if (!CmpAdmissible(lt) || !CmpAdmissible(rt)) return;
+        }
         if (!truth) {
             switch (op) {
                 case T_LT:   op = T_GTEQ; break;
@@ -3513,14 +3551,28 @@ struct BCE {
                 uses[d]++;
                 if (from) callees[from].push_back(d);
             }
+            for (auto task : c->scope_tasks) {
+                // The executor invokes the task across a poll boundary.
+                // No argument facts from the lexical scope reach it.
+                opaquesites.insert(task);
+                uses[task]++;
+                if (from) callees[from].push_back(task);
+            }
         }
         RunChildren(n, [&](Node *ch) { ScanCalls(ch, from, uses); });
     }
 
     void BuildCallGraph() {
         map<FnSpec *, int> uses;
-        for (auto sp : ast.fnspecs)
-            if (sp->live && sp->body) ScanCalls(sp->body, sp, uses);
+        for (auto sp : ast.fnspecs) {
+            if (!sp->live || !sp->body) continue;
+            ScanCalls(sp->body, sp, uses);
+            if (auto cleanup = sp->task_cleanup) {
+                opaquesites.insert(cleanup);
+                uses[cleanup]++;
+                callees[sp].push_back(cleanup);
+            }
+        }
         ast.ForEachRootTree([&](Node *n) { ScanCalls(n, nullptr, uses); });
         // The optimizer's count is the authority on how a specialization is
         // reached: a use this scan did not see is one it cannot describe.
@@ -3671,7 +3723,7 @@ struct BCE {
         // Callers first: a specialization's entry facts come from its call
         // sites, which have to have been judged.
         for (auto it = calleesfirst.rbegin(); it != calleesfirst.rend(); ++it)
-            if ((*it)->live && (*it)->body) RunSpec(*it);
+            if ((*it)->live && (*it)->body && !(*it)->sf->task_flow) RunSpec(*it);
         // Global initializers: judged with no surrounding context.
         judging = nullptr;
         SetupRootTrees();
@@ -4086,6 +4138,7 @@ inline bool Call::BceWalk(BCE &b) {
         }
         for (auto p : fvparams) if (p) b.BumpVar(p, false);
         b.StripKills(fvbody);
+        if (task_scope) b.KillByCall();  // Cancellation at the implicit scope exit.
         return true;
     }
     if (site) b.RecordSite(this, ArgNodes(), ints, slens, moved);

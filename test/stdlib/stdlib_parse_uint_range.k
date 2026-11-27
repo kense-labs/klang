@@ -7,6 +7,25 @@ fn show(s: u8[:], base: i64 = 10) {
     print(v, " ", ok);
 }
 
+fn all_digits() -> bool {
+    for byte in 256 {
+        let d = if byte >= '0' && byte <= '9' { byte - '0' }
+                else if byte >= 'A' && byte <= 'Z' { byte - 'A' + 10 }
+                else if byte >= 'a' && byte <= 'z' { byte - 'a' + 10 }
+                else { -1 };
+        for base in -1..40 {
+            let expected = if d < base { d } else { -1 };
+            if parse_digit(byte as u8, base) != expected { return false; }
+        }
+    }
+    return true;
+}
+
+fn bits_match(s: u8[:], signed: bool, want: u64, valid: bool, base: i64 = 10) -> bool {
+    let bits, ok = parse_int_bits(s, signed, base);
+    return bits == want && ok == valid;
+}
+
 fn main() {
     show("18446744073709551615");                                                   // 18446744073709551615 true
     show("+18446744073709551615");                                                  // 18446744073709551615 true
@@ -57,4 +76,11 @@ fn main() {
     show("10", 64);                                                                 // 0 false
     show("ff", 36);                                                                 // 555 true
     show("ff", 37);                                                                 // 0 false
+    print(all_digits());                                                            // true
+    print(bits_match("-000000000000000000009223372036854775808", true, 9223372036854775808, true),
+          " ", bits_match("+00000000000000000000", false, 0, true),
+          " ", bits_match("-0", false, 0, false),
+          " ", bits_match("0000000000000000000018446744073709551616", false, 0, false),
+          " ", bits_match("00000000000000000000x", true, 0, false),
+          " ", bits_match("+00000000000000000000Z", false, 35, true, 36));
 }

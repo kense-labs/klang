@@ -196,6 +196,10 @@ inline void CodeGen::RenderLoc(Loc &out, Loc lv, TypeExpr *t, bool nested, Call 
         }
         case TY_STRUCT: {
             auto si = SI(t);
+            if (si->st->callable_arity >= 0) {
+                RenderLit(out, si->st->callable_inline ? "<owned callable>" : "<borrowed callable>");
+                return;
+            }
             string name;
             t->Dump(name);
             RenderLit(out, cat(name, " { "));

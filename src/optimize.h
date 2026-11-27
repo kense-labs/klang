@@ -238,6 +238,10 @@ struct Optimizer {
         sp->live = true;
         if (!sp->body) return;   // An extern fn: no body, never inlined (§7.10).
         ReachTree(sp->body);
+        if (sp->task_cleanup) {
+            sp->task_cleanup->uses++;
+            Reach(sp->task_cleanup);
+        }
         postorder.push_back(sp);
     }
 
@@ -254,6 +258,7 @@ struct Optimizer {
     void ReachTree(Node *n) {
         if (!n) return;
         if (auto c = Is<Call>(n)) {
+            if (c->callable_target) { c->callable_target->uses++; Reach(c->callable_target); }
             if (c->spec) {
                 if (c->builtin < 0) c->spec->uses++;  // thread_spawn is not a call site.
                 Reach(c->spec);
@@ -263,6 +268,7 @@ struct Optimizer {
                 Reach(fs.second);
             }
             for (auto d : c->dispatch) { d->uses++; Reach(d); }
+            for (auto task : c->scope_tasks) { task->uses++; Reach(task); }
         }
         RunChildren(n, [&](Node *ch) { ReachTree(ch); });
     }
@@ -524,6 +530,7 @@ struct Optimizer {
                 };
                 if (c->builtin < 0) callee(c->spec);
                 for (auto k : c->dispatch) callee(k);
+                for (auto task : c->scope_tasks) callee(task);
             }
             RunChildren(n, [&](Node *ch) { rec(ch, d + Around(n, ch)); });
         };
@@ -544,6 +551,7 @@ struct Optimizer {
     // copy of sp repeats: K then has as many uses as sp, which is what its
     // ordinary inlining is decided by.
     void OptBody(FnSpec *sp) {
+        if (sp->sf->task_join || sp->sf->task_flow) return;
         deferonce = sp->uses > 1;
         deferred.clear();
         OptBlock(sp->body);
@@ -799,6 +807,7 @@ struct Inliner {
 inline Node *Optimizer::TryInline(Call *c) {
     if (!caninline || !c->spec || c->builtin >= 0 || !c->dispatch.empty()) return nullptr;
     auto K = c->spec;
+    if (K->sf->task_join || K->sf->task_stage) return nullptr;
     auto &info = inlineinfo[K];
     if (!K->live || !K->body) return nullptr;
     auto ncuhere = loopdepth > 0 && !colddepth ? ncu * LOOPNCU : ncu;
@@ -925,7 +934,11 @@ inline Node *StrLit::Cp1(Inliner &inl) const {
 inline Node *NullLit::Cp1(Inliner &inl) const { return inl.ast.New<NullLit>(line); }
 inline Node *SelfRef::Cp1(Inliner &inl) const { return inl.ast.New<SelfRef>(line); }
 inline Node *Continue::Cp1(Inliner &inl) const { return inl.ast.New<Continue>(line); }
-inline Node *Defer::Cp1(Inliner &inl) const { return inl.ast.New<Defer>(line, inl.CpBlock(body)); }
+inline Node *Defer::Cp1(Inliner &inl) const {
+    auto d = inl.ast.New<Defer>(line, inl.CpBlock(body));
+    d->task_transfer = task_transfer;
+    return d;
+}
 
 inline Node *Ident::Cp1(Inliner &inl) const {
     if (vdef) {
@@ -939,6 +952,8 @@ inline Node *Ident::Cp1(Inliner &inl) const {
     auto c = inl.ast.New<Ident>(line, name, ns);
     c->vdef = inl.Remap(vdef);
     c->fnref = fnref;
+    c->boundfn = boundfn;
+    c->fieldref = fieldref;
     return c;
 }
 
@@ -990,6 +1005,31 @@ inline Node *Call::Cp1(Inliner &inl) const {
     c->spec = spec;
     c->dispatch = dispatch;
     c->dispatcharg = dispatcharg;
+    c->task_scope = task_scope;
+    c->native_task = native_task;
+    c->callable_target = callable_target;
+    c->callable_call = callable_call;
+    if (decorator_value) c->decorator_value = Is<StructLit>(inl.Cp(decorator_value));
+    c->decorator_forward = decorator_forward;
+    c->decorator_await = decorator_await;
+    c->scope_tasks = scope_tasks;
+    for (auto owner : task_shared_owners) c->task_shared_owners.push_back(inl.Remap(owner));
+    c->task_slot_loans = task_slot_loans;
+    for (auto &slot : c->task_slot_loans) {
+        slot.owner = inl.Remap(slot.owner);
+        if (slot.source.local) slot.source.local = inl.Remap(slot.source.local);
+    }
+    c->scope_loan_owners = scope_loan_owners;
+    c->scope_slot_loans = scope_slot_loans;
+    for (auto &slots : c->scope_slot_loans)
+        for (auto &slot : slots) slot.owner = inl.Remap(slot.owner);
+    c->scope_resize_owners = scope_resize_owners;
+    for (auto slots : { &c->scope_loan_owners, &c->scope_resize_owners })
+        for (auto &owners : *slots)
+            for (auto &owner : owners) owner = inl.Remap(owner);
+    c->scope_operation = scope_operation;
+    c->scope_controller = scope_controller ? inl.Remap(scope_controller) : nullptr;
+    c->scope_slot = scope_slot;
     c->builtin = builtin;
     c->poolcheck = poolcheck;
     c->qtype = qtype;
@@ -1093,6 +1133,7 @@ inline Node *Return::Cp1(Inliner &inl) const {
     for (auto v : vals) r->vals.push_back(inl.Cp(v));
     r->from = from;
     r->ns = ns;
+    r->task_exit = task_exit;
     r->target = target;
     r->targetspec = targetspec;
     return r;
@@ -1307,6 +1348,11 @@ inline Node *Dot::Opt(Optimizer &o) {
 }
 
 inline Node *Call::Opt(Optimizer &o) {
+    if (scope_controller) {
+        // A task index is a compile-time operand. The duration is a value.
+        if (scope_operation == TaskScopeOperation::WaitFor) args[0] = o.Opt(args[0]);
+        return this;
+    }
     // Before the arguments: a chain of min or max calls is still calls.
     if (auto r = o.TryReassoc(this)) return r;
     // A member builtin works on its receiver where it stands (bytes_of

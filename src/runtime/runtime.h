@@ -104,6 +104,13 @@ typedef double k_f64 K_ALIGN1;
 #ifndef K_NEED_THREADS
 #define K_NEED_THREADS 0
 #endif
+#ifndef K_NEED_TASK_WAIT
+#ifdef K_RUNTIME_OBJECT
+#define K_NEED_TASK_WAIT 1
+#else
+#define K_NEED_TASK_WAIT 0
+#endif
+#endif
 #ifndef K_DEBUG
 #define K_DEBUG 0          /* 1: overflow, `as` range, and tag checks (§9.3). */
 #endif
@@ -923,6 +930,17 @@ K_API void k_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
                         uint64_t budget, int64_t mainregions, int64_t workerregions);
 /* A fresh region, registered to the calling thread program. */
 K_API uint8_t *k_reserve_region(k_stack *stack);
+/* A task-local data stack lives at a stable address until its lexical
+   scope exits. The slot is zeroed at task construction. */
+K_API void k_task_stack_open(k_stack **slot);
+K_API void k_task_stack_close(k_stack **slot);
+/* Heap-resident task resources also unwind when a worker aborts. */
+typedef struct k_task_cleanup {
+    struct k_task_cleanup *next, **link;
+    void (*release)(struct k_task_cleanup *);
+} k_task_cleanup;
+K_API void k_task_cleanup_open(k_task_cleanup *entry, void (*release)(k_task_cleanup *));
+K_API void k_task_cleanup_close(k_task_cleanup *entry);
 /* The calling thread program's stack use, on stderr (K_STACK_STATS):
    `stacks` is how many of its indexed data stacks exist. */
 K_API void k_stack_stats(int64_t stacks);
@@ -963,6 +981,14 @@ K_API void k_dl_bind(const k_dllib *libs, int64_t nlibs, const k_dlbind *binds,
    Threads and typed queues (§11.2), runtime_threads.h. */
 
 K_API int64_t k_hardware_threads(void);
+
+#if K_NEED_TASK_WAIT
+K_API void *k_task_event_open(void);
+K_API void k_task_event_close(void *event);
+K_API void k_task_event_signal(void *event, uint32_t flags);
+K_API uint32_t k_task_event_take(void *event, int block);
+K_API uint32_t k_task_event_take_for(void *event, uint32_t millis);
+#endif
 /* Runs run(entry, args) and then release() on a new thread, args a copy of
    argsize bytes, and returns the worker's id. In a contained worker an
    abort ends run early. */

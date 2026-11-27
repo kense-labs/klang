@@ -30,6 +30,7 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
                 Error(n, cat(id->name, " names a ", kind, ", not a variable"));
             Error(n, cat("unknown variable: ", id->name));
         }
+        if (vd->task_scope) Error(n, "a task scope controller cannot be used as a value");
         // A local's first assignment may construct it, but a global is
         // constructed only by its own initializer (§11.1): before that has
         // run, no path may start at it, whether it reads or writes.
@@ -75,6 +76,10 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
         auto lv = LValueBase(ix->obj);
         DerefLValue(lv, ix->obj);
         SliceProvenance(lv, ix->obj);
+        if (lv.type->kind == TY_SLICE) {
+            auto sf = frames[RealFrameIndex()].sf;
+            if (sf && sf->task_flow) ix->task_slice_owner = make_unique<Roots>(lv.AsRoots());
+        }
         TypeExpr *elem;
         if (lv.type->kind == TY_SLICE) {
             elem = lv.type->sub;
@@ -531,13 +536,15 @@ template<typename F> void TypeCheck::HoldForSequence(ForLoop *fl, const Val &v, 
         return n;
     };
     auto path = unwrap(fl->iter);
-    if (!Is<Ident>(path)) {
+    auto sequence = IsPlainRef(v.type) ? v.type->ref->sub : v.type;
+    auto sequential = sequence->kind == TY_ARRAY && ClassOf(sequence->arr->sub) != SC_FIXED;
+    if (!Is<Ident>(path) || sequential) {
         auto seq = v;
         if (IsPlainRef(seq.type) && seq.type->ref->sub->kind != TY_SLICE) seq = DecayRef(seq);
         auto st = seq.type;
         if (st->kind != TY_ARRAY) {
             hold(fl->iter, seq, false);
-        } else if (ClassOf(st) != SC_RESIZABLE) {
+        } else if (ClassOf(st) != SC_RESIZABLE || sequential) {
             seq.type = ast.SliceOf(st->arr->sub, fl->iter->line);
             hold(fl->iter, seq, false);
         }
@@ -684,6 +691,12 @@ inline void TypeCheck::ResolveMemberLValue(LVal &lv, Dot *d) {
     };
     if (t->kind == TY_STRUCT) {
         auto inst = GetStructInst(t);
+        if (inst->st->callable_arity >= 0) Error(d, "runtime callable fields are private");
+        if (inst->st->closure || inst->st->task_frame) {
+            auto env = Is<Ident>(d->obj);
+            if (!env || env->name != kClosureEnv)
+                Error(d, inst->st->task_frame ? "task frame fields are private" : "closure captures are private");
+        }
         if (inst->st->isroot) {
             auto parent = lv.AsRoots();
             if (step(inst->st->fields, inst->ftypes, true)) {
@@ -2871,6 +2884,7 @@ inline bool TypeCheck::ElementwiseOK(TypeExpr *t) {
                 isint = 0;
                 return true;
             case TY_STRUCT: {
+                if (RuntimeCallableType(t2) == t2) return false;
                 auto inst = GetStructInst(t2);
                 for (size_t i = 0; i < inst->ftypes.size(); i++)
                     if (inst->ftypes[i] && !rec(inst->ftypes[i])) return false;
@@ -3108,7 +3122,12 @@ inline TypeCheck::LitDeep TypeCheck::CheckInits(StructLit *sl, vector<Field> &fi
             if (fields[i].defaultval) {
                 fi.val = fields[i].defaultval->Clone(ast);
                 fi.fromdefault = true;
-            } else if (IsOptional(ftypes[i])) continue;
+            } else if (IsOptional(ftypes[i])) {
+                if (selft->kind != TY_STRUCT || !selft->struc->st->isroot) continue;
+                // A root's field has separate storage, initialized by its
+                // own binding instead of a zeroed aggregate literal.
+                fi.val = DefaultValue(ftypes[i], sl->line);
+            }
             else if (sl->defaultall) {
                 string why;
                 if (!HasDefault(ftypes[i], why))
@@ -3127,19 +3146,24 @@ inline TypeCheck::LitDeep TypeCheck::CheckInits(StructLit *sl, vector<Field> &fi
     // Every initializer is in place before any is checked: each is an
     // operand of the literal, the ones before it held and the ones after it
     // still to run (HeldOperands, LaterOperands).
+    auto sf = CurRealFrame().sf;
+    auto task_initial = sf && sf->async_body && selft->kind == TY_STRUCT && selft->struc->st->task_join;
     for (size_t k = 0; k < sl->inits.size(); k++) {
         auto &fi = sl->inits[k];
         auto ft = ftypes[sl->fieldindices[k]];
         auto component = selft->kind == TY_STRUCT && selft->struc->st->isroot
                              ? RootComponent(rootowner, selft, sl->fieldindices[k]) : nullptr;
-        DestScope ds(*this, component ? Dest(component) : curdst);
+        auto borrowed_input = task_initial && (TaskInputBorrow(ft) || TaskInputHolder(ft));
+        // These private slots implement scoped input parameters. Their
+        // actual owners are validated where the task is run.
+        DestScope ds(*this, component ? Dest(component) : borrowed_input ? Dest {} : curdst);
         if (Is<SelfRef>(fi.val)) CheckSelfInit(fi.val, ft, selft);
         else {
             SlotScope ss(*this, true);
             auto fv = fi.fromdefault
                           ? CheckDefaultInit(fi.val, ft, selft, sl, fields[sl->fieldindices[k]])
                           : CheckValue(fi.val, ft);
-            NoteLitElem(deep, fi.val, fv, ft);
+            NoteLitElem(deep, fi.val, fv, ft, borrowed_input);
             if (component && HoldsPlainRef(ft)) NoteHolderBinding(component, fv, fi.val);
         }
     }
@@ -3235,6 +3259,13 @@ inline void TypeCheck::CheckStmts(Block *b) {
         if (auto cf = Is<ConstFor>(b->stmts[i])) b->stmts[i] = ExpandStatements(cf);
         if (auto ci = Is<ConstIf>(b->stmts[i])) b->stmts[i] = ExpandSelection(ci);
         CheckStmt(b->stmts[i]);
+        if (!reachable) {
+            // A terminal task stage never initializes its continuation
+            // binding. Keep its checked call so the driver can run it.
+            if (auto vd = Is<VarDecl>(b->stmts[i]); vd && vd->inits.size() == 1)
+                if (auto call = Is<Call>(vd->inits[0]); call && call->task_stage)
+                    b->stmts[i] = call;
+        }
     }
     if (lost(b->stmts.size())) throw Abandoned {};
     // Drop the unreachable suffix (including the tail), so later passes never

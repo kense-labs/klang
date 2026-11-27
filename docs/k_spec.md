@@ -1627,7 +1627,9 @@ A shrink must also preserve the storage that an enclosing `for` loop walks
 (§6.5). This includes every reference or slice on the path to the sequence,
 since the loop reloads that path on each iteration. It also includes the
 sequence iterated in place, such as a slice, element, or field. A resizable
-array is the exception: the loop reads its length again on each iteration.
+array with fixed-size elements is the exception: the loop reads its length
+again on each iteration. A sequential walk over variable-size elements
+holds a byte cursor and preserves the elements it walks.
 
 A variable is live at the shrink when it can be read again afterwards, that
 is, when it is named:
@@ -2441,12 +2443,13 @@ row` over fixed-size rows), or a reference read out first (`let r .=
 refs[i]; for x in r`), leaves the array free.
 
 **Specialization-time expansion.** `const for` specializes a fragment once
-per entry of a compiler-known sequence. Its v1 sources are `fields<T>` with
+per entry of a compiler-known sequence. The structural sources are `fields<T>` with
 two bindings (field name string and field accessor), `variants<E>` with two
 bindings (variant name string and variant), `types<T1, T2, ...>` with one
-type binding, and `[c1, c2, ...]` with one constant binding. `fields`,
-`variants` and `types` are contextual identifiers in this header, not
-keywords or ordinary function calls. Bindings use required angle brackets:
+type binding, and `[c1, c2, ...]` with one constant binding. The
+`decorated` source has three bindings and follows §7.6.8. The source
+names are contextual identifiers in this header. Bindings use angle
+brackets.
 
 ```klang
 fn visit_fields<T, F>(value: T&) {
@@ -2472,7 +2475,7 @@ a `match` pattern with or without a binder, and, for a variant without
 payload only, a value. It is not stored, passed or turned into a number, and
 its name string is not a persistence identifier. Bindings follow lexical
 scope and shadowing, including in nested functions. Types and constants may
-be heterogeneous; all three sources may be empty. Constants are scalar or
+be heterogeneous. A source may be empty. Constants are scalar or
 string literals, named global constants, and the integer constant
 expressions supported for array sizes, including enclosing expansion
 bindings. There is no arbitrary compile-time execution.
@@ -2875,8 +2878,8 @@ foo(1) { x => print(x) }              // named block params
 fn h(v: i64) { print(v) }  foo(1, h)  // or pass a named function
 ```
 
-Function values are compile-time entities passed as generic parameters, not
-runtime data. The `: fn(...)` bound is optional documentation, and a bare
+Function values are compile-time entities passed as generic parameters or
+untyped immutable block parameters. The `: fn(...)` bound is optional documentation, and a bare
 `<F>` works the same: the call `F(a)` is typechecked per instantiation like
 everything else (passing a non-function produces the error at that call,
 reported with the instantiation chain). Wherever `F` is in scope it names
@@ -2913,17 +2916,208 @@ argument may come after fewer arguments than the callee has parameters,
 when the remaining parameters have defaults: `each_step(5, show)` for
 `fn each_step<F>(n: i64, step: i64 = 1)`.
 
+When a block is called with a function value, the corresponding untyped
+immutable parameter binds the value at compile time. The binding shadows
+outer names and can be called or forwarded to another generic or block
+parameter. It has no runtime argument slot. Ordinary arguments still
+evaluate once, in their original order. The forwarded value keeps the
+lexical environment of the function or block it names.
+
 Function values capture enclosing locals per §7.5, and cannot escape:
 storing them, returning them, or putting them in data is a compile error.
-Every call is direct and inlinable; HOFs compile to hardcoded loops
-(Lobster-style guarantee). There are no closures-as-objects and no runtime
-function pointers in v1.
+Every call is direct and inlinable. Higher-order functions can compile to
+direct loops. §7.6.1 describes concrete closures with stored captures.
 
 A plain `return` inside a function value returns from the **lexically
 enclosing named function**, not from the HOF that calls the value, so a
 HOF-based iterator has the same structuring power as `for`. This is
 implemented with the `return from` mechanism (§7.9), which unwinds the
 HOF's frames transparently.
+
+#### 7.6.1 Concrete closures
+
+A closure literal is `fn[captures](parameters) -> Results { body }`. The
+capture list and the result type list are optional. Every parameter has
+an explicit type. Each capture is `name: Type` or `name: Type = expr`.
+The short form has the same initializer as `name: Type = name`. Names in
+the capture and parameter lists must be distinct.
+
+The initializer expressions run in the defining scope, left to right, once
+per evaluation of the literal. Their results initialize fixed-size capture
+slots. Value captures use the ordinary copy rules. A capture of a reference,
+slice, or value containing either retains the referent's provenance. The
+same lifetime checks apply when the closure is stored, copied or returned.
+The body uses its own call frame. Within it, captures are immutable bindings
+and references retain the access permissions of their referents. Uncaptured
+outer locals are outside the body scope. A plain `return` exits the closure.
+
+Each literal denotes a nominal concrete type, specialized by the enclosing
+type parameters used in its captures, signature, or body. Infer this type
+from a literal or a call, or name it with a generic parameter. A closure can
+be called as a variable, field, indexed value, or result expression. An
+ordinary generic parameter can receive it as data and call it. Branches can
+join values of the same concrete closure type. Captures are private and
+initialization requires a literal or an existing closure value. The stored
+environment and call have a static layout with no implicit heap allocation.
+
+#### 7.6.2 Borrowed callables
+
+`fn&(A, B) -> R` is a fixed-size value with a checked runtime call
+signature. Multiple results use parentheses after the arrow. A
+`borrow_callable` conversion takes its signature from an explicit type
+argument or the expected result type. Conversion requires an exact
+parameter and result match.
+
+A named top-level K target has static lifetime. A concrete closure
+target borrows a stable named environment. A reference parameter can
+forward the environment when its callers provide such storage. Copies
+keep the same borrow. The ordinary lifetime rules apply to storing or
+returning the callable.
+
+Captures are copyable and can include read-only references to known
+fixed storage. The compiler checks every possible store to the borrowed
+environment, including replacement through aliases, against this
+capture contract. The receiver and arguments are evaluated in order.
+The target reads the current environment when invoked.
+
+Arguments can be fixed reference-free values, runtime callables, or
+read-only views of fixed-size reference-free data. Results are fixed
+reference-free values. A target's checked body cannot rely on mutable
+external bindings or change external storage layout. This contract
+covers synchronous calls.
+
+#### 7.6.3 Owned callables
+
+`fn[N](A, B) -> R` stores its environment inside the value. `N` is
+a constant byte capacity, excluding the invocation pointer. An
+`own_callable` conversion accepts a named K function or a concrete
+closure. The destination supplies an exact signature. The compiler
+checks the size of the concrete environment including padding.
+
+The conversion evaluates the source once and copies the environment.
+Copying or moving the callable preserves that environment at its new
+location. Invocation restores the bytes into a concrete typed value,
+whose alignment follows the target ABI. Named functions and
+capture-free closures can use zero bytes of environment storage.
+Equality compares the invocation target and the representation of live
+captures. Padding and unused array slots do not participate.
+
+The current callable contract supports copyable captures, including
+read-only references with known fixed referents. Storing, copying and
+returning the callable obey the lifetimes of those referents. Runtime
+callables use the synchronous parameter, result and effect contract
+of §7.6.2.
+
+#### 7.6.4 Typed metadata decorators
+
+`decorator Name(field: T, ...) on fn;` declares a metadata record type
+in the current namespace. Each field has a scalar type or `const u8[:]`.
+The target can be `fn` or `async fn`. An optional function signature
+constrains the target to a function with matching parameter and result
+types. A target with an inferred result needs a checked body to verify
+a void signature. For an async target the result is the task's completion
+value.
+
+`@Name(...)` applies a function decorator to a top-level K function.
+Arguments are compile-time constants and are checked against the field
+types in order. The same decorator may appear once on a declaration, including
+applications through a namespace or type alias. Different decorators
+can appear on the same declaration.
+
+`decorator_metadata<Name>(f)` produces the typed record for the unique
+overload of the named function that carries `Name`. An absent application
+or several matching overloads is an error. Materializing the record
+only evaluates its constant fields. A registration function can accept
+this record or an explicitly constructed value of the same type.
+
+#### 7.6.5 Synchronous decorator wrappers
+
+A synchronous decorator declaration may end in `{ wrap { ... } }`.
+The wrapper checks as a function body with the decorated signature,
+including the result types inferred from the underlying function. It
+sees its metadata fields as immutable bindings and resolves other names
+in the decorator's lexical scope.
+
+`next()` calls the next wrapper or original implementation with the
+current parameters. It forwards generic bindings, function arguments,
+reference provenance and ownership. The caller evaluates explicit
+arguments and defaults before entering the first wrapper. Normal
+result checks, move rules and defer unwinding apply to every layer.
+A reference to the decorated function invokes the entire stack.
+
+In `@A @B fn f`, execution enters `A`, then `B`, then the body of `f`
+when each calls `next()`. Normal returns and non-local exits unwind the
+active layers in reverse order. A return naming `f` from within its
+original implementation exits that implementation to its wrapper.
+
+#### 7.6.6 Asynchronous decorator wrappers
+
+An asynchronous decorator may end in `{ wrap { ... } }`. The same
+metadata bindings, argument evaluation order and stacking order as
+§7.6.5 apply. The underlying asynchronous function supplies the
+completion result type, including an inferred result type.
+
+Within the wrapper's own task body, `await next()` starts and awaits
+the next wrapper or original implementation. This continuation accepts
+no arguments and can be consumed at most once on an execution path.
+Each layer can suspend and register defers using the ordinary task rules.
+
+Before the continuation starts, the current task retains the inputs.
+Starting the child transfers owned inputs and forwards borrowed inputs
+under the ordinary task loan rules. When the parent is cancelled with a
+child pending, the child drains before the parent's active defers run.
+If the task exits before starting the continuation, it runs its active
+defers followed by the original function's unstarted-input cleanup.
+Cancellation before the first poll runs only the input cleanup for
+owned inputs.
+
+#### 7.6.7 Struct, enum and field metadata
+
+A metadata declaration can use `on struct`, `on enum` or `on field`.
+Applications appear before their declaration. The struct target includes
+`root struct`. The field target includes named struct and enum payload
+fields. An application on padding is invalid. Argument checking and the
+rule against duplicate applications are those of §7.6.4.
+
+`decorator_metadata<D, T>()` returns the record attached to the
+nominal struct or enum declaration named by `T`.
+`decorator_metadata<D, T>(field)` returns the record attached to the
+named field. For an enum payload field, `T` names its variant, such as
+`Event.Received`. The field selector resolves within `T` without
+evaluating an expression. A missing field, absent application or target
+mismatch is an error.
+
+Naming a generic declaration with or without type arguments selects
+the same records. Type aliases preserve the identity of their
+target, and payload fields with equal names in different enum variants
+have distinct identities. Metadata leaves nominal equality, storage
+layout and initialization of the decorated declaration intact.
+
+#### 7.6.8 Enumerating decorated declarations
+
+`decorated<D, namespace Scope>` is a `const for` source for function,
+struct and enum decorators. `namespace ::` specifies the global
+namespace. A file-local namespace alias resolves to its target.
+The source examines the compilation's loaded declarations in that
+namespace. An empty selection yields zero entries.
+
+The three bindings are a qualified name string, a declaration and a
+metadata record. A function binding denotes one overload, so calling it
+or passing it as a compile-time function argument preserves its
+identity. A type binding denotes the nominal declaration. It accepts the
+declaration's type arguments where applicable. A generic declaration can
+also be passed by name to a declaration metadata lookup.
+
+Namespace results are ordered by qualified name. Overloads of one name
+are ordered by source path and position. `decorated<D, T>` requires a
+field decorator and a concrete struct or enum variant. It yields each
+matching field in declaration order, with its leaf name, accessor and
+metadata. Its accessor follows the ownership and substitution rules of
+`fields<T>` (§6.5).
+
+Metadata bindings expand into the same typed record values as a named
+metadata lookup. Generated code follows the ordinary `const for`
+fragment rules in statements, initializers and match arms.
 
 ### 7.7 Generics and monomorphization
 
@@ -4275,6 +4469,35 @@ may also use it to state that they are always read-only.
 
 ---
 
+### 9.6 Owning C handles
+
+`own H` qualifies a fixed-size, flat C-compatible handle record `H`. The
+qualifier participates in type identity and preserves `H`'s C representation.
+An extern result declares that C gives K an owned handle. An extern `own`
+parameter takes ownership from K. An extern `borrow name: H` parameter
+receives the handle bits from a named live owner for the duration of the
+call. The foreign declaration author is responsible for the C implementation
+of those contracts, including acquisition failure and release behavior.
+
+A single initialized `let`, an owning parameter, a result, or a capture can
+hold an owned value. Passing by value, returning, binding, and constructing
+a closure capture move it. A closure that owns a capture itself carries the
+obligation. Invoking it moves the closure into the call and binds its
+captures in that frame. Branch joins and loop back edges require consistent
+ownership. A move consumes the source and subsequent uses are errors.
+
+An owner's obligation must be discharged on every reachable scope exit. A
+`defer` that discharges it claims it until the defer runs. The owner remains
+available to foreign borrows while it is claimed. A call that may unwind
+requires live resources of that frame to have cleanup registered. A borrow
+has call duration and requires the source to stay live through argument
+evaluation. Owned values have no default value or ordinary reference view.
+
+The current places for ownership are local immutable bindings, single
+results, immutable parameters, and private closure captures. Cleanup is
+written using ordinary calls and `defer`. Pool elements, asynchronous
+frames and foreign retained loans need their own lifetime contracts.
+
 ## 10. Compilation model
 
 ### 10.1 Whole program, call-graph order
@@ -4493,14 +4716,14 @@ it leaves the caller's own facts about `src` intact.
   declaration's namespace, and then in the global namespace and the
   builtins. So a type parameter or a nested function hides a global and a
   function of its name, as a local does. A namespace keeps its global
-  variables apart from its functions, and no variable can be called
-  (function values are not data, §7.6). So the name in a call skips the
-  global variables and resolves to the functions, in each namespace of
-  this order. A global `var last: i32` in any module leaves std's
+  variables apart from its functions. A call whose name resolves to a
+  local variable uses it as a concrete closure (§7.6.1). A call by global
+  name first resolves to the functions and builtins; a global closure is
+  callable where those do not resolve. A global `var last: i32` leaves std's
   `last(xs)` callable from every module, including its own, while any
   other use of `last` (`last = 7`, an argument) is the variable. A
-  variable in scope still hides the functions of its name: a local `count`
-  makes `count(xs)` an error. A type parameter bound to a type is not a
+  variable in scope still hides the functions of its name. A local `count`
+  of non-callable type makes `count(xs)` an error. A type parameter bound to a type is not a
   value (in `fn f<N>(x: N)`, `N` as an expression is an error, and `::N`
   names a global `N`). No type parameter or nested function is a constant
   that a size or a match pattern may name (§3.3, §8.1). A function name's
@@ -5170,7 +5393,8 @@ growth into a safe abort.
 program     := (namespace | nsalias | import)* topdecl*  // namespace at most once
 namespace   := "namespace" ident ";"
 nsalias     := "namespace" ident "=" ident ";"      // file-local
-topdecl     := import | struct | enum | typealias | fndecl | externblock | globaldecl
+topdecl     := import | struct | enum | typealias | decoratordecl | decoratedfn
+             | fndecl | externblock | globaldecl
 import      := "import" "."? ident ("." ident)* ";" | "import" ident "from" strlit ";"
 declname    := ident | ident "::" ident | "::" ident   // the namespace, else the file's
 qname       := ident | ident "::" ident | "::" ident   // a declaration reference
@@ -5181,9 +5405,14 @@ fieldlist   := field ("," field)* ","?
 field       := ("let" | "const")? ident ":" type ("=" expr)? | "pad" intlit?
 typealias   := "type" declname "=" type ";"
 generics    := "<" ident (":" type)? ("," ident (":" type)?)* ">"
+decoratordecl := "decorator" declname "(" decoratorparams? ")" "on" "async"? "fn"
+                 ("(" types? ")" ("->" (type | "(" types ")"))?)?
+                 (";" | "{" "wrap" blockexpr "}")
+decoratorparams := ident ":" type ("," ident ":" type)* ","?
+decoratedfn := ("@" qname ("(" args ")")?)+ fndecl
 
 fndecl      := "deprecated" strlit? "checkfree"? ("export" strlit? | "extern" strlit?)?
-               "checkfree"? "simd"? "inline"? "recursive"? ("fn" | "thread_fn")
+               "checkfree"? "simd"? "inline"? "recursive"? ("async"? "fn" | "thread_fn")
                declname generics? "(" params? ")" ("->" rettypes)?
                (blockexpr | ("=" strlit)? ";")
                                                  // "=" strlit: extern only, its C symbol

@@ -1,0 +1,15 @@
+registry::assemble 2 12
+registry::dispatch 4 14
+registry::dispatch 8 18
+registry::uncalled 1
+peer::dispatch 16 26
+dispatch 31 41
+registry::Payload 7 19
+registry::State 5 State.Ready
+id 1 12
+value 2 64
+value 4 9
+later 8
+earlier 9
+24 -1
+jobs 28

@@ -206,6 +206,23 @@ evidence of a current precision limit, not a test of root structs. Include this
 pattern, and two same-typed owned arrays, in the implementation's acceptance
 cases.
 
+### Task suspension
+
+An async body or lexical task scope can borrow a component with a proven
+owner. A shared lease names that component's stack or byte extent and
+allows mutations in independent siblings. Completion and cancellation
+release the lease after the task's cleanup.
+
+Local component reads keep the relevant storage live across each `await`.
+When resumed code uses the whole owner by reference, the task keeps its
+descriptor and the component slots at stable addresses. Stored reference
+and slice slots retain their proven backing owners.
+[Borrowed task inputs](async_and_decorators.md#borrowed-task-inputs)
+
+The standard-library pools use these component rules for their `items`
+arrays. A task's loan protects the backing storage from shrink and
+replacement. Pool reuse can still write new values into existing slots.
+
 ## Code generation and performance
 
 Array access must remain efficient. Grouping arrays in a root struct must not

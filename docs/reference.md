@@ -3420,14 +3420,14 @@ argument fixes the type. Spec §7.7.
 
 ### Function values
 
-Function values are compile-time entities passed as generic parameters,
-not runtime data. A function argument is a function name, a bound generic
+Static function values are compile-time entities passed as generic parameters or
+untyped immutable block parameters. A function argument is a function name, a bound generic
 function parameter, or a block literal; the `: fn(…)` bound on the
 parameter is optional documentation. Every call of a function value is
 direct and inlinable, and a function value cannot escape: storing one,
-returning one, or putting one in data is a compile error. There are no
-closure objects and no function pointers, so a higher-order function
-compiles to exactly the loop it looks like.
+returning one, or putting one in data is a compile error. A higher-order
+function can compile to a direct loop. [Concrete closures](#concrete-closures)
+are callable values with their own stored captures.
 
 <!-- fragment -->
 ```klang
@@ -3444,6 +3444,10 @@ foo(1, h)                            // a named function
   by name.
 * A block can read and write the enclosing function's locals, like a
   nested function.
+* A call inside a higher-order function can pass a function value to its
+  block. The block can invoke the supplied operation or forward it to
+  another function while the captured scope is live. See
+  [scoped file readers](stdlib.md#scoped-file-readers).
 * A `return` inside a block returns from the **lexically enclosing named
   function**, not from the function calling the block, so a hand-written
   iterator has the same structuring power as `for`. A reference returned
@@ -3497,6 +3501,313 @@ The library's `filter` and `map` build their result directly in the
 variable receiving it, with no intermediate array. A HOF never states what
 its function value returns: `map`'s result element type is whatever `F(x)`
 is in that instantiation. Spec §7.6, §7.7.
+
+### Concrete closures
+
+`fn[capture: Type](parameter: Type) -> Result { … }` creates a value with
+fixed-size capture storage. `capture: Type` binds a name from the defining
+scope. `capture: Type = expression` evaluates an initializer there and
+binds the result to that name. The capture initializers run once, in
+source order, when the closure is created. Omit the brackets for an empty
+environment. Parameters have explicit types, and the result may be inferred.
+
+```klang
+fn make_adder(bias: i64) {
+    return fn[bias: i64](x: i64) -> i64 { return bias + x; };
+}
+
+fn main() {
+    let add = make_adder(3);
+    print(add(4));
+}
+```
+
+```
+7
+```
+
+The body sees its captures, parameters, local declarations and globals.
+`return` exits the closure's invocation. Value captures copy according to
+their types. A reference or slice capture borrows the original storage and
+must obey its lifetime and access rules. The captures are private.
+
+Each literal has its own concrete type, including any enclosing type
+parameters used by the closure. Infer that type when binding or returning
+the closure. It can be stored in records or arrays and passed through an
+ordinary generic parameter. Calling a closure uses the concrete layout
+and the capture storage requires no implicit heap allocation.
+[Spec §7.6.1](k_spec.md#761-concrete-closures)
+
+### Borrowed callables
+
+`fn&(i64) -> i64` is a runtime value type. Use `borrow_callable` to bind
+a named K function or an existing closure to an exact signature.
+Different capture layouts can share the signature and occupy the same
+array or field.
+
+```klang
+fn main() {
+    var bias: i64 = 3;
+    let add = fn[bias: const i64&](x: i64) -> i64 { x + bias };
+    let scale = fn[factor: i64 = 2, extra: i64 = 1](x: i64) -> i64 {
+        x * factor + extra
+    };
+    let a: fn&(i64) -> i64 = borrow_callable(add);
+    let b = borrow_callable<fn&(i64) -> i64>(scale);
+    let choices = [a, b];
+    print(choices[0](5), " ", choices[1](5));
+    bias = 7;
+    print(choices[0](5));
+}
+```
+
+```
+8 11
+12
+```
+
+A borrowed closure needs a stable named environment with copyable
+captures. It can hold read-only references to known fixed storage. The
+environment must outlive the callable and all its copies. When an alias
+replaces the environment, the callable sees the replacement and the
+compiler checks the replacement's capture roots. A named top-level K
+function needs no environment.
+Parameters accept fixed reference-free values, read-only views of
+fixed-size reference-free data, or runtime callables. Results are
+fixed reference-free values. The current synchronous calling contract
+forbids depending on mutable external bindings or changing borrowed
+storage layout.
+[Spec §7.6.2](k_spec.md#762-borrowed-callables)
+
+### Owned callables
+
+`fn[N](A) -> R` reserves `N` bytes for the capture environment.
+`own_callable` copies a concrete closure into that storage and checks
+its signature. The value can leave the function that created it.
+
+```klang
+fn make_adder(by: i64) -> fn[8](i64) -> i64 {
+    return own_callable<fn[8](i64) -> i64>(
+        fn[by: i64](x: i64) -> i64 { x + by });
+}
+
+fn main() {
+    let callback = make_adder(12);
+    print(callback(5));
+}
+```
+
+```
+17
+```
+
+The capacity is a nonnegative compile-time byte count. It includes
+padding in the concrete environment. A named function or a capture-free
+closure can use `fn[0]`. Invoking the value restores the environment in
+typed storage, so enclosing records can place the callable at any byte
+offset. Conversion and invocation require no heap allocation.
+
+Copyable captures can include read-only references to known fixed
+storage. Their referents must outlive every copy of the callable.
+Parameters, results and target effects use the same synchronous
+contract as borrowed callables.
+[Spec §7.6.3](k_spec.md#763-owned-callables)
+
+### Typed metadata decorators
+
+A decorator declares typed configuration fields and the kind of function
+that accepts it. The configuration arguments use compile-time constants.
+`decorator_metadata<Decorator>(function_name)` reads the attached record.
+
+```klang
+decorator Route(provider: const u8[:], capacity: u32) on fn(i64) -> i64;
+
+@Route("v2", 2 + 2)
+fn request(value: i64) -> i64 { value + 1 }
+
+fn main() {
+    let route = decorator_metadata<Route>(request);
+    print(route.provider, " ", route.capacity, " ", request(5));
+}
+```
+
+```
+v2 4 6
+```
+
+Use `on async fn` for an asynchronous handler. Omit the parameter and
+result list after `fn` to accept any signature of the declared kind,
+including generic functions. A specified signature must match exactly.
+Decorators can be imported and qualified with their namespace. A function
+can carry several distinct decorators.
+
+Querying a function selects the unique overload with that decorator.
+The result is an ordinary record with read-only fields, so registration
+code can take either a record literal or the decorator's record.
+[Spec §7.6.4](k_spec.md#764-typed-metadata-decorators)
+
+### Synchronous decorator wrappers
+
+A synchronous decorator can add a `wrap` block. Calling `next()`
+forwards the current call's parameters and returns the next layer's
+results. In a stack of decorators, the topmost wrapper enters first.
+
+```klang
+decorator Trace(label: const u8[:]) on fn {
+    wrap {
+        print("enter ", label);
+        defer print("leave ", label);
+        next()
+    }
+}
+
+@Trace("outer")
+@TraceInner
+fn square(x: i64) -> i64 { x * x }
+
+decorator TraceInner() on fn {
+    wrap {
+        print("enter inner");
+        defer print("leave inner");
+        next()
+    }
+}
+
+fn main() { print(square(5)); }
+```
+
+```
+enter outer
+enter inner
+leave inner
+leave outer
+25
+```
+
+The original call evaluates its arguments and defaults once. Each
+wrapper has the decorated function's result contract, including results
+inferred from the original body. Decorator configuration names are
+available in the wrapper. Ownership and reference checks apply to
+each invocation of `next()`. Each layer's `defer` runs as that layer
+exits, including on a non-local return.
+[Spec §7.6.5](k_spec.md#765-synchronous-decorator-wrappers)
+
+### Asynchronous decorator wrappers
+
+Use `await next()` in a decorator declared `on async fn`. Its wrapper
+runs when the task is polled, and it can suspend before or after the
+continuation. The continuation forwards the original inputs to the
+next layer and can run once on each execution path.
+
+```klang
+decorator TraceAsync(label: const u8[:]) on async fn {
+    wrap {
+        print("enter ", label);
+        defer print("leave ", label);
+        await yield_now();
+        return await next();
+    }
+}
+
+@TraceAsync("square")
+async fn square(x: i64) -> i64 {
+    await yield_now();
+    return x * x;
+}
+
+fn main() { print(square(5).join()); }
+```
+
+```
+enter square
+leave square
+25
+```
+
+The original function determines the result type, including when
+it is inferred. When cancellation happens during `await next()`,
+the child finishes draining before the wrapper's active defers run.
+If a wrapper exits before forwarding owned inputs, the task runs
+the original function's input cleanup after the active wrapper defers.
+[Spec §7.6.6](k_spec.md#766-asynchronous-decorator-wrappers)
+
+### Struct, enum and field metadata
+
+Declare a decorator with `on struct`, `on enum` or `on field`. Put
+its application before the type declaration or before a named field.
+These applications attach constant records and preserve the declaration's
+identity, fields and layout.
+
+```klang
+decorator Table(name: const u8[:]) on struct;
+decorator Topic(name: const u8[:]) on enum;
+decorator Column(number: u8) on field;
+
+@Table("packets")
+struct Packet<T> {
+    @Column(1) payload: T,
+}
+
+@Topic("events")
+enum Event {
+    Received { @Column(2) payload: i64 },
+    Closed,
+}
+
+fn main() {
+    let table = decorator_metadata<Table, Packet>();
+    let topic = decorator_metadata<Topic, Event>();
+    let first = decorator_metadata<Column, Packet<u32>>(payload);
+    let second = decorator_metadata<Column, Event.Received>(payload);
+    print(table.name, " ", topic.name, " ", first.number, " ", second.number);
+}
+```
+
+```
+packets events 1 2
+```
+
+A generic declaration and its specializations share the metadata.
+Type aliases resolve to the same declaration. A field selector is
+a name in the specified struct or enum variant, so the lookup can run
+without constructing any value of the annotated type.
+[Spec §7.6.7](k_spec.md#767-struct-enum-and-field-metadata)
+
+### Enumerating decorated declarations
+
+Use `const for <Name, Declaration, Metadata> in decorated<D, namespace Scope>`
+to discover decorated functions and types in one namespace.
+`namespace ::` selects the global namespace. Each iteration binds the
+qualified name, the declaration and its typed metadata record.
+
+```klang
+decorator Route(path: const u8[:]) on fn(i64) -> i64;
+
+@Route("/double")
+fn service::double(value: i64) -> i64 { return 2 * value; }
+
+fn main() {
+    const for <Name, Handler, Metadata> in decorated<Route, namespace service> {
+        print(Name, " ", Metadata.path, " ", Handler(21));
+    }
+}
+```
+
+```
+service::double /double 42
+```
+
+Every matching overload has its own binding. A type binding names the
+original nominal declaration and can take type arguments if generic.
+A namespace alias selects its target. The query uses declarations
+already loaded into the program, and an empty selection expands to
+zero entries.
+
+Use `decorated<D, T>` with an `on field` decorator and a concrete
+struct or enum variant. The bindings give the field's name, its accessor
+and the metadata in field declaration order. An accessor works in a
+member access or constructor label just as with `fields<T>`.
+[Spec §7.6.8](k_spec.md#768-enumerating-decorated-declarations)
 
 ---
 
@@ -4056,6 +4367,42 @@ through it would be links the checker never proved. The byte contract is in
 ---
 
 ## 24. Calling C and being called from C
+
+### Owning C handles
+
+`own Handle` carries the obligation to release a fixed-size C handle record.
+It uses the same C ABI layout as `Handle`. An extern result declared `own`
+introduces the obligation, and an extern parameter declared `own` takes it.
+`borrow handle: Handle` declares an extern argument that may inspect an owned
+handle for the duration of the call. The C function must honor that lifetime.
+
+<!-- fragment -->
+```klang
+struct Handle { token: u64 }
+
+extern fn acquire() -> own Handle;
+extern fn read(borrow handle: Handle) -> i32;
+extern fn release(handle: own Handle);
+
+fn open_reader() {
+    let handle = acquire();
+    return fn[handle: own Handle]() -> i32 {
+        defer release(handle);
+        return read(handle);
+    };
+}
+
+fn main() {
+    let read_once = open_reader();
+    print(read_once());
+}
+```
+
+Binding, returning, passing, and capturing an owned value transfers it. The
+compiler checks that every reachable exit handles the obligation, including
+paths that can unwind through a call. A `defer` that releases the value
+claims it for that scope's exits. An owning closure moves on invocation,
+which transfers its captures into the call frame. [Spec §9.6](k_spec.md#96-owning-c-handles)
 
 ### `extern fn`
 

@@ -75,7 +75,7 @@ jobs:
       # is what the Visual Studio generator reads; passing both builds Debug
       # (asserts on) everywhere.
       - name: Configure
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DK_BUILTIN_LIBS=all
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DK_BUILTIN_LIBS=all -DK_BUILD_LSP_TESTS=ON
 
       - name: Build
         run: cmake --build build --config Debug
@@ -89,6 +89,9 @@ jobs:
 
       - name: Test
         run: python test/run_tests.py --exe build/${{ runner.os == 'Windows' && 'Debug/k.exe' || 'k' }} --profile baseline --cc native --require-clang
+
+      - name: Test language server and Cordis
+        run: ctest --test-dir build -C Debug --output-on-failure
 
       - uses: actions/setup-node@v4
         with:

@@ -4,13 +4,15 @@
 // Intermediates live under K_HOME; the executable lands beside the root
 // source unless -o says otherwise.
 #pragma once
+#include "artifact_cache.h"
+#include "build_cache.h"
+#include "content_digest.h"
 
 namespace klang {
 
-// In main.cpp: the runtime's text hash, the runtime object's C, and a path's directory.
+// In main.cpp: the runtime's text hash and the runtime object's C.
 string RuntimeVersion();
 string RuntimeObjectSource();
-string DirOf(const string &path);
 
 struct BuildOptions {
     bool debug = false;       // --debug: K_DEBUG=1, debug information, no C optimization
@@ -18,14 +20,9 @@ struct BuildOptions {
     bool dryrun = false;      // --dry-run: print the commands and run nothing
     bool standalone = false;  // --standalone: no runtime object
     bool shared = false;      // --shared: build a self-contained shared library
+    bool offline = false;     // --offline: CMake uses dependencies already on disk
     string exe;               // -o: the executable/library; "" puts it beside the root source
 };
-
-inline string AbsolutePath(const string &path) {
-    std::error_code ec;
-    auto abs = filesystem::absolute(filesystem::path(path), ec);
-    return ec ? path : abs.lexically_normal().string();
-}
 
 // K_HOME/build/prog/<stem>-<hash of the root's absolute path>/: where a
 // program's C, objects and logs go.
@@ -77,13 +74,15 @@ struct Builder {
 
     // Runs `argv`, `what` being what it does ("compiling the runtime"), with
     // its output kept in `logfile`. False when it failed, after saying so.
-    bool Run(const vector<string> &argv, const string &what, const string &logfile) const {
+    bool Run(const vector<string> &argv, const string &what, const string &logfile,
+             bool track_progress = true) const {
         if (opts.dryrun || opts.verbose) fprintf(msgs, "%s\n", CommandLineText(argv).c_str());
         if (opts.dryrun) return true;
         fflush(msgs);
         ProcessResult r;
         {
-            ProgressStep step(what);
+            optional<ProgressStep> step;
+            if (track_progress) step.emplace(what);
             r = RunProcess(argv, "", opts.verbose);
         }
         if (!logfile.empty()) WriteFileMakingDirs(logfile, r.output);
@@ -105,7 +104,8 @@ struct Builder {
     // Compiles the C file `src` to the object `obj`, with `extra` flags
     // (a package's includes and defines) after the usual ones.
     bool CompileObject(const string &src, const string &obj, const string &what,
-                       const string &logfile, const vector<string> &extra = {}) const {
+                       const string &logfile, const vector<string> &extra = {},
+                       bool track_progress = true) const {
         vector<string> argv = { tc.cc };
         for (auto &f : CFlags()) argv.push_back(f);
         for (auto &f : extra) argv.push_back(f);
@@ -120,7 +120,7 @@ struct Builder {
             argv.push_back("-o");
             argv.push_back(obj);
         }
-        return Run(argv, what, logfile);
+        return Run(argv, what, logfile, track_progress);
     }
 
     // Links `objects` and the system libraries `libs` (LibFlag spellings)
@@ -153,9 +153,11 @@ struct Builder {
     // runtime (a shared build is standalone) and whose package objects are
     // position independent already (native.h).
     bool Link(const string &src, const vector<string> &objects, const vector<string> &rsps,
-              const string &exe, const string &builddir, const string &logfile) const {
+              const string &exe, const string &builddir, const string &logfile,
+              const vector<string> &extra = {}) const {
         vector<string> argv = { tc.cc };
         for (auto &f : CFlags()) argv.push_back(f);
+        for (auto &f : extra) argv.push_back(f);
         if (tc.style == "msvc") {
             if (opts.shared) argv.push_back("/LD");
             argv.push_back(cat("/Fe:", exe));
@@ -184,15 +186,89 @@ struct Builder {
     }
 };
 
-// The runtime object for this toolchain and configuration, compiled from
-// `k --emit-runtime`'s C on first use: K_HOME/build/runtime/<runtime
-// hash>/<toolchain id>-<config>/k_runtime.o. "" when it could not be
-// built, after the builder said why.
-inline string RuntimeObject(const Builder &b) {
-    auto dir = cat(KlangHome(), "/build/runtime/", RuntimeVersion(), "/", b.tc.id, "-",
-                   b.opts.debug ? "debug" : "release");
-    auto obj = cat(dir, "/k_runtime.", b.tc.style == "msvc" ? "obj" : "o");
+inline void AppendToolchainIdentity(string &input, const Builder &b) {
+    auto driver = AbsolutePath(b.tc.cc);
+    for (const auto &part : { driver, BuildPathIdentity(driver), b.tc.style,
+                              b.tc.version, b.tc.banner })
+        Append(input, part, '\0');
+    for (const auto &flag : b.CFlags()) Append(input, flag, '\0');
+
+    // Include environment options that change the target, driver selection
+    // or system include search, even when the driver's banner is unchanged.
+    for (auto name : { "PATH", "CPATH", "C_INCLUDE_PATH", "COMPILER_PATH", "GCC_EXEC_PREFIX",
+                       "SDKROOT", "DEVELOPER_DIR", "TOOLCHAINS", "MACOSX_DEPLOYMENT_TARGET",
+                       "CCC_OVERRIDE_OPTIONS", "CLANG_CONFIG_FILE_SYSTEM_DIR",
+                       "CLANG_CONFIG_FILE_USER_DIR", "SOURCE_DATE_EPOCH", "CL", "_CL_",
+                       "INCLUDE", "VCToolsInstallDir", "WindowsSdkDir", "WindowsSDKVersion",
+                       "UniversalCRTSdkDir", "UCRTVersion", "VSCMD_ARG_TGT_ARCH" }) {
+        auto value = getenv(name);
+        Append(input, name, '=', value ? "1" : "0", value ? value : "", '\0');
+    }
+    // Include overrides may contain paths relative to the invocation. Scope
+    // them to that directory if their meaning can vary between projects.
+    if (getenv("CPATH") || getenv("C_INCLUDE_PATH") || getenv("CL") || getenv("_CL_") ||
+        getenv("CCC_OVERRIDE_OPTIONS"))
+        Append(input, AbsolutePath("."), '\0');
+    #ifdef __APPLE__
+        auto sdk = MacSdkPath();
+        if (auto override = getenv("SDKROOT"); override && *override) sdk = AbsolutePath(override);
+        if (!sdk.empty())
+            Append(input, sdk, '\0', BuildPathIdentity(sdk), '\0',
+                   BuildPathIdentity(cat(sdk, "/SDKSettings.json")), '\0');
+    #endif
+}
+
+inline filesystem::path RuntimeEntryPath(const Builder &b) {
+    static const auto source = Sha256(RuntimeObjectSource());
+    auto input = source + '\0';
+    AppendToolchainIdentity(input, b);
+    return filesystem::path(KlangHome()) / "build/runtime" / cat(RuntimeCachePrefix, Sha256(input));
+}
+
+// The macOS release can supply the optimized runtime for its Apple Clang
+// profiles. Validate the object and the effective preprocessor input on this
+// host, including the SDK headers. An incompatible seed is a cache miss.
+inline bool SeedRuntimeObject([[maybe_unused]] const Builder &b, [[maybe_unused]] const string &dir,
+                              [[maybe_unused]] const string &src, [[maybe_unused]] const string &tmp) {
+    #ifdef __APPLE__
+        if (dir.empty() || b.opts.debug || (b.tc.cc != "/usr/bin/cc" && b.tc.cc != "/usr/bin/clang") ||
+            !b.tc.banner.starts_with("Apple clang version ") || b.CFlags() != vector<string>{ "-O2" })
+            return false;
+        for (auto name : { "CCC_OVERRIDE_OPTIONS", "CLANG_CONFIG_FILE_SYSTEM_DIR", "CLANG_CONFIG_FILE_USER_DIR",
+                           "COMPILER_PATH", "TOOLCHAINS" })
+            if (getenv(name)) return false;
+        auto target = getenv("MACOSX_DEPLOYMENT_TARGET");
+        if (target && string_view(target) != "13.3") return false;
+        auto prefix = cat(dir, "/", target ? "13.3" : "default");
+        string stamp, object;
+        if (!LoadFile(prefix + ".stamp", stamp) || !LoadFile(prefix + ".o", object) || object.empty()) return false;
+        auto probe = [&](vector<string> argv) {
+            if (b.opts.verbose) {
+                fprintf(b.msgs, "%s\n", CommandLineText(argv).c_str());
+                fflush(b.msgs);
+            }
+            return RunProcess(argv);
+        };
+        // The driver plan also covers options that leave preprocessed C
+        // unchanged, such as the effective target and codegen defaults.
+        auto plan = probe({ b.tc.cc, "-O2", "-###", "-c", "-x", "c", "-", "-o", "-",
+                            "-fdebug-compilation-dir=/", "-fcoverage-compilation-dir=/" });
+        if (!plan.started || plan.code) return false;
+        auto header = cat("k-native-runtime-v1\n", Sha256(plan.output), "\n", Sha256(object), "\n");
+        if (!stamp.starts_with(header) || stamp.size() != header.size() + 65) return false;
+        auto input = probe({ b.tc.cc, "-O2", "-E", "-P", src });
+        if (!input.started || input.code || stamp != cat(header, Sha256(input.output), "\n")) return false;
+        return WriteFileMakingDirs(tmp, object);
+    #else
+        return false;
+    #endif
+}
+
+// The caller holds the entry's shared lease through publication and linking.
+// The inner build lock serializes writers when the cache is cold.
+inline string RuntimeObject(const Builder &b, const string &obj, const string &seed_dir) {
     if (PathExists(obj) && !b.opts.dryrun) return obj;
+    auto dir = filesystem::path(obj).parent_path().string();
     auto src = cat(dir, "/k_runtime.c");
     auto log = cat(dir, "/cc.log");
     if (b.opts.dryrun) {
@@ -206,7 +282,6 @@ inline string RuntimeObject(const Builder &b) {
     // or invoking the compiler, then recheck what the previous builder left.
     FileLock lock(cat(dir, "/build.lock"), "waiting for another klang compiling the runtime");
     if (PathExists(obj)) return obj;
-    ProgressStep step(cat("compiling the runtime for ", b.tc.desc), true);
     if (!WriteFileMakingDirs(src, RuntimeObjectSource()))
         throw CompileError { cat("cannot write ", src) };
     // A failed or interrupted compiler may leave a partial object. Only a
@@ -214,9 +289,14 @@ inline string RuntimeObject(const Builder &b) {
     auto tmp = cat(dir, "/k_runtime.tmp.", b.tc.style == "msvc" ? "obj" : "o");
     filesystem::remove(filesystem::path(tmp), ec);
     if (ec) throw CompileError { cat("cannot remove ", tmp, ": ", ec.message()) };
-    if (!b.CompileObject(src, tmp, "compiling the runtime", log)) return "";
+    auto seeded = SeedRuntimeObject(b, seed_dir, src, tmp);
+    if (!seeded) {
+        ProgressStep step(cat("compiling the runtime for ", b.tc.desc), true);
+        if (!b.CompileObject(src, tmp, "compiling the runtime", log)) return "";
+    }
     ec = RenamePath(tmp, obj);
     if (ec) throw CompileError { cat("cannot publish ", obj, ": ", ec.message()) };
+    if (seeded) ProgressPrint("using packaged runtime object\n");
     return obj;
 }
 
@@ -230,13 +310,24 @@ inline string RuntimeObject(const Builder &b) {
 // (`output`) or the root file. The exit code.
 inline int BuildExecutable(const string &rootfile, const string &cfile, const string &builddir,
                            const Toolchain &tc, const BuildOptions &opts, FILE *msgs,
-                           const vector<string> &nativersps, const string &output) {
+                           const vector<string> &nativersps, const string &output,
+                           const string &seed_dir,
+                           [[maybe_unused]] bool uses_system_headers,
+                           [[maybe_unused]] string_view cordis_identity = {}) {
     Builder b { tc, opts, msgs };
-    vector<string> objects;
+    string runtime;
+    optional<FileLock> runtime_lease;
     if (!opts.standalone) {
-        auto obj = RuntimeObject(b);
-        if (obj.empty()) return 1;
-        objects.push_back(obj);
+        auto entry = RuntimeEntryPath(b);
+        runtime = (entry / (opts.debug ? "debug" : "release") /
+                   (tc.style == "msvc" ? "k_runtime.obj" : "k_runtime.o")).string();
+        if (!opts.dryrun) {
+            std::error_code ec;
+            filesystem::create_directories(entry.parent_path(), ec);
+            if (ec) throw CompileError { cat("cannot create ", entry.parent_path().string(), ": ", ec.message()) };
+            runtime_lease.emplace(ArtifactLeasePath(entry), "waiting for runtime cache pruning",
+                                  FileLock::Mode::Shared);
+        }
     }
     auto exe = opts.exe;
     if (exe.empty()) {
@@ -261,7 +352,77 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
         auto exedirpath = filesystem::path(exe).parent_path();
         if (!exedirpath.empty()) filesystem::create_directories(exedirpath, ec);
     }
-    if (!b.Link(cfile, objects, nativersps, exe, builddir, cat(builddir, "/cc.log"))) return 1;
+    vector<string> extra;
+    auto input = cfile;
+    auto destination = exe;
+    #ifdef __APPLE__
+        ExecutableCache cache;
+        optional<PendingExecutable> pending;
+        if (uses_system_headers && nativersps.empty() && !runtime.empty() && !opts.shared &&
+            !opts.debug && !opts.dryrun)
+            cache = ExecutableCache::Open(tc, builddir, cfile, runtime, exe,
+                                          b.CFlags(), b.SystemLibs(), cordis_identity);
+        if (!cache.dir.empty()) {
+            if (cache.Hit()) {
+                fprintf(msgs, "up to date %s\n", exe.c_str());
+                return 0;
+            }
+            std::error_code ec;
+            for (auto name : { "exe.inputs", "exe.headers", "exe.link-inputs", "exe.app.o" }) {
+                filesystem::remove(filesystem::path(cache.Path(name)), ec);
+                if (ec) {
+                    cache = {};
+                    break;
+                }
+            }
+            if (!cache.dir.empty()) {
+                pending.emplace(cache.inputs.front());
+                if (pending->path.empty()) cache = {};
+                else destination = pending->path;
+            }
+        }
+        if (!cache.dir.empty()) {
+            extra = cache.LinkFlags();
+            auto compile_flags = cache.CompileFlags();
+            if (PathExists(runtime)) {
+                extra.insert(extra.end(), compile_flags.begin(), compile_flags.end());
+            } else {
+                // A cold runtime and the application's C are independent.
+                // Overlap their compiles and link only after both succeeded.
+                string built_runtime;
+                exception_ptr failure;
+                jthread worker([&] {
+                    try { built_runtime = RuntimeObject(b, runtime, seed_dir); }
+                    catch (...) { failure = current_exception(); }
+                });
+                input = cache.Path("exe.app.o");
+                compile_flags.push_back("-pthread");
+                auto compiled = b.CompileObject(cfile, input, cat("compiling ", cfile),
+                                                cat(builddir, "/cc.log"), compile_flags, false);
+                worker.join();
+                if (!compiled || built_runtime.empty() || failure) {
+                    cache.RemoveReports();
+                    if (failure) rethrow_exception(failure);
+                    return 1;
+                }
+            }
+        }
+    #endif
+    vector<string> objects;
+    if (!runtime.empty()) {
+        auto obj = RuntimeObject(b, runtime, seed_dir);
+        if (obj.empty()) return 1;
+        objects.push_back(std::move(obj));
+    }
+    auto linked = b.Link(input, objects, nativersps, destination, builddir,
+                         cat(builddir, "/cc.log"), extra);
+    #ifdef __APPLE__
+        if (!cache.dir.empty()) {
+            if (linked) cache.Save(pending->Publish());
+            cache.RemoveReports();
+        }
+    #endif
+    if (!linked) return 1;
     if (!opts.dryrun) fprintf(msgs, "built %s\n", exe.c_str());
     return 0;
 }

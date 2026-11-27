@@ -389,6 +389,7 @@ inline CodeGen::SrcElems CodeGen::GenSrcElems(Node *n) {
 // names the receiving header's length lvalue: elements are written and
 // the count assigned there (§7.3's metadata-outside-the-data form).
 inline void CodeGen::GenConstruct(Node *n, const string &stk, TypeExpr *want, const string &lenlv) {
+    TaskLiteralScope inputs(*this, n);
     if (auto it = fillvalues.find(n); it != fillvalues.end()) {
         auto target = want ? want : it->second.t;
         if (IsRelRef(target))

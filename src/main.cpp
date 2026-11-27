@@ -3,6 +3,7 @@
 #include "includes.h"
 #include "build_paths.h"   // K_STDLIB_PATH
 #include "utils.h"
+#include "paths.h"
 #include "small_vector.h"
 #include "flat_map.h"
 #include "lexer.h"
@@ -17,10 +18,13 @@
 #include "typecheck_types.h"
 #include "typecheck_exprs.h"
 #include "typecheck_expansion.h"
+#include "typecheck_decorators.h"
 #include "typecheck_flow.h"
 #include "typecheck_calls.h"
 #include "typecheck_builtins.h"
 #include "typecheck_nodes.h"
+#include "typecheck_task_liveness.h"
+#include "typecheck_ownership.h"
 #include "optimize.h"
 #include "optimize_basecase.h"
 #include "optimize_tre.h"
@@ -36,24 +40,28 @@
 #include "codegen_calls.h"
 #include "codegen_builtins.h"
 #include "codegen_render.h"
+#include "codegen_task_flow.h"
 #include "codegen_emit.h"
 #include "codegen_stacks.h"
 #include "codegen_merge.h"
 #include "codegen_nodes.h"
 #include "runtime_inline.h"
 #include "process.h"
+#include "shared_library.h"
 #include "jit.h"
 #include "progress.h"
 #include "buildfile.h"
 #include "json.h"
 #include "toolchain.h"
 #include "builtin.h"
-#include "build.h"
 #include "packages.h"
+#include "program.h"
+#include "build.h"
 #include "native.h"
 #include "format.h"
 #include "lsp_rpc.h"
 #include "lsp_analysis.h"
+#include "cordis_diagnostics.h"
 #include "lsp_workspace.h"
 #include "lsp_features.h"
 #include "lsp.h"
@@ -63,476 +71,16 @@ namespace klang {
 // In version.cpp: the compiler's version, as the build found it.
 const char *CompilerVersion();
 
-string DirOf(const string &path) {
-    auto pos = path.find_last_of("/\\");
-    return pos == string::npos ? "" : path.substr(0, pos + 1);
-}
-
 string ExePath(const char *argv0);
-
-static bool FileExists(const string &path) {
-    auto f = fopen(path.c_str(), "rb");
-    if (f) fclose(f);
-    return f != nullptr;
-}
-
-// A path split on either separator, with "." and cancelled "x/.." dropped. A
-// path with a leading separator keeps a leading empty component ("/a" ->
-// {"", "a"}), so two rooted paths share it and a rooted and a relative one
-// never do; "" and "./" are the relative {}.
-static vector<string> PathParts(const string &path) {
-    vector<string> parts;
-    string cur;
-    for (size_t i = 0; i <= path.size(); i++) {
-        auto c = i < path.size() ? path[i] : '/';
-        if (c != '/' && c != '\\') { cur += c; continue; }
-        if (i == 0 && i < path.size()) parts.push_back(cur);
-        else if (cur == "." || cur.empty()) {}
-        else if (cur == ".." && !parts.empty() && parts.back() != "..") parts.pop_back();
-        else parts.push_back(cur);
-        cur.clear();
-    }
-    return parts;
-}
-
-// `path` as reached from `dir`. Returns it unchanged where no relative path
-// exists or one cannot be computed by name alone: an absolute path against a
-// relative directory or the other way round, two absolute paths under
-// different Windows drives, or a leftover ".." that only the filesystem could
-// resolve.
-string RelativeTo(const string &path, const string &dir) {
-    auto p = PathParts(path), d = PathParts(dir);
-    if (p.empty()) return path;
-    auto updir = [](const vector<string> &parts) {
-        for (auto &part : parts) if (part == "..") return true;
-        return false;
-    };
-    if (updir(p) || updir(d)) return path;
-    // A leading "" (rooted) or "C:" (drive) both sit in the first component.
-    auto rooted = [](const vector<string> &parts) {
-        return !parts.empty() && (parts[0].empty() || parts[0].back() == ':');
-    };
-    if (rooted(p) != rooted(d)) return path;
-    if (rooted(p) && p[0] != d[0]) return path;
-    // The last component of `path` is the file itself, never a shared directory.
-    size_t i = 0;
-    while (i + 1 < p.size() && i < d.size() && p[i] == d[i]) i++;
-    string rel;
-    for (size_t up = i; up < d.size(); up++) rel += "../";
-    for (; i < p.size(); i++) {
-        rel += p[i];
-        if (i + 1 < p.size()) rel += '/';
-    }
-    return rel;
-}
-
-// Where the standard library lives (§11.1): an explicit --stdlib or
-// K_STDLIB, else a `stdlib/` directory found by walking up from the
-// executable (a release's, or the source tree's for a build inside it), else
-// the one CMake was configured with (K_STDLIB_PATH: the source tree's, or
-// a package's install location). A directory more than one of those name is
-// in the list once, as the first named it.
-vector<string> StdlibDirs(const string &stdlibdir, const string &exe) {
-    vector<string> cands;
-    if (!stdlibdir.empty()) cands.push_back(cat(stdlibdir, "/"));
-    if (auto env = getenv("K_STDLIB")) cands.push_back(cat(env, "/"));
-    auto exedir = DirOf(exe);
-    cands.push_back(cat(exedir, "stdlib/"));
-    cands.push_back(cat(exedir, "../stdlib/"));
-    cands.push_back(cat(exedir, "../../stdlib/"));
-    cands.push_back(cat(exedir, "../../../stdlib/"));
-    #ifdef K_STDLIB_PATH
-        if (*K_STDLIB_PATH) cands.push_back(cat(K_STDLIB_PATH, "/"));
-    #endif
-    cands.push_back("stdlib/");
-    vector<string> dirs;
-    set<string> seen;
-    for (auto &dir : cands) {
-        std::error_code ec;
-        auto canon = filesystem::weakly_canonical(filesystem::path(dir), ec);
-        // Normalized: its files' paths are what diagnostics and runtime errors print.
-        if (seen.insert(ec ? dir : canon.string()).second)
-            dirs.push_back(filesystem::path(dir).lexically_normal().generic_string());
-    }
-    return dirs;
-}
-
-// A package the root file declared with `import name from "source";`
-// (docs/design/packages.md §4.3).
-struct DeclaredPackage {
-    PackageSource source;
-    int pkg = 0;             // Its index in Ast::packages.
-    int line = 0;            // Where the root declared it.
-};
-
-// An error at an import in the file named `file`: over the whole `import ...;`.
-static Diagnostic ImportDiagnostic(const string &file, const Import &imp, const string &msg) {
-    Diagnostic d;
-    d.where = LocOf(imp.line);
-    if (imp.end.line > 0) {
-        d.where.endline = imp.end.line;
-        d.where.endcol = imp.end.col;
-    }
-    d.message = msg;
-    d.text = RenderDiagnostic(d, file, {});
-    return d;
-}
-
-[[noreturn]] static void ImportError(const string &file, const Import &imp, const string &msg) {
-    auto d = ImportDiagnostic(file, imp, msg);
-    throw CompileError { d.text, { d } };
-}
-
-// Parses a root file and, transitively, everything it imports (each file once).
-// `import a.b;` resolves relative to the importing file's package root (§11.1):
-// the root file's directory for the program's own files, a library's
-// directory for its modules; then as a module of a package the root
-// declared; then in the standard library. `import .a.b;` resolves relative to
-// the importing file's directory. `import name from "source";` declares a
-// package in the root file and is a requirement anywhere else, which the
-// root's declaration must satisfy (docs/design/packages.md §4.3). A file's
-// text comes from `sources` where that has it (SourceProvider, utils.h),
-// else from disk. `exedir` is the compiler's directory, where a release
-// keeps the packages compiled into it. An import that fails is reported
-// at the import (Ast::Report), and the program goes on without what it
-// would have loaded: the names it would have declared are unknown where
-// they are used.
-void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlibdirs,
-                  const string &exedir, const SourceProvider &sources = {}) {
-    auto available = [&](const string &path) {
-        return (sources && sources(path)) || FileExists(path);
-    };
-    // The program is package 0; a standard library directory becomes a
-    // package the first time a module in it is reached.
-    auto rootdir = DirOf(rootpath);
-    ast.packages.push_back(Package { PathStem(rootpath), rootdir, false });
-    LoadSidecar(ast.packages[0], true);
-    auto stdlibpkg = [&](const string &dir) {
-        for (size_t i = 0; i < ast.packages.size(); i++)
-            if (ast.packages[i].stdlib && ast.packages[i].root == dir) return (int)i;
-        ast.packages.push_back(Package { "stdlib", dir, true });
-        return (int)ast.packages.size() - 1;
-    };
-    map<string, DeclaredPackage> declared;
-    // A package is its directory: every .k file under its root is its
-    // own, and its native part is built in a directory named by that root.
-    // Two packages cannot share one; the program can share its root with one.
-    auto checkroot = [&](const string &name, const string &root) {
-        for (size_t i = 1; i < ast.packages.size(); i++)
-            if (!ast.packages[i].stdlib && ast.packages[i].root == root)
-                throw CompileError { cat("the packages ", ast.packages[i].name, " and ", name,
-                                         " have the same root, ", root,
-                                         ": each package needs a directory of its own") };
-    };
-    // Loads a blessed package (§4.5) once, under its package name among the
-    // declared ones: from where the compiler's build put it, or a release
-    // beside the compiler, when it is compiled in, else from its source as a
-    // declared package would be (a path in the table is relative to the
-    // source tree the standard library is found in).
-    auto loadblessed = [&](const BlessedEntry &be) -> int {
-        auto it = declared.find(be.package);
-        if (it != declared.end()) return it->second.pkg;
-        auto builtin = BuiltinLookup(be.package);
-        auto builtindir = builtin ? BuiltinSrcDir(*builtin, exedir) : string();
-        PackageSource src;
-        src.text = be.source;
-        string root;
-        if (builtin && PathExists(SourcePath(cat(builtindir, be.package)))) {
-            src.ispath = true;
-            src.dir = root = builtindir;
-        } else if (IsPathSource(be.source)) {
-            auto rel = be.source.rfind("./", 0) == 0 ? be.source.substr(2) : be.source;
-            for (auto &dir : stdlibdirs) {
-                auto cand = cat(dir, "../", rel);
-                if (PathExists(SourcePath(cat(cand, "/", be.package)))) {
-                    src.ispath = true;
-                    src.dir = PackageDir(cand);
-                    break;
-                }
-            }
-            if (src.dir.empty())
-                throw CompileError { cat("cannot find the blessed package ", be.package,
-                                         " at ", be.source, " of the source tree") };
-            root = PackageRoot(src, be.package);
-        } else {
-            src = ParsePackageSource(cat(be.source, "@", be.ref), "");
-            root = PackageRoot(src, be.package);
-        }
-        checkroot(be.package, root);
-        ast.packages.push_back(Package { be.package, root, false });
-        auto &p = ast.packages.back();
-        if (!src.ispath) p.cachekey = GitCacheKey(src);
-        if (builtin && root == builtindir) p.builtin = BuiltinIndex(builtin);
-        LoadSidecar(p, false);
-        declared.emplace(be.package, DeclaredPackage { src, (int)ast.packages.size() - 1, 0 });
-        return (int)ast.packages.size() - 1;
-    };
-    vector<pair<string, int>> queue = { { rootpath, 0 } };   // (path, its package).
-    set<string> loaded = { rootpath };
-    map<string, int> fileof;                 // Resolved path -> index in ast.sources.
-    vector<vector<string>> importsof;        // Per source, the paths it imports.
-    // An imported file's first import, where an error opening it is.
-    map<string, pair<string, Import>> importedat;
-    // The packages whose declaration, or blessed load, failed: what imports
-    // them again was reported at that import.
-    set<string> failedpkgs;
-    while (!queue.empty()) {
-        auto [path, pkg] = queue.back();
-        queue.pop_back();
-        auto contents = make_unique<string>();
-        if (auto text = sources ? sources(path) : nullptr) {
-            *contents = *text;
-            StripBom(*contents);
-        } else if (!LoadSource(path, *contents)) {
-            auto it = importedat.find(path);
-            if (it == importedat.end()) throw CompileError { cat("cannot open file: ", path) };
-            ast.Report(ImportDiagnostic(it->second.first, it->second.second,
-                                        cat("cannot open file: ", path)));
-            continue;
-        }
-        auto fileidx = (int)ast.sources.size();
-        ast.sources.emplace_back(path, std::move(contents));
-        ast.filepkg.push_back(pkg);
-        fileof[path] = fileidx;
-        importsof.emplace_back();
-        auto &[filename, source] = ast.sources.back();
-        Parser parser(ast, filename, *source, fileidx);
-        parser.ParseTop();
-        for (auto &imp : parser.imports) {
-            // The package this import declares or loads, where it does.
-            string pkgname;
-            try {
-                auto imppkg = pkg;
-                string imppath;
-                if (!imp.source.empty()) {
-                    if (failedpkgs.count(imp.path)) continue;
-                    pkgname = imp.path;
-                    PackageSource src;
-                    try {
-                        src = ParsePackageSource(imp.source, DirOf(path));
-                    } catch (CompileError &e) {
-                        ImportError(filename, imp, e.msg);
-                    }
-                    auto it = declared.find(imp.path);
-                    if (fileidx == 0) {
-                        // The root declares the package, and imports its entry.
-                        if (it != declared.end())
-                            ImportError(filename, imp, cat("the package ", imp.path,
-                                                                " is declared twice"));
-                        string root;
-                        try {
-                            root = PackageRoot(src, imp.path);
-                            checkroot(imp.path, root);
-                        } catch (CompileError &e) {
-                            ImportError(filename, imp, e.msg);
-                        }
-                        ast.packages.push_back(Package { imp.path, root, false });
-                        if (!src.ispath) ast.packages.back().cachekey = GitCacheKey(src);
-                        LoadSidecar(ast.packages.back(), false);
-                        auto dp = DeclaredPackage { src, (int)ast.packages.size() - 1,
-                                                    imp.line.line };
-                        it = declared.emplace(imp.path, dp).first;
-                    } else {
-                        // A requirement: satisfied by the root's declaration, or
-                        // by the blessed table where the root declared nothing.
-                        if (it == declared.end())
-                            if (auto be = BlessedLookup(imp.path); be && be->package == imp.path) {
-                                loadblessed(*be);
-                                it = declared.find(imp.path);
-                            }
-                    }
-                    if (it == declared.end()) {
-                        // A requirement the root does not satisfy: the error is
-                        // the line to add there.
-                        ImportError(filename, imp,
-                                    cat(ast.packages[pkg].name, " needs the package ", imp.path,
-                                        ": add\n    import ", imp.path, " from \"",
-                                        SourceForRoot(src, rootdir), "\";\nto ", rootpath,
-                                        " (packages are declared by the root file only)"));
-                    } else if (fileidx != 0 && !SameSource(it->second.source, src)) {
-                        ImportError(filename, imp,
-                                    cat(ast.packages[pkg].name, " needs the package ", imp.path,
-                                        " from ", src.text, ", which ", rootpath, ":",
-                                        it->second.line, " declared from a different source, ",
-                                        it->second.source.text));
-                    } else if (fileidx != 0 && it->second.source.ref != src.ref) {
-                        ast.Warn(LocOf(imp.line),
-                                 cat(ast.packages[pkg].name, " needs the package ", imp.path,
-                                     " at ", src.ref, ", which ", rootpath, ":", it->second.line,
-                                     " declares at ", it->second.source.ref));
-                    }
-                    imppkg = it->second.pkg;
-                    // What a package requires links after it (§5.5).
-                    if (fileidx != 0 && pkg != imppkg) {
-                        auto &req = ast.packages[pkg].required;
-                        if (std::find(req.begin(), req.end(), imppkg) == req.end())
-                            req.push_back(imppkg);
-                    }
-                    imppath = SourcePath(cat(ast.packages[imppkg].root, imp.path));
-                } else if (imp.relative) {
-                    imppath = SourcePath(cat(DirOf(path), imp.path));
-                } else {
-                    // A file under this package's root; a module of a package the
-                    // root declared (`import pkg;` is its entry, `import pkg.sub;`
-                    // its sub.k); a blessed name, its package loaded as if
-                    // the root had declared it (§4.5); the standard library.
-                    auto local = SourcePath(cat(ast.packages[pkg].root, imp.path));
-                    auto first = imp.path.substr(0, imp.path.find('/'));
-                    auto rest = imp.path.size() > first.size() ? imp.path.substr(first.size() + 1)
-                                                               : first;
-                    auto it = declared.find(first);
-                    // A package's own name, from inside it, is its own file.
-                    if (it != declared.end() && it->second.pkg == pkg) it = declared.end();
-                    if (it == declared.end() && failedpkgs.count(first)) continue;
-                    auto blessed = it == declared.end() && !available(local) ? BlessedLookup(first)
-                                                                               : nullptr;
-                    if (blessed) pkgname = blessed->package;
-                    if (it != declared.end()) {
-                        if (available(local))
-                            ImportError(filename, imp,
-                                        cat(imp.path, " is both a file of this package (", local,
-                                            ") and the declared package ", first, "'s module"));
-                        imppkg = it->second.pkg;
-                        imppath = SourcePath(cat(ast.packages[imppkg].root, rest));
-                    } else if (blessed) {
-                        try {
-                            imppkg = loadblessed(*blessed);
-                        } catch (CompileError &e) {
-                            ImportError(filename, imp, e.msg);
-                        }
-                        imppath = SourcePath(cat(ast.packages[imppkg].root, rest));
-                    } else {
-                        imppath = local;
-                        if (!available(local)) {
-                            for (auto &dir : stdlibdirs) {
-                                auto cand = SourcePath(cat(dir, imp.path));
-                                if (available(cand)) {
-                                    imppath = cand;
-                                    imppkg = stdlibpkg(dir);
-                                    break;
-                                }
-                            }
-                            // Not found: where it was looked for, the standard
-                            // library being the directories that hold std.k.
-                            if (imppath == local) {
-                                auto name = imp.path;
-                                for (auto &c : name) if (c == '/') c = '.';
-                                auto msg = cat("cannot find the module ", name,
-                                               ", looked for\n    ",
-                                               ForwardSlashes(AbsolutePath(local)));
-                                auto havestd = false;
-                                for (auto &dir : stdlibdirs)
-                                    if (FileExists(cat(dir, "std.k"))) {
-                                        havestd = true;
-                                        auto cand = cat(dir, imp.path, ".k");
-                                        Append(msg, "\n    ", ForwardSlashes(AbsolutePath(cand)));
-                                    }
-                                if (!havestd) {
-                                    Append(msg, "\nand found no standard library, looking in");
-                                    for (auto &dir : stdlibdirs)
-                                        Append(msg, "\n    ", ForwardSlashes(AbsolutePath(dir)));
-                                    Append(msg, "\nset --stdlib or K_STDLIB to its directory");
-                                }
-                                ImportError(filename, imp, msg);
-                            }
-                        }
-                    }
-                }
-                importsof[fileidx].push_back(imppath);
-                ast.imports.push_back({ imp.line, imp.end, imppath });
-                if (loaded.insert(imppath).second) {
-                    queue.push_back({ imppath, imppkg });
-                    importedat.emplace(imppath, make_pair(filename, imp));
-                }
-            } catch (CompileError &e) {
-                if (e.diags.empty()) ast.Report(ImportDiagnostic(filename, imp, e.msg));
-                for (auto &d : e.diags) ast.Report(d);
-                if (!pkgname.empty() && !declared.count(pkgname)) failedpkgs.insert(pkgname);
-            }
-        }
-    }
-    // A namespace alias's target must be a namespace some file declares,
-    // which only now are all known. Where an error came first, a file that
-    // would have declared it may be the one that failed to load or parse,
-    // so the target is not reported as well. An alias may take the name of
-    // a namespace: it holds in its own file alone, which then reaches that
-    // namespace only through an alias of another name.
-    if (ast.errors.empty())
-        for (auto &a : ast.nsaliases) {
-            if (ast.FindNS(a.target)) continue;
-            Diagnostic d;
-            d.where = LocOf(a.targetline);
-            d.where.endline = a.targetline.line;
-            d.where.endcol = a.targetline.col + (int)a.target.size();
-            d.message = cat("unknown namespace ", a.target, " in namespace alias ", a.name);
-            ast.Report(d);
-        }
-    // Globals initialize in import order: everything a file imports runs before
-    // the file's own, so a global initializer may name an imported global
-    // (`let IDENT = Xf { ..., t: float3_0 }`). Files parse in worklist order,
-    // which is not that, so rank them by a post-order walk of the import graph
-    // and stable-sort the initialization list by rank. A file in an import
-    // cycle is visited once, and its rank is then whatever the walk reached
-    // first, which is all that order can mean there.
-    vector<int> rank(ast.sources.size(), 0);
-    vector<char> state(ast.sources.size(), 0);   // 0 unvisited, 1 on the stack, 2 ranked.
-    auto next = 0;
-    std::function<void(int)> visit = [&](int f) {
-        if (state[f]) return;
-        state[f] = 1;
-        for (auto &p : importsof[f]) {
-            auto it = fileof.find(p);
-            if (it != fileof.end()) visit(it->second);
-        }
-        state[f] = 2;
-        rank[f] = next++;
-    };
-    for (size_t i = 0; i < ast.sources.size(); i++) visit((int)i);
-    std::stable_sort(ast.globals.begin(), ast.globals.end(),
-                     [&](VarDecl *a, VarDecl *b) {
-                         return rank[a->line.fileidx] < rank[b->line.fileidx];
-                     });
-    // A sidecar's dylibs entry names a library some extern block declares
-    // (§7.10): the program's, one in any package it uses; a package's, one
-    // of its own. A package's blocks are those of all its files, including
-    // modules this program does not import, which only a scan of them finds
-    // (PackageExternNames); it is made only for a name no parsed block has.
-    vector<set<string>> scanned(ast.packages.size());
-    vector<bool> isscanned(ast.packages.size());
-    auto scannedlibs = [&](size_t p) -> const set<string> & {
-        if (!isscanned[p]) {
-            PackageExternNames(ast, (int)p, &scanned[p]);
-            isscanned[p] = true;
-        }
-        return scanned[p];
-    };
-    for (size_t p = 0; p < ast.packages.size(); p++) {
-        auto &pkg = ast.packages[p];
-        for (auto &d : pkg.dylibs) {
-            auto declared = false;
-            for (auto sf : ast.functions)
-                if (sf->dylib == d.name && (p == 0 || ast.filepkg[sf->line.fileidx] == (int)p))
-                    declared = true;
-            for (size_t q = 1; q < ast.packages.size() && !declared; q++)
-                if ((p == 0 || q == p) && !ast.packages[q].stdlib && ast.packages[q].builtin < 0 &&
-                    !ast.packages[q].root.empty() && scannedlibs(q).count(d.name))
-                    declared = true;
-            if (!declared)
-                throw CompileError { cat(pkg.sidecar, ": dylibs maps ", d.name, ", which no "
-                                         "extern block ", p == 0 ? "in the program" : "of the package",
-                                         " names") };
-        }
-    }
-}
 
 // Parses a program's dump as a program of its own and requires that dumping
 // that gives back the same text: what `k --dump` of the dump written to a
 // file would print. `path` is where the dump's diagnostics say they are.
 void CheckRoundtrip(const string &dumped, const string &path,
-                    const vector<string> &stdlibdirs, const string &exedir) {
+                    const ProgramLoadOptions &options) {
     Ast again;
     try {
-        ParseProgram(again, path, stdlibdirs, exedir,
+        ParseProgram(again, path, options,
                      [&](const string &p) -> const string * { return p == path ? &dumped : nullptr; });
     } catch (CompileError &e) {
         throw CompileError { cat("the dump does not parse again:\n", e.msg) };
@@ -580,7 +128,8 @@ void DumpTokens(const string &path) {
 // order a standalone program holds them (runtime.h has how they divide), and
 // klang.h, the header native parts compile against (native.h).
 static const char *runtimefiles[] = { "runtime.h", "runtime_impl.h", "runtime_threads.h",
-                                      "runtime_ext.h", "runtime_os.h", "klang.h", "jit_c.h" };
+                                      "runtime_ext.h", "runtime_os.h", "klang.h", "jit_c.h",
+                                      "runtime_tasks.h" };
 
 static string RuntimeSections(std::initializer_list<const char *> names) {
     string s;
@@ -722,6 +271,14 @@ R"(  --debug               Overflow, range and tag checks that name the source
                         line they fail on.
 )";
 
+constexpr const char *CORDISOPTIONS =
+R"(  --cordis-manifest file
+                        Select trusted diagnostics providers for this invocation.
+  --cordis-lock file    Verify the provider graph before activating it. Generate
+                        the lock with k lsp --cordis-manifest file --cordis-graph.
+                        Supply both options together.
+)";
+
 // The help on a command or topic, `k help` or `k --help`'s for ""
 // or "help", and "" for none. Each starts with its usage lines and a blank
 // line, which a command line without a file prints.
@@ -736,6 +293,8 @@ Commands:
   build      Build an executable or shared library with a C compiler.
   check      Parse and typecheck a program, and run nothing.
   fetch      Fetch the packages a program declares.
+  cache      Report cache size or prune unused build artifacts.
+  cordis     Resolve a provider graph as a lock document.
   format     Rewrite K files in the standard layout.
   toolchain  Report the C compiler, cmake and git found, and K_HOME.
   version    Print the compiler's version (or --version).
@@ -795,7 +354,7 @@ Options:
                         optimizes at every level, unless --debug.
   --debug               Overflow, range and tag checks that name the source
                         line they fail on, and the C built for a debugger.
-)", COMPILEOPTIONS,
+)", COMPILEOPTIONS, CORDISOPTIONS,
 R"(  --cc name|path        The C compiler: msvc, clang-cl, clang, gcc, cc or a
                         path (or K_CC; by default the first one found).
   --standalone          Compile the runtime into the program rather than link
@@ -815,7 +374,7 @@ Parses and typechecks the program and what it imports, and writes and runs
 nothing.
 
 Options:
-)", COMPILEOPTIONS);
+)", COMPILEOPTIONS, CORDISOPTIONS);
     if (topic == "fetch") return
 R"(usage: k fetch [--update] file.k
 
@@ -848,7 +407,8 @@ Exit status:
                         or an option is wrong.
 )";
     if (topic == "lsp") return
-R"(usage: k lsp [--stdio] [--stdlib dir]
+R"(usage: k lsp [--stdio] [--stdlib dir] [--cordis-manifest file]
+       k lsp --cordis-manifest file --cordis-graph
        k lsp --probe
 
 Serves an editor over the Language Server Protocol, on stdin and stdout:
@@ -866,6 +426,30 @@ Options:
   --probe               Print the protocol version and exit.
   --stdio               Serve on stdin and stdout, as it does anyway.
   --stdlib dir          The standard library's directory (or K_STDLIB).
+  --cordis-manifest file
+                        Select trusted native diagnostics providers for this server.
+  --cordis-graph        Print the resolved graph or error as JSON without activation.
+)";
+    if (topic == "cordis") return
+R"(usage: k cordis resolve service --manifest file [--provider id]
+
+Prints the content-addressed provider graph as JSON. It reads local files
+and resolves the selected service without loading provider code.
+
+Options:
+  --manifest file       Read the Cordis provider catalog.
+  --provider id         Override the root service's selection.
+)";
+    if (topic == "cache") return
+R"(usage: k cache stats [--json]
+       k cache prune --budget bytes [--json]
+
+Reports cache sizes under K_HOME. Prune applies one budget to managed
+runtime and locked native package outputs, removing idle entries oldest first.
+
+Options:
+  --budget bytes        Maximum managed artifact bytes after pruning.
+  --json                Report as JSON.
 )";
     if (topic == "toolchain") return
 R"(usage: k toolchain [--cc name|path] [--json] [--refresh]
@@ -963,7 +547,8 @@ it again changes nothing, and skips a file that does not parse.
 // and one past its last byte as endLine and endCol, each left out where
 // unknown), the related lines after the message the same way, and the text
 // the terminal would have shown.
-string DiagnosticsJson(const vector<Diagnostic> &diags, const Ast *ast) {
+string DiagnosticsJson(const vector<Diagnostic> &diags, const Ast *ast,
+                       const cordis::GraphError *cordis_error = nullptr) {
     string s = "[";
     auto where = [&](const DiagLoc &w) {
         if (!ast || w.fileidx < 0 || w.fileidx >= (int)ast->sources.size()) return;
@@ -978,6 +563,11 @@ string DiagnosticsJson(const vector<Diagnostic> &diags, const Ast *ast) {
         Append(s, i ? ",\n  {" : "\n  {", "\"severity\": \"", d.warning ? "warning" : "error",
                "\", \"message\": ");
         JsonQuote(s, d.message);
+        if (!d.source.empty()) {
+            s += ", \"source\": ";
+            JsonQuote(s, d.source);
+        }
+        if (cordis_error && i + 1 == diags.size()) Append(s, ", \"cordis\": ", cordis_error->Data());
         where(d.where);
         if (!d.related.empty()) {
             s += ", \"related\": [";
@@ -1082,7 +672,7 @@ CodeGen::StackConfig StackConfigOf(const vector<string> &cdefines) {
 }
 
 // The commands, in the order the help lists them.
-static const char *const VERBS[] = { "run", "build", "check", "fetch", "format", "toolchain",
+static const char *const VERBS[] = { "run", "build", "check", "fetch", "cache", "cordis", "format", "toolchain",
                                      "version", "lsp", "completion", "help" };
 
 // The edit distance between two words, for the command a mistyped one meant.
@@ -1325,6 +915,73 @@ static string ManPage() {
     return s;
 }
 
+static int RunCache(int argc, char **argv) {
+    string_view action = argc > 2 ? argv[2] : "";
+    bool json = false;
+    optional<uintmax_t> budget;
+    for (int i = 3; i < argc; ++i) {
+        string_view arg = argv[i];
+        if (arg == "--json") {
+            json = true;
+        } else if (arg == "--budget" && action == "prune" && !budget && i + 1 < argc) {
+            string_view value = argv[++i];
+            uintmax_t bytes;
+            auto result = from_chars(value.data(), value.data() + value.size(), bytes);
+            if (result.ec != std::errc() || result.ptr != value.data() + value.size()) {
+                fprintf(stderr, "k cache prune expects a nonnegative integer byte budget\n");
+                return 1;
+            }
+            budget = bytes;
+        } else {
+            fprintf(stderr, "unexpected cache argument %s (see k help cache)\n", argv[i]);
+            return 1;
+        }
+    }
+    if (action != "stats" && !(action == "prune" && budget)) {
+        fputs(HelpText("cache").c_str(), stderr);
+        return 1;
+    }
+    try {
+        auto home = AbsolutePath(KlangHome());
+        auto report = budget ? PruneArtifactCache(home, *budget, json) : CacheStats(home, json);
+        fputs(report.c_str(), stdout);
+        return 0;
+    } catch (const CompileError &error) {
+        PrintDiagnosticText(error.msg);
+        return 1;
+    }
+}
+
+static int RunCordis(int argc, char **argv, const string &exe) {
+    if (argc < 4 || string_view(argv[2]) != "resolve" || !*argv[3]) {
+        fputs(HelpText("cordis").c_str(), stderr);
+        return 1;
+    }
+    optional<string> manifest, provider;
+    for (int i = 4; i < argc; ++i) {
+        string_view arg = argv[i];
+        if (arg == "--manifest" && !manifest && i + 1 < argc) manifest = argv[++i];
+        else if (arg == "--provider" && !provider && i + 1 < argc) provider = argv[++i];
+        else {
+            fprintf(stderr, "unexpected Cordis argument %s (see k help cordis)\n", argv[i]);
+            return 1;
+        }
+    }
+    if (!manifest || manifest->empty() || (provider && provider->empty())) {
+        fputs(HelpText("cordis").c_str(), stderr);
+        return 1;
+    }
+    try {
+        auto catalog = CordisDiagnostics::ReadCatalog(*manifest, exe);
+        auto document = catalog.Resolve(argv[3], provider).Document();
+        puts(document.c_str());
+        return 0;
+    } catch (const cordis::GraphError &error) {
+        printf("{\"error\":%s}\n", error.Data().c_str());
+        return 1;
+    }
+}
+
 int Main(int argc, char **argv) {
     auto exe = ExePath(argv[0]);
     // The verb forms, `k run|build|check|fetch|format|toolchain|version|help ...`.
@@ -1395,9 +1052,14 @@ int Main(int argc, char **argv) {
         printf("k %s (runtime %s)\n", CompilerVersion(), RuntimeVersion().c_str());
         return 0;
     }
+    if (verb == "cache") return RunCache(argc, argv);
+    if (verb == "cordis") return RunCordis(argc, argv, exe);
     if (verb == "lsp") return RunLsp(exe, vector<string>(argv + firstarg, argv + argc));
-    if (verb == "format") return RunFormat(vector<string>(argv + firstarg, argv + argc));
+    if (verb == "format") return RunOnCompilerStack([&] {
+        return RunFormat(vector<string>(argv + firstarg, argv + argc));
+    });
     string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile;
+    optional<string> cordis_manifest, cordis_lock;
     auto dump = false, dumpdocs = false, tokens = false, parseonly = false, specs = false;
     auto nocgen = false;
     auto roundtrip = false, multitest = false;
@@ -1412,6 +1074,7 @@ int Main(int argc, char **argv) {
     // The inlining at its highest. The C compiler optimizes whatever the
     // level, unless --debug (Builder::CFlags).
     auto optlevel = 2;
+    auto package_fetch = PackageFetchMode::FetchMissing;
     vector<string> cdefines, progargs, includenames, files;
     for (int i = firstarg; i < argc; i++) {
         string arg = argv[i];
@@ -1448,6 +1111,8 @@ int Main(int argc, char **argv) {
                 return 1;
             }
         }
+        else if (arg == "--cordis-manifest" && i + 1 < argc) cordis_manifest = argv[++i];
+        else if (arg == "--cordis-lock" && i + 1 < argc) cordis_lock = argv[++i];
         else if (arg == "--no-bce") nobce = true;
         else if (arg == "--bce-test") bcetest = true;
         else if (arg == "--bce-lines") bcelines = true;
@@ -1523,8 +1188,10 @@ int Main(int argc, char **argv) {
             stderrcolor = when == "always" ? StderrColor(true) : when == "auto" && StderrColor(false);
         }
         else if (arg == "--dry-run") dryrun = true;
-        else if (arg == "--update") package_update = true;
-        else if (arg == "--offline") package_nofetch = true;
+        else if (arg == "--update") {
+            if (package_fetch != PackageFetchMode::Offline) package_fetch = PackageFetchMode::Update;
+        }
+        else if (arg == "--offline") package_fetch = PackageFetchMode::Offline;
         else if (arg == "--dump-docs") dumpdocs = true;
         // A -D lands in the generated C itself rather than on some backend's
         // command line, so a JIT run and a compiled one see the same source.
@@ -1537,6 +1204,12 @@ int Main(int argc, char **argv) {
         else files.push_back(arg);
     }
     if (verbose || dryrun) ProgressPlain();
+    const bool locked_cordis = cordis_manifest.has_value() || cordis_lock.has_value();
+    if (locked_cordis && ((verb != "check" && verb != "build") || !shaderfile.empty() ||
+                          !cordis_manifest || cordis_manifest->empty() || !cordis_lock || cordis_lock->empty())) {
+        fprintf(stderr, "k check and k build require --cordis-manifest and --cordis-lock together\n");
+        return 1;
+    }
     if (verb == "toolchain") {
         try {
             auto tools = FindTools(ccrequest, refresh);
@@ -1558,6 +1231,7 @@ int Main(int argc, char **argv) {
     }
     // What `k build` builds with; its -o names the executable or shared
     // library, and the C goes to the program's build directory (build.h).
+    const bool offline = package_fetch == PackageFetchMode::Offline;
     BuildOptions buildopts;
     string builddir;
     if (verb == "run") {
@@ -1580,7 +1254,7 @@ int Main(int argc, char **argv) {
             return 1;
         }
         if (shared) standalone = true;
-        buildopts = BuildOptions { debug, verbose, dryrun, standalone, shared, outname };
+        buildopts = BuildOptions { debug, verbose, dryrun, standalone, shared, offline, outname };
         outname.clear();
     }
     if (files.size() > 1 && !multitest) {
@@ -1622,6 +1296,25 @@ int Main(int argc, char **argv) {
                         "--dump-file, --jit or program arguments\n");
         return 1;
     }
+    CordisDiagnostics diagnostics;
+    if (locked_cordis) {
+        try {
+            diagnostics = CordisDiagnostics::Load(*cordis_manifest, exe, *cordis_lock);
+        } catch (const cordis::GraphError &e) {
+            if (jsondiag) {
+                Diagnostic d;
+                d.message = d.text = e.msg;
+                d.source = "cordis";
+                fputs(DiagnosticsJson({ d }, nullptr, &e).c_str(), stdout);
+            } else {
+                PrintDiagnosticText(e.msg);
+            }
+            return 1;
+        }
+    }
+    const auto provider = diagnostics.Pin();
+    const auto &cordis_graph = diagnostics.ActiveGraph();
+    const auto cordis_document = cordis_graph ? cordis_graph->Document() : string();
     // The program shares stdout in JIT mode, and the diagnostics have it as
     // JSON; progress goes to stderr then.
     auto msgs = jit || jsondiag ? stderr : stdout;
@@ -1630,7 +1323,7 @@ int Main(int argc, char **argv) {
     string filename, outfile;
     vector<string> includes;
     // What a JIT run compiles and starts, once the compile produced it.
-    string program;
+    string program, generated_c, generated_header;
     // The program's Ast outlives the compile: a build and a JIT run read
     // its packages, for the native parts the program needs (native.h).
     unique_ptr<Ast> astp;
@@ -1638,6 +1331,17 @@ int Main(int argc, char **argv) {
     // The compile's diagnostics as data (--diagnostics json): the warnings
     // as they come, then the error's.
     vector<Diagnostic> found;
+    auto write_c = [&](const string &source) {
+        auto wrote = verb == "build" ? WriteFileIfChanged(outfile, source)
+                                     : WriteFileMakingDirs(outfile, source);
+        if (!wrote) throw CompileError { cat("cannot write output file: ", outfile) };
+        if (stats) fprintf(msgs, "wrote %s (%d bytes)\n", outfile.c_str(), (int)source.size());
+    };
+    auto write_header = [&](const string &header) {
+        if (!WriteFileMakingDirs(headername, header))
+            throw CompileError { cat("cannot write export header: ", headername) };
+        if (stats) fprintf(msgs, "wrote %s (%d bytes)\n", headername.c_str(), (int)header.size());
+    };
     auto compile = [&]() -> int {
         if (tokens) {
             DumpTokens(filename);
@@ -1645,9 +1349,13 @@ int Main(int argc, char **argv) {
         }
         astp = make_unique<Ast>();
         auto &ast = *astp;
-        if (jsondiag) ast.sink = [&](const Diagnostic &d) { found.push_back(d); };
-        auto stdlibdirs = StdlibDirs(stdlibdir, exe);
-        ParseProgram(ast, filename, stdlibdirs, DirOf(exe));
+        if (jsondiag || provider) ast.sink = [&](const Diagnostic &d) {
+            if (!jsondiag) PrintDiagnosticText(d.text);
+            found.push_back(d);
+        };
+        const auto stdlibdirs = StdlibDirs(stdlibdir, exe);
+        const ProgramLoadOptions load { stdlibdirs, DirOf(exe), package_fetch };
+        ParseProgram(ast, filename, load);
         // The parser reported what it recovered from as it went; nothing
         // further is asked of a program with a syntax error.
         if (!ast.errors.empty()) return 1;
@@ -1686,8 +1394,7 @@ int Main(int argc, char **argv) {
         // After resolution, so that a program that does not resolve fails as
         // it would without --roundtrip.
         if (roundtrip) {
-            CheckRoundtrip(dumped, dumpfile.empty() ? cat(filename, ".dump") : dumpfile,
-                           stdlibdirs, DirOf(exe));
+            CheckRoundtrip(dumped, dumpfile.empty() ? cat(filename, ".dump") : dumpfile, load);
             if (stats) fprintf(msgs, "roundtrip ok: %d bytes of dump\n", (int)dumped.size());
         }
         if (parseonly) return 0;
@@ -1743,23 +1450,13 @@ int Main(int argc, char **argv) {
         // part: a header-only adapter needs no separate compilation or loading.
         for (auto &pkg : ast.packages)
             includes.insert(includes.end(), pkg.cheaders.begin(), pkg.cheaders.end());
-        // A quoted include resolves against the including file's own directory
-        // first, so the --include headers are written relative to where the .c
-        // goes: the generated file then compiles wherever the tree sits,
-        // instead of carrying this machine's absolute paths. A name that is
-        // not a file from here is one the C compiler is meant to find on its
-        // own include path, and is left alone. A JIT run has no file to be
-        // relative to and resolves them from the working directory.
-        if (!outfile.empty())
-            for (auto &inc : includes)
-                if (FileExists(inc)) inc = RelativeTo(inc, DirOf(outfile));
         // The extern-support runtime is written against the generated types,
         // so it goes in after them rather than up front.
         string_view runtime_ext_text;
         for (auto &rf : runtime_files)
             if (string_view(rf.name) == "runtime_ext.h") runtime_ext_text = rf.text;
         auto stackcfg = StackConfigOf(cdefines);
-        CodeGen cg(ast, runtime_ext_text, includes, norfcheck, library, shared,
+        CodeGen cg(ast, runtime_ext_text, norfcheck, library, shared,
                    stackcfg.maxstacks, noelide);
         if (stacks) cg.StackReport(msgs, stackcfg);
         // The packages whose native parts the program needs, which a JIT
@@ -1795,28 +1492,46 @@ int Main(int argc, char **argv) {
             if (embedded)
                 Append(out, "#define K_EMBEDDED_JIT 1\n",
                        RuntimeSections({ "jit_c.h" }));
+            auto tasks = cg.usestasks ? RuntimeSections({ "runtime_tasks.h" }) : string();
+            if (cg.usestasks)
+                Append(out, "#ifndef K_NEED_TASK_WAIT\n#define K_NEED_TASK_WAIT 1\n#endif\n");
             if (separate)
-                Append(out, RuntimeSections({ "runtime.h" }), cg.head,
-                       RuntimeSections({ "runtime_ext.h" }), cg.result);
+                Append(out, RuntimeSections({ "runtime.h" }), tasks, cg.head,
+                       RuntimeSections({ "runtime_ext.h" }));
             else
                 Append(out, RuntimeSections({ "runtime.h", "runtime_impl.h", "runtime_threads.h" }),
-                       cg.head, RuntimeSections({ "runtime_ext.h", "runtime_os.h" }), cg.result);
+                       tasks, cg.head, RuntimeSections({ "runtime_ext.h", "runtime_os.h" }));
+            // A file is compiled from its own directory. The in-memory C is
+            // compiled from the working directory even when this run also
+            // writes a C file. Each variant needs its own header spelling.
+            Append(out, "\n/* ---- includes ---- */\n");
+            for (auto inc : includes) {
+                if (FileExists(inc)) {
+                    if (embedded) inc = AbsolutePath(inc);
+                    else if (!outfile.empty()) inc = RelativeTo(inc, DirOf(outfile));
+                }
+                std::replace(inc.begin(), inc.end(), '\\', '/');
+                Append(out, "#include \"", inc, "\"\n");
+            }
+            out += cg.result;
             if (embedded)
                 Append(out, "\nvoid k_jit_cleanup(void) { free(k_stks); k_stks = NULL; "
                             "k_nstks = 0; }\n");
+            if (!cordis_document.empty())
+                Append(out, "\n#ifdef _WIN32\n__declspec(dllexport)\n"
+                            "#elif defined(__GNUC__)\n__attribute__((used))\n#endif\n"
+                            "const char k_cordis_build_graph[] = ", CodeGen::CStr(cordis_document), ";\n");
             return out;
         };
         if (!outfile.empty() && !nocgen) {
-            auto out = assemble(!standalone);
-            if (!WriteFileMakingDirs(outfile, out))
-                throw CompileError { cat("cannot write output file: ", outfile) };
-            if (stats) fprintf(msgs, "wrote %s (%d bytes)\n", outfile.c_str(), (int)out.size());
+            auto source = assemble(!standalone);
+            if (provider) generated_c = std::move(source);
+            else write_c(source);
         }
         if (!headername.empty()) {
             auto header = cg.ExportHeader();
-            if (!WriteFileMakingDirs(headername, header))
-                throw CompileError { cat("cannot write export header: ", headername) };
-            if (stats) fprintf(msgs, "wrote %s (%d bytes)\n", headername.c_str(), (int)header.size());
+            if (provider) generated_header = std::move(header);
+            else write_header(header);
         }
         if (jit && !nocgen) {
             // TinyCC's in-memory runner rejects a thread-local section, and
@@ -1828,6 +1543,16 @@ int Main(int argc, char **argv) {
             program = assemble(true, true);
         }
         return 0;
+    };
+    auto report_failure = [&](const CompileError &e) {
+        if (!jsondiag) PrintDiagnosticText(e.msg);
+        if (e.diags.empty()) {
+            Diagnostic d;
+            d.message = d.text = e.msg;
+            found.push_back(std::move(d));
+        } else {
+            found.insert(found.end(), e.diags.begin(), e.diags.end());
+        }
     };
     // The C toolchain everything this command builds is built with, found
     // when first needed: the native parts, the runtime object and the link
@@ -1852,6 +1577,7 @@ int Main(int argc, char **argv) {
                 outfile.replace(pos, 1, stem);
         }
         includes = includenames;
+        unique_ptr<FileLock> buildlock;
         if (verb == "build") {
             builddir = ProgramBuildDir(file);
             std::error_code ec;
@@ -1860,6 +1586,8 @@ int Main(int argc, char **argv) {
                 fprintf(stderr, "cannot create the build directory %s\n", builddir.c_str());
                 return 1;
             }
+            buildlock = make_unique<FileLock>(cat(builddir, "/build.lock"),
+                                              "waiting for another build of this program");
             outfile = cat(builddir, "/", PathStem(file), ".c");
             // The C is written far from where the command was given, so a
             // header named relative to here is named relative to nowhere
@@ -1868,17 +1596,40 @@ int Main(int argc, char **argv) {
                 if (FileExists(inc)) inc = AbsolutePath(inc);
         }
         program.clear();
+        generated_c.clear();
+        generated_header.clear();
         astp.reset();
         nativepkgs.clear();
         found.clear();
+        optional<cordis::GraphError> graph_error;
         auto attempt = [&]() -> int {
             // The compile has a thread of its own. The program a JIT run
             // starts runs back on this one, the main thread, which a window
             // on macOS has to be made on, and whose stack the link reserves
             // as large as the compile thread's where the platform lets it
             // (CMakeLists.txt).
-            auto code = RunOnCompilerStack(compile);
+            auto code = 0;
+            try {
+                code = RunOnCompilerStack(compile);
+            } catch (const CompileError &e) {
+                if (!provider) throw;
+                report_failure(e);
+                code = 1;
+            }
+            if (provider && astp) {
+                auto additions = CordisDiagnostics::Inspect(*provider, filename, *astp, found);
+                cordis_graph->VerifyInputs();
+                for (auto &added : additions) {
+                    added.text = astp->DiagnosticText(added);
+                    added.source = cat("cordis/", provider->id);
+                    if (!jsondiag) PrintDiagnosticText(added.text);
+                    if (!added.warning) code = 1;
+                    found.push_back(std::move(added));
+                }
+            }
             if (code) return code;
+            if (!generated_c.empty()) write_c(std::exchange(generated_c, {}));
+            if (!generated_header.empty()) write_header(std::exchange(generated_header, {}));
             if (verb == "build") {
                 if (nocgen) return 0;
                 // The native parts first, so that the link can take their
@@ -1887,6 +1638,7 @@ int Main(int argc, char **argv) {
                 if (!findtc()) return 1;
                 Builder b { tc, buildopts, msgs };
                 vector<string> rsps;
+                vector<unique_ptr<FileLock>> native_leases;
                 for (auto pkg : nativepkgs) {
                     auto &p = astp->packages[pkg];
                     if (p.builtin >= 0) {
@@ -1897,9 +1649,12 @@ int Main(int argc, char **argv) {
                     NativeBuild nb;
                     if (!BuildNativePart(*astp, pkg, filename, b, false, nb)) return 1;
                     rsps.push_back(nb.rsp);
+                    if (nb.lease) native_leases.push_back(std::move(nb.lease));
                 }
                 return BuildExecutable(filename, outfile, builddir, tc, buildopts, msgs, rsps,
-                                       astp->packages[0].output);
+                                       astp->packages[0].output, cat(DirOf(exe), "native-runtime"),
+                                       includes.empty() && cdefines.empty(),
+                                       cordis_graph ? string_view(cordis_graph->identity) : string_view());
             }
             if (program.empty()) return code;
             // The native parts the program reaches hand the run their
@@ -1908,6 +1663,7 @@ int Main(int argc, char **argv) {
             vector<pair<string, const void *>> symbols;
             BuildOptions jitopts;
             jitopts.verbose = verbose;
+            jitopts.offline = offline;
             for (auto pkg : nativepkgs) {
                 auto &p = astp->packages[pkg];
                 if (p.builtin >= 0) {
@@ -1925,6 +1681,7 @@ int Main(int argc, char **argv) {
                             err.c_str());
                     return 1;
                 }
+                if (nb.lease) nb.lease->KeepUntilProcessExit();
             }
             // TinyCC's parser recurses as deep as the C nests, so TinyCC
             // compiles on a compile thread's stack as well: a Linux main
@@ -1942,20 +1699,17 @@ int Main(int argc, char **argv) {
         auto code = 0;
         try {
             code = attempt();
-        } catch (CompileError &e) {
-            if (!jsondiag) PrintDiagnosticText(e.msg);
-            // A driver's error has no place in the program: its text is all
-            // there is to report.
-            if (e.diags.empty()) {
-                Diagnostic d;
-                d.message = d.text = e.msg;
-                found.push_back(std::move(d));
-            } else {
-                found.insert(found.end(), e.diags.begin(), e.diags.end());
-            }
+        } catch (const cordis::GraphError &e) {
+            report_failure(e);
+            found.back().source = "cordis";
+            graph_error = e;
+            code = 1;
+        } catch (const CompileError &e) {
+            report_failure(e);
             code = 1;
         }
-        if (jsondiag) fputs(DiagnosticsJson(found, astp.get()).c_str(), stdout);
+        if (jsondiag)
+            fputs(DiagnosticsJson(found, astp.get(), graph_error ? &*graph_error : nullptr).c_str(), stdout);
         return code;
     };
     if (!multitest) return run(files[0]);

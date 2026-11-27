@@ -4,8 +4,38 @@ The Cordis microkernel is the organizing principle for K. The compiler owns
 language semantics and checks resource contracts. A shared component kernel
 lets each project choose the services required by its target. The current
 compiler already has a C backend, checked references, address-stable data
-stacks, isolated workers, and two execution paths. The component architecture
-below is the design those mechanisms will support. [Compiler implementation](implementation.md)
+stacks, isolated workers, and two execution paths. The language server hosts
+the first Cordis diagnostics service. An independent native host exercises
+the same lifecycle with linked and dynamically loaded implementations of a
+value service.
+[Compiler implementation](implementation.md) ·
+[Cordis diagnostics](design/cordis_microkernel.md#native-diagnostics-in-the-language-server)
+
+## Domain boundaries in the code
+
+The compiler's core domain is deciding whether a K program is valid and
+what it means. The package resolver answers where the program's inputs come
+from. The build and workspace have their own inputs and lifecycles. Keep
+those vocabularies explicit at the points where they meet. This follows the
+bounded contexts and context map of domain-driven design. [DDD Reference](https://www.domainlanguage.com/ddd/reference/)
+
+| Context | Owns | Boundary |
+| --- | --- | --- |
+| Program loading | Import visibility, the source graph, and global initialization order | `ParseProgram` takes a root, standard-library search paths, executable location, package fetch mode, and an optional source overlay. It fills the caller's `Ast`. |
+| Package resolution | Package source identity, checkout policy, sidecar configuration, and native declarations | `PackageRoot` resolves a local directory or cached Git checkout using the mode supplied by the request. Source inspection is shared by program loading and native builds. |
+| Language semantics | Name resolution, types, lifetimes, and checked specializations | The compiler passes operate on one program's `Ast`. The AST and its derived nodes live for that analysis or build. |
+| Build and execution | Generated C, toolchains, link inputs, caches, and process execution | The driver selects the build or JIT path. The native builder takes explicit options and materializes the artifacts for that path. |
+| Editor workspace | Open buffers, analysis invalidation, cancellation, and published diagnostics | An editor buffer overlays disk text through `SourceProvider`. Each analysis uses offline package resolution and derives its indexes from the program that was checked. |
+| Component lifecycle | Explicit selection, activation, replacement, and cleanup of a native provider | `cordis::Service` checks the provider ABI, starts a candidate before publication, and keeps the selected generation alive through each request. The service adapter owns the request data and ABI-specific checks. |
+
+The CLI and the workspace both call the program loader. The loader asks
+package resolution for roots and uses the parser to read source. It has no
+dependency on building native artifacts. The CLI selects package fetch mode
+per invocation and passes its offline choice to the native builder. The
+workspace selects offline mode per analysis, including when embedded in a
+process that also runs CLI commands. An import that needs an uncached package
+reports a diagnostic at the import. These boundaries work with the current
+single C++ translation unit for the compiler passes.
 
 ## Start with the resource
 
@@ -76,7 +106,7 @@ after the request has been cancelled.
 | --- | --- | --- |
 | Freestanding | Boot a RISC-V QEMU image, write to its serial console, and handle a timer interrupt | Static components, fixed startup storage, optional page-backed storage, explicit layout and memory-order rules. |
 | Hosted native | Serve an inference workload with bounded I/O and interchangeable CPU and GPU providers | Event loop, typed file and device handles, cancellation, backpressure, sandboxed extensions, and observability. |
-| Hosted TypeScript | Run an existing TypeScript CLI against its locked dependencies | TypeScript lowering, a JavaScript engine, source maps, and tested Node.js APIs and module resolution. |
+| Hosted TypeScript | Run an existing TypeScript CLI against its locked dependencies | An optional Cordis profile selects the TypeScript transform, JavaScript engine, Node.js compatibility services and host capabilities. |
 
 The core toolchain installs once. A project declares the providers it needs
 and each target links or loads that selection. JavaScript engines, Python,
@@ -91,14 +121,16 @@ ownership, and callback threads explicitly. Validate C bindings against
 their headers. For asynchronous calls, retaining a K value requires an
 explicit handle or storage whose lifetime covers the completion event.
 
-A proposed K `using` block adds a source-level expression for guest code
-with an explicit language, typed inputs, and a checked result. The selected
-Cordis adapter owns guest parsing and execution. Python can use an embedded
-interpreter with trusted code or an isolated worker. TypeScript can reuse the
-optional runtime. Other languages can supply an adapter through a supported
-ABI, an isolated process, or a Wasm component. The initial source syntax uses
-an explicit fence to preserve guest text and source locations independently
-of the guest grammar. [Embedded languages](design/embedded_languages.md) ·
+An optional Cordis source extension owns the `using "language"` syntax.
+A build driver resolves the extension and selected language adapters from
+the project lock before reading extended source. The extension emits
+ordinary K, guest module artifacts and a source map. The core compiler
+checks the generated K through its existing entry point. Its lexer,
+grammar and type system remain independent of the extension. The same
+locked graph ties the generated K calls to the guest services used at run
+time. Python may use an interpreter or an isolated worker. TypeScript can
+reuse the transform and engine services of the optional runtime profile.
+[Embedded languages](design/embedded_languages.md) ·
 [TypeScript runtime](design/functions_and_typescript_runtime.md#runtime-architecture)
 
 An inference request illustrates this contract. It owns a bounded queue slot
@@ -109,8 +141,11 @@ retired provider.
 
 ## Engineering priorities
 
-Start by exercising a returned closure, asynchronous cancellation, and an
-owned native handle in one program. In parallel, make the first Cordis
-registry load one diagnostics provider and make one freestanding image boot.
-Those three tests expose the memory, ABI, and target assumptions before the
-project commits to a wider set of providers. [Development roadmap](roadmap.md)
+The hosted application adapter activates a TCP provider and its optional
+queue policy from a lock. It publishes them together and keeps their
+previous generations alive until in-flight requests finish. Use this path
+for the first inference service. Extend managed storage to locked native
+outputs and verify their lifetime during pruning. Use a freestanding boot
+fixture to exercise target layout and static composition alongside the
+hosted work.
+[Development roadmap](roadmap.md)

@@ -83,7 +83,16 @@ inline Val StrLit::Check(TypeCheck &tc, TypeExpr *expected) {
 
 inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
     if (!expansionerror.empty()) tc.Error(this, string(expansionerror));
+    if (boundfn) {
+        fnref = boundfn;
+        WarnDeprecatedFn(tc, this, boundfn);
+        Val v;
+        v.type = tc.fntype;
+        v.fnv.named = boundfn;
+        return v;
+    }
     if (auto vd = tc.LookupVar(name, ns, this)) {
+        if (vd->task_scope) tc.Error(this, "a task scope controller cannot be used as a value");
         vdef = vd;
         if (tc.deferbodies) tc.NoteDeferMention(vd);
         tc.RequireAssigned(vd, this);
@@ -299,6 +308,8 @@ inline Val ArrayLit::Check(TypeCheck &tc, TypeExpr *expected) {
 }
 
 inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
+    if (task_carry_error)
+        tc.Error(task_carry_error->first, string(task_carry_error->second));
     tc.ExpandInitializers(inits);
     auto expandednamed = !inits.empty() && !inits[0].name.empty();
     for (auto &fi : inits)
@@ -332,6 +343,8 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
     }
     if (t->kind == TY_STRUCT) {
         auto st = t->struc->st;
+        if (st->callable_arity >= 0)
+            tc.Error(this, "use borrow_callable or own_callable to construct a runtime callable");
         if (t->struc->args.empty() && !st->generics.empty()) {
             // Infer the struct's generics from the field initializers as
             // written, in the order written: the first to bind a parameter
@@ -463,7 +476,10 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
             if (auto en = tc.ast.LookupEnum(id->name, id->ns))
                 return tc.CheckVariantConst(this, en);
     }
-    auto ov = tc.CheckV(obj, nullptr);
+    return CheckValueMember(tc, tc.CheckV(obj, nullptr));
+}
+
+inline Val Dot::CheckValueMember(TypeCheck &tc, Val ov) {
     if (tc.IsUntypedEmptyArray(ov.type)) tc.NoUntypedEmptyArray(ov, obj, cat(".", name));
     obj->exprtype = ov.type;
     auto t = ov.type;
@@ -494,6 +510,44 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
     lv.intemp = tc.TempContents(ov, lv.contents);
     tc.ResolveMemberLValue(lv, this);
     if (lv.intemp) tc.NoRelRefTempRead(obj, t, lv.type);
+    if (auto env = Is<Ident>(obj); env && tc.TaskInputLifetime(env->vdef, tc.CurRealFrame().spec) &&
+        tc.TaskInputHolder(lv.type)) {
+        Val snapshot = tc.ContainerRead(lv);
+        snapshot.contents.Set(env->vdef, false);
+        snapshot.holderfrom = nullptr;
+        return snapshot;
+    }
+    if (auto env = Is<Ident>(obj); env && tc.TaskInputLifetime(env->vdef, tc.CurRealFrame().spec) &&
+        tc.TaskInputBorrow(lv.type)) {
+        // The caller of the task keeps this external storage live. Use the
+        // invocation as its lifetime bound when checking the body.
+        Val loan;
+        loan.type = lv.type;
+        if (tc.TaskResizeInput(lv.type)) {
+            // The caller proves this input has an independent array.
+            // Its body can derive views and check shrinks just as it
+            // would for a local owner.
+            auto spec = tc.CurRealFrame().spec;
+            auto &roots = spec->task_input_roots;
+            auto field = (size_t)fieldidx;
+            if (roots.size() <= field) roots.resize(field + 1, nullptr);
+            auto &root = roots[field];
+            if (!root) {
+                root = tc.ast.NewVarDef();
+                root->name = name;
+                root->line = line;
+                root->ownerspec = spec;
+                root->task_input_root = true;
+            }
+            root->type = lv.type->ref->sub;
+            root->depth = env->vdef->depth;
+            loan.Set(root, true);
+        } else {
+            loan.Set(env->vdef, false);
+        }
+        loan.writable = !lv.type->cq;
+        return loan;
+    }
     return tc.ContainerRead(lv);
 }
 

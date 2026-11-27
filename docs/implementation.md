@@ -68,7 +68,7 @@ single translation unit, included in the order the driver lists them.
 
 | Phase | Where | Consumes | Produces |
 |---|---|---|---|
-| Parse | `lexer.h`, `parser.h`, `ParseProgram` in `main.cpp` | source files, following `import` | the `Ast`: nodes, type expressions, symbols per namespace, globals in initialization order |
+| Parse | `lexer.h`, `parser.h`, `ParseProgram` in `program.h` | root file, import lookup options, and optional editor text | the `Ast`: nodes, type expressions, symbols per namespace, globals in initialization order |
 | Resolve | `resolve.h` (`ResolveTypeNames`) | type names as written | struct/enum/generic kinds, aliases substituted away |
 | Typecheck | `typecheck*.h` (`TypeCheckProgram`) | the `Ast` | one `FnSpec` per specialization with a cloned, annotated body; `StructInst`/`EnumInst`; `VarDef`s; the store record; every diagnostic of §3--§11; the shader blobs `embed_shader` compiles (`gfx.h`, `shaderc.c`) |
 | Optimize | `optimize.h`, `optimize_basecase.h`, `optimize_tre.h`, `optimize_loops.h`, `optimize_reassoc.h` (`Optimizer`) | live specializations | bodies rewritten in place (inlined, folded, loops), liveness and use counts, loop shapes (`ForLoop::stripk`, `sumred`, `While::countdown`) |
@@ -5007,7 +5007,10 @@ fixtures check these decisions and also run as ordinary programs, allowing
 output checks to catch incorrect elimination. `--bce-lines` prints the
 per-line counts for comparing two builds of the pass; a check in standard
 library code inlined into the program's counts on the line of the call
-(`Inliner::AtCallSite`). `bench/bce_ab.py`
+(`Inliner::AtCallSite`). Each slice contributes one check to these counts.
+BCE can prove the lower bound, bound ordering and upper bound separately.
+The slice counts as kept as long as codegen emits any of those checks.
+`bench/bce_ab.py`
 measures the whole pass against `--no-bce`. `bench/bce_fuzz.py` runs random
 programs built from loop shapes the pass targets, with off-by-one
 mutations, through the JIT with the pass on and off. An elided check that

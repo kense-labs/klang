@@ -1259,11 +1259,10 @@ fn describe(xs: i64[:]) -> u8[>..] { str(xs.len, " ints, first ", xs[0]) }
 print(describe(7), "; ", 2.5.describe(), "; ", xs.describe(), "; ", describe(xs[2..]));
 ```
 
-Function values are **compile-time entities**. They are passed as generic
+Static function values are **compile-time entities**. They are passed as generic
 parameters, every call is direct and inlinable, and they cannot escape:
-storing one, returning one or putting one in data is a compile error. There
-are no closure objects and no runtime function pointers. A higher-order
-function can therefore compile to a direct loop:
+storing one, returning one or putting one in data is a compile error. A
+higher-order function can compile to a direct loop:
 
 ```klang
 fn each_pair<T, F>(xs: T[:]) {
@@ -1643,12 +1642,12 @@ imposes it.
   ([section 9](#9-enums-in-two-sizes);
   [spec §3.5](k_spec.md#35-algebraic-data-types),
   [§8.1](k_spec.md#81-match)).
-* **No closures that escape, no function pointers, no dynamic dispatch beyond
-  ADT tags.** The closed-world compiler is what makes roots and destinations
-  static; it is also what stops you writing a plugin system
-  ([section 13](#13-generics-and-blocks-that-disappear);
-  [spec §7.6](k_spec.md#76-static-function-values),
-  [§8.2](k_spec.md#82-case-functions-match-as-an-overload-set)).
+* **Concrete closures keep their capture type.** A closure can escape with
+  its owned values or valid borrows. ADT tags can dispatch across different
+  behaviors. Cordis supports native components at explicit host boundaries.
+  [Closures](reference.md#concrete-closures) ·
+  [Case functions](k_spec.md#82-case-functions-match-as-an-overload-set) ·
+  [Cordis](design/cordis_microkernel.md)
 * **Non-standard FFI packages are outside worker isolation.** K managed
   data structures never share memory between threads. The standard library
   does not share memory either; its access to stateful OS functionality is

@@ -1,6 +1,6 @@
 # `const for` and `const if`: specialization-time expansion (v1)
 
-Status: implemented. V1 supports the four sources below in statement lists,
+Status: implemented. K supports the sources below in statement lists,
 constructor initializer lists, and `match` arm lists. `const if`, which
 selects fragments in those same lists on compile-time predicates, is
 section 11.
@@ -16,12 +16,12 @@ declarations.
 
 ## 1. Scope and cost model
 
-V1 has exactly four expansion sources:
-
 | Source | Bindings | Meaning |
 |---|---|---|
 | `fields<T>` | `<N, A>` | Each direct field's name and accessor, in declaration order |
 | `variants<E>` | `<N, V>` | Each variant's name and the variant, in declaration order |
+| `decorated<D, namespace Scope>` | `<N, Declaration, M>` | Qualified name, declaration and metadata for each application of `D` in the scope |
+| `decorated<D, T>` | `<N, A, M>` | Name, accessor and metadata for matching fields of `T`, in declaration order |
 | `types<T1, T2, ...>` | `<U>` | An explicit sequence of types |
 | `[c1, c2, ...]` | `<C>` | An explicit sequence of constants |
 
@@ -71,7 +71,7 @@ they distinguish specialization bindings from ordinary loop variables and
 reuse the visual convention of generic parameter lists. Binding names need
 not be uppercase; capitalization has no semantic effect.
 
-`fields`, `variants`, and `types` remain identifier tokens. They are contextual query names
+`fields`, `variants`, `decorated`, and `types` remain identifier tokens. They are contextual query names
 recognized only in a `const for` source. They are not ordinary callable
 functions, do not participate in overload resolution, and cannot be replaced
 or shadowed there by a user declaration. A user function or variable of any of
@@ -84,18 +84,19 @@ expansion      := "const" "for" "<" bindings ">" "in" source "{" fragments "}"
 bindings       := ident ("," ident)* ","?
 source         := "fields" "<" type ">"
                 | "variants" "<" type ">"
+                | "decorated" "<" type "," (type | "namespace" (ident | "::")) ","? ">"
                 | "types" "<" (type ("," type)* ","?)? ">"
                 | "[" (const-expr ("," const-expr)* ","?)? "]"
 ```
 
-Here the quoted `fields`, `variants`, and `types` are contextual identifiers,
+Here the quoted `fields`, `variants`, `decorated`, and `types` are contextual identifiers,
 not lexer keywords. `const-expr` is parsed using the expression grammar and
 validated against section 3.3 during specialization. The enclosing list
 determines the grammar of `fragments`; the compiler does not guess the
 fragment category from the body after parsing it.
 
-The binding count is exact: two for `fields` and `variants`, one for either
-explicit list.
+The binding count is exact. Use two for `fields` and `variants`, three
+for `decorated`, and one for either explicit list.
 V1 has no third field-type binding, index binding, binding annotations, or
 optional outputs. A binding may go unused. The source is resolved
 before its own binders enter scope; enclosing expansion bindings remain

@@ -1,0 +1,11 @@
+cleanup 10 3 100 0
+cleanup 100 3 1000 303
+joined 303
+cleanup 3 3 30 12
+linear 12
+cleanup 5 3 50 18
+structured 19
+formats 177
+bound 1
+bound 4
+slice 20

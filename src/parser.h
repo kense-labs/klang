@@ -3,6 +3,8 @@
 // nodes and registers top-level symbols; all resolution happens in later phases.
 #pragma once
 
+#include "async_lower.h"
+
 namespace klang {
 
 // An `import a.b.c;` (path a/b/c.k relative to the importing file's
@@ -70,6 +72,12 @@ struct Parser {
     bool stmt_ended = false;
 
     SFunction *curfn = nullptr;      // The function whose body is being parsed.
+    struct FnScope {
+        Parser &p;
+        SFunction *saved;
+        FnScope(Parser &p, SFunction *sf) : p(p), saved(p.curfn) { p.curfn = sf; }
+        ~FnScope() { p.curfn = saved; }
+    };
     // A for binder's type is followed by the loop's own `in`, so an index
     // type there needs parentheses: `for w: (u32 in nodes) in edges`.
     bool forbindtype = false;
@@ -151,13 +159,14 @@ struct Parser {
                 auto next = lex.PeekTok();
                 return next == T_IDENT || next == T_COLONCOLON;
             }
-            case T_IMPORT: case T_NAMESPACE: case T_STRUCT: case T_ENUM: case T_TYPE:
+            case T_IMPORT: case T_NAMESPACE: case T_STRUCT: case T_ENUM: case T_TYPE: case T_AT:
                 return declaration;
             case T_IF: case T_MATCH: case T_LOOP: case T_WHILE: case T_FOR: case T_GUARD:
             case T_DEFER: case T_RETURN: case T_BREAK: case T_CONTINUE:
                 return !declaration;
             default:
-                return AtInline() || AtCheckfree() || AtDeprecated();
+                return (declaration && AtDecorator()) || AtAsync() || AtInline() ||
+                       AtCheckfree() || AtDeprecated();
         }
     }
 
@@ -299,6 +308,20 @@ struct Parser {
         if (lex.tok != t) return false;
         lex.Next();
         return true;
+    }
+
+    bool AtAsync() const {
+        return lex.tok == T_IDENT && lex.attr == "async" && lex.PeekTok() == T_FN;
+    }
+
+    bool AtRootStruct() const {
+        return lex.tok == T_IDENT && lex.attr == "root" && lex.PeekTok() == T_STRUCT;
+    }
+
+    bool AtDecorator() const {
+        if (lex.tok != T_IDENT || lex.attr != "decorator") return false;
+        auto next = lex.PeekTok();
+        return next == T_IDENT || next == T_COLONCOLON;
     }
 
     // `inline` is a keyword only before a function declaration (§7.13): it
@@ -542,12 +565,40 @@ struct Parser {
         }
         declseen = true;
         // Contextual: a variable, field or function named root remains a name.
-        if (lex.tok == T_IDENT && lex.attr == "root" && lex.PeekTok() == T_STRUCT) {
+        if (AtRootStruct()) {
             ParseStructDecl(true);
             return;
         }
-        if (AtInline() || AtCheckfree() || AtDeprecated()) goto fndecl;
+        if (AtDecorator()) {
+            ParseDecoratorDecl();
+            return;
+        }
+        if (AtAsync() || AtInline() || AtCheckfree() || AtDeprecated()) goto fndecl;
         switch (lex.tok) {
+            case T_AT: {
+                auto applications = ParseDecoratorApplications();
+                auto decorate = [&](Node *decl, auto *symbol) {
+                    if (!doc.empty()) symbol->doc = doc;
+                    decl->line = line;
+                    symbol->decorators = std::move(applications);
+                };
+                if (lex.tok == T_STRUCT || AtRootStruct()) {
+                    auto sd = ParseStructDecl(AtRootStruct());
+                    decorate(sd, sd->st);
+                } else if (lex.tok == T_ENUM) {
+                    auto ed = ParseEnumDecl();
+                    decorate(ed, ed->en);
+                } else if (lex.tok == T_FN || lex.tok == T_RECURSIVE || lex.tok == T_SIMD ||
+                           lex.tok == T_EXPORT || lex.tok == T_EXTERN || lex.tok == T_THREADFN ||
+                           AtAsync() || AtInline() || AtCheckfree() || AtDeprecated()) {
+                    auto fd = ParseFnDecl(false);
+                    decorate(fd, fd->sf);
+                    ast.topdecls.push_back(fd);
+                } else {
+                    Error("a decorator application needs a function, struct or enum declaration");
+                }
+                return;
+            }
             case T_STRUCT: ParseStructDecl(); return;
             case T_ENUM:   ParseEnumDecl();   return;
             case T_TYPE: {
@@ -644,7 +695,7 @@ struct Parser {
         }
     }
 
-    void ParseStructDecl(bool isroot = false) {
+    StructDecl *ParseStructDecl(bool isroot = false) {
         auto firsttype = ast.alltypes.size();
         auto line = CurLine();
         auto doc = lex.doc;
@@ -671,7 +722,104 @@ struct Parser {
         st->end = PrevEnd();
         BindGenericNames(firsttype, st->generics);
         ast.NS(st->ns).structmap[st->name] = st;
+        auto decl = Finish(New<StructDecl>(line, st));
+        ast.topdecls.push_back(decl);
+        return decl;
+    }
+
+    void ParseDecoratorDecl() {
+        auto line = CurLine();
+        auto doc = lex.doc;
+        lex.Next();
+        auto st = new SStruct();
+        ast.structs.push_back(st);
+        st->name = ParseDeclName("decorator declaration");
+        st->ns = curns;
+        st->qname = ast.QualifiedName(st->ns, st->name);
+        st->line = line;
+        st->doc = doc;
+        CheckFreshTypeName(st->ns, st->name);
+        if (lex.tok == T_LPAREN) Role(R_LIST);
+        Expect(T_LPAREN, "decorator declaration");
+        while (lex.tok != T_RPAREN) {
+            Field field;
+            field.line = CurLine();
+            field.name = ExpectIdent("decorator parameter");
+            for (const auto &previous : st->fields)
+                if (previous.name == field.name)
+                    Error(cat("duplicate decorator parameter: ", field.name));
+            Expect(T_COLON, "decorator parameter");
+            field.type = ParseType();
+            field.isconst = true;
+            st->fields.push_back(field);
+            if (!IsNext(T_COMMA)) break;
+        }
+        Expect(T_RPAREN, "decorator declaration");
+        if (lex.tok != T_IDENT || lex.attr != "on") Error("expected 'on' in decorator declaration");
+        lex.Next();
+        if (AtAsync()) {
+            st->decorator_target = DecoratorTarget::AsyncFunction;
+            lex.Next();
+        } else if (lex.tok == T_FN) st->decorator_target = DecoratorTarget::Function;
+        else if (lex.tok == T_STRUCT) st->decorator_target = DecoratorTarget::Struct;
+        else if (lex.tok == T_ENUM) st->decorator_target = DecoratorTarget::Enum;
+        else if (lex.tok == T_IDENT && lex.attr == "field") st->decorator_target = DecoratorTarget::Field;
+        else Error("expected fn, async fn, struct, enum or field as a decorator target");
+        if (lex.tok == T_FN) {
+            st->decorator_signature = ParseTypePrimary();
+            if (st->decorator_signature->kind != TY_FN)
+                Error("a decorator target uses a function declaration signature");
+        } else {
+            lex.Next();
+        }
+        if (IsNext(T_LCURLY)) {
+            if (!st->decorator_signature) Error("only a function decorator can declare a wrapper");
+            if (lex.tok != T_IDENT || lex.attr != "wrap")
+                Error("expected 'wrap' in decorator body");
+            lex.Next();
+            auto wrapper = new SFunction();
+            ast.functions.push_back(wrapper);
+            wrapper->name = st->name;
+            wrapper->ns = st->ns;
+            wrapper->qname = st->qname;
+            wrapper->line = CurLine();
+            wrapper->isnested = true;
+            for (const auto &field : st->fields)
+                wrapper->params.push_back({ field.name, field.line, field.type });
+            {
+                FnScope scope(*this, wrapper);
+                wrapper->body = ParseBlockExpr("decorator wrapper");
+            }
+            wrapper->end = PrevEnd();
+            st->decorator_wrapper = wrapper;
+            Expect(T_RCURLY, "decorator declaration");
+        } else {
+            Expect(T_SEMI, "decorator declaration");
+        }
+        st->end = PrevEnd();
+        ast.NS(st->ns).structmap[st->name] = st;
         ast.topdecls.push_back(Finish(New<StructDecl>(line, st)));
+    }
+
+    vector<DecoratorApplication> ParseDecoratorApplications() {
+        vector<DecoratorApplication> applications;
+        while (lex.tok == T_AT) {
+            auto at = CurLine();
+            lex.Next();
+            auto name_at = CurLine();
+            string_view written;
+            auto type = NewUnresolvedType(ParseQualifiedName("decorator name", &written), name_at);
+            type->named->written = written;
+            auto &application = applications.emplace_back(DecoratorApplication { type, at, {}, nullptr });
+            if (lex.tok == T_LPAREN) Role(R_LIST);
+            if (!IsNext(T_LPAREN)) continue;
+            while (lex.tok != T_RPAREN) {
+                application.args.push_back(ParseExpr());
+                if (!IsNext(T_COMMA)) break;
+            }
+            Expect(T_RPAREN, "decorator arguments");
+        }
+        return applications;
     }
 
     // `kept`, where given, is moved past each whole field (ParseMembers).
@@ -681,7 +829,13 @@ struct Parser {
             Field f;
             f.line = CurLine();
             f.doc = lex.doc;
-            if (IsNext(T_PAD)) {
+            if (lex.tok == T_AT) {
+                f.decorators = ParseDecoratorApplications();
+                if (f.doc.empty()) f.doc = lex.doc;
+            }
+            if (lex.tok == T_PAD) {
+                if (!f.decorators.empty()) Error("padding cannot carry a decorator");
+                lex.Next();
                 f.ispad = true;
                 if (lex.tok == T_INTLIT) {
                     f.padsize = lex.ival;
@@ -701,13 +855,13 @@ struct Parser {
                 if (constq) f.type = ast.ConstOf(f.type);
                 if (IsNext(T_ASSIGN)) f.defaultval = ParseExpr();
             }
-            fields.push_back(f);
+            fields.push_back(std::move(f));
             KeepMember(kept);
             if (!IsNext(T_COMMA)) break;
         }
     }
 
-    void ParseEnumDecl() {
+    EnumDecl *ParseEnumDecl() {
         auto firsttype = ast.alltypes.size();
         auto line = CurLine();
         auto doc = lex.doc;
@@ -749,7 +903,9 @@ struct Parser {
         en->end = PrevEnd();
         BindGenericNames(firsttype, en->generics);
         ast.NS(en->ns).enummap[en->name] = en;
-        ast.topdecls.push_back(Finish(New<EnumDecl>(line, en)));
+        auto decl = Finish(New<EnumDecl>(line, en));
+        ast.topdecls.push_back(decl);
+        return decl;
     }
 
     bool InFetchedPackage() const {
@@ -876,6 +1032,12 @@ struct Parser {
         }
         sf->isrec = IsNext(T_RECURSIVE);
         if (sf->isinline && sf->isrec) Error("recursive fn cannot be inline");
+        auto async = AtAsync();
+        if (async) {
+            if (nested || sf->isextern || sf->isexport || sf->isrec || sf->isinline || sf->issimd)
+                Error("async fn requires a plain top-level K function");
+            lex.Next();
+        }
         if (lex.tok == T_THREADFN) {
             if (sf->isinline) Error("thread_fn cannot be inline");
             sf->isthread = true;
@@ -902,12 +1064,16 @@ struct Parser {
             Expect(T_LPAREN, "function declaration");
             while (lex.tok != T_RPAREN) {
                 Param p;
+                p.borrows = lex.tok == T_IDENT && lex.attr == "borrow" && lex.PeekTok() == T_IDENT;
+                if (p.borrows) lex.Next();
                 p.isvar = IsNext(T_VAR);
                 p.line = CurLine();
                 p.name = ExpectIdent("parameter list");
                 for (auto &prev : sf->params)
                     if (prev.name == p.name) Error(cat("duplicate parameter name: ", p.name));
                 if (IsNext(T_COLON)) p.type = ParseType();
+                if (p.borrows && (!sf->isextern || p.isvar || !p.type || lex.tok == T_ASSIGN))
+                    Error("borrow requires a typed extern parameter without a default");
                 if (IsNext(T_ASSIGN)) {
                     // A default is a value of the parameter's type (§7.1), which
                     // an untyped parameter has only from an argument.
@@ -976,16 +1142,12 @@ struct Parser {
             if (sf->isexport && sf->cname.empty()) sf->cname = string(sf->name);
             // The enclosing function returns when the body ends, on the
             // throw of an error the declaration is lost to included.
-            struct FnScope {
-                Parser &p;
-                SFunction *saved;
-                FnScope(Parser &_p, SFunction *sf) : p(_p), saved(_p.curfn) { p.curfn = sf; }
-                ~FnScope() { p.curfn = saved; }
-            } fs(*this, sf);
+            FnScope fs(*this, sf);
             sf->body = ParseBlockExpr("function body");
         }
         sf->end = PrevEnd();
         BindGenericNames(firsttype, sf->generics);
+        if (async && sf->body && !sf->broken) LowerAsyncFunction(ast, sf);
         // Only the root file's `fn main` is the program entry; an imported
         // file's main is ignored entirely (§11.1), letting a runnable file
         // double as an importable library.
@@ -1056,6 +1218,14 @@ struct Parser {
         // Foo&` a reference to a read-only Foo, `const (u8[:])&` a reference
         // to a read-only slice value. Where no reference or slice follows,
         // the value's contents are read-only: `const i64[3]`.
+        auto owns = false;
+        if (lex.tok == T_IDENT && lex.attr == "own") {
+            auto next = lex.PeekTok();
+            owns = next == T_IDENT || next == T_LPAREN ||
+                   next == T_CONST || next == T_FN || IsPrimTypeToken(next);
+            if (owns) lex.Next();
+        }
+        ast.has_ownership |= owns;
         auto constq = IsNext(T_CONST);
         auto t = ParseTypePrimary();
         auto qualify = [&](TypeExpr *n) {
@@ -1151,7 +1321,7 @@ struct Parser {
                 }
                 default:
                     if (constq) t = ast.ConstOf(t);
-                    return t;
+                    return owns ? ast.WithOwnership(t, true) : t;
             }
         }
     }
@@ -1227,6 +1397,15 @@ struct Parser {
             }
             case T_FN: {
                 lex.Next();
+                if (lex.tok == T_BITAND) Role(R_GLUE_LEFT);
+                auto borrowed = IsNext(T_BITAND);
+                Node *capacity = nullptr;
+                if (!borrowed && lex.tok == T_LBRACKET) {
+                    Role(R_LIST | R_GLUE_LEFT);
+                    lex.Next();
+                    capacity = ParseExpr();
+                    Expect(T_RBRACKET, "callable capture capacity");
+                }
                 auto t = ast.NewType(TY_FN, line);
                 t->fn = ast.NewDetail<TypeFn>();
                 if (lex.tok == T_LPAREN) Role(R_LIST);
@@ -1251,7 +1430,9 @@ struct Parser {
                         }
                     }
                 }
-                return t;
+                if (!borrowed && !capacity) return t;
+                if (!t->fn->has_sig) Error("a runtime callable requires a parameter list");
+                return ast.RuntimeCallableOf(*t->fn, line, capacity);
             }
             case T_LPAREN: {
                 // Grouping, e.g. (Sexp..&<varint>)[varint].
@@ -1592,6 +1773,12 @@ struct Parser {
 
     Node *ParseUnary() {
         auto line = CurLine();
+        if (lex.tok == T_IDENT && lex.attr == "await" && lex.PeekTok() == T_IDENT) {
+            lex.Next();
+            auto marker = New<Call>(line, New<Ident>(line, kTaskAwait, curns));
+            marker->args.push_back(ParseUnary());
+            return Finish(marker);
+        }
         switch (lex.tok) {
             case T_MINUS: case T_NOT: case T_BITNOT: case T_BITAND: {
                 auto op = lex.tok;
@@ -1735,6 +1922,111 @@ struct Parser {
         return Finish(result);
     }
 
+    Node *ParseClosure(Line line) {
+        lex.Next();  // fn
+        auto env = new SStruct();
+        env->name = env->qname = ast.Intern(cat("closure#", ast.structs.size()));
+        env->line = line;
+        ast.structs.push_back(env);
+        auto sf = new SFunction();
+        sf->name = sf->qname = env->name;
+        sf->line = line;
+        // The helper has its own control-flow and value scope. Its types can
+        // use the enclosing function's declared type parameters, so thread
+        // those through the nominal environment as ordinary type arguments.
+        set<string_view> visible;
+        for (auto outer = curfn; outer; outer = outer->outer)
+            for (const auto &g : outer->generics)
+                if (visible.insert(g.name).second) sf->generics.push_back(g);
+        env->closure = sf;
+        ast.functions.push_back(sf);
+        auto t = ast.StructOf(env, {}, line);
+        auto literal = New<StructLit>(line, t);
+        sf->params.push_back({ kClosureEnv, line, t });
+        set<string_view> names;
+        set<string_view> usedtypes;
+        vector<Node *> captures;
+        auto recordtypes = [&](size_t first) {
+            for (auto i = first; i < ast.alltypes.size(); i++) {
+                auto t = ast.alltypes[i];
+                if (t->kind == TY_UNRESOLVED) usedtypes.insert(t->named->name);
+            }
+        };
+
+        if (lex.tok == T_LBRACKET) {
+            Role(R_LIST | R_GLUE_LEFT);
+            lex.Next();
+            auto sub = Sub();
+            while (lex.tok != T_RBRACKET) {
+                Field f;
+                f.line = CurLine();
+                f.name = ExpectIdent("closure capture");
+                auto end = PrevEnd();
+                if (!names.insert(f.name).second) Error(cat("duplicate closure capture: ", f.name));
+                Expect(T_COLON, "closure capture");
+                auto first = ast.alltypes.size();
+                f.type = ParseType();
+                recordtypes(first);
+                f.isconst = true;
+                auto init = IsNext(T_ASSIGN) ? ParseExpr() :
+                            Finish(New<Ident>(f.line, f.name, curns), end);
+                env->fields.push_back(f);
+                literal->inits.push_back({ f.name, init });
+
+                auto binding = New<VarDecl>(f.line, false);
+                binding->names.push_back(f.name);
+                binding->type = f.type;
+                auto receiver = New<Ident>(f.line, kClosureEnv, curns);
+                binding->inits.push_back(New<Dot>(f.line, receiver, f.name, curns));
+                captures.push_back(binding);
+                if (!IsNext(T_COMMA)) break;
+            }
+            Expect(T_RBRACKET, "closure captures");
+        }
+
+        auto firstsignature = ast.alltypes.size();
+        if (lex.tok == T_LPAREN) Role(R_LIST);
+        Expect(T_LPAREN, "closure parameters");
+        while (lex.tok != T_RPAREN) {
+            Param p;
+            p.isvar = IsNext(T_VAR);
+            p.line = CurLine();
+            p.name = ExpectIdent("closure parameter");
+            if (!names.insert(p.name).second) Error(cat("duplicate closure binding: ", p.name));
+            Expect(T_COLON, "closure parameter");
+            p.type = ParseType();
+            sf->params.push_back(p);
+            if (!IsNext(T_COMMA)) break;
+        }
+        Expect(T_RPAREN, "closure parameters");
+        if (IsNext(T_ARROW)) {
+            sf->has_rets = true;
+            do { sf->rets.push_back(ParseType()); } while (IsNext(T_COMMA));
+        }
+        {
+            FnScope scope(*this, sf);
+            sf->closure_body = ParseBlockExpr("closure body");
+        }
+        recordtypes(firstsignature);
+        erase_if(sf->generics, [&](const GenericParam &g) { return !usedtypes.count(g.name); });
+        env->generics = sf->generics;
+        for (auto &g : env->generics) {
+            auto param = NewUnresolvedType(g.name, line);
+            param->kind = TY_GENERIC;
+            t->struc->args.push_back(param);
+        }
+        sf->body = New<Block>(sf->closure_body->line);
+        sf->body->stmts = std::move(captures);
+        sf->body->stmts.insert(sf->body->stmts.end(), sf->closure_body->stmts.begin(),
+                               sf->closure_body->stmts.end());
+        sf->body->tail = sf->closure_body->tail;
+        if (sf->closure_body->brokenat >= 0)
+            sf->body->brokenat = sf->closure_body->brokenat + (int)env->fields.size();
+        Finish(sf->body);
+        sf->end = env->end = PrevEnd();
+        return Finish(literal);
+    }
+
     Node *ParsePrimary() {
         auto line = CurLine();
         switch (lex.tok) {
@@ -1757,6 +2049,7 @@ struct Parser {
             case T_FALSE: lex.Next(); return Finish(New<BoolLit>(line, false));
             case T_NULLLIT: lex.Next(); return Finish(New<NullLit>(line));
             case T_SELF:  lex.Next(); return Finish(New<SelfRef>(line));
+            case T_FN: return ParseClosure(line);
             case T_LPAREN: {
                 lex.Next();
                 auto sub = Sub();
@@ -1907,14 +2200,29 @@ struct Parser {
             Expect(T_RBRACKET, "const for constant list");
         } else {
             auto query = ExpectIdent("const for source");
-            if (query != "fields" && query != "types" && query != "variants")
-                Error("const for source must be fields<T>, variants<E>, types<...>, or [constants]");
-            cf->source = query == "fields" ? ES_FIELDS : query == "variants" ? ES_VARIANTS : ES_TYPES;
+            if (query == "fields") cf->source = ES_FIELDS;
+            else if (query == "variants") cf->source = ES_VARIANTS;
+            else if (query == "types") cf->source = ES_TYPES;
+            else if (query == "decorated") cf->source = ES_DECORATED;
+            else Error("const for source must be fields, variants, types, decorated, or [constants]");
             if (lex.tok == T_LT) Role(R_ANGLE_OPEN);
             Expect(T_LT, "const for source");
-            while (lex.tok != T_GT && lex.tok != T_SHR) {
+            if (cf->source == ES_DECORATED) {
                 cf->types.push_back(ParseType());
-                if (!IsNext(T_COMMA)) break;
+                Expect(T_COMMA, "decorated source");
+                if (IsNext(T_NAMESPACE)) {
+                    auto ns = IsNext(T_COLONCOLON) ? string_view() : ExpectIdent("decorated namespace");
+                    if (auto it = nsaliases.find(ns); it != nsaliases.end()) ns = it->second;
+                    cf->decorator_ns = ns;
+                } else {
+                    cf->types.push_back(ParseType());
+                }
+                IsNext(T_COMMA);
+            } else {
+                while (lex.tok != T_GT && lex.tok != T_SHR) {
+                    cf->types.push_back(ParseType());
+                    if (!IsNext(T_COMMA)) break;
+                }
             }
             ExpectClosingAngle("const for source");
             if (cf->source == ES_FIELDS && cf->types.size() != 1)
@@ -1922,7 +2230,8 @@ struct Parser {
             if (cf->source == ES_VARIANTS && cf->types.size() != 1)
                 Error("variants requires exactly one type");
         }
-        auto arity = cf->source == ES_FIELDS || cf->source == ES_VARIANTS ? 2u : 1u;
+        auto arity = cf->source == ES_DECORATED ? 3u :
+                     cf->source == ES_FIELDS || cf->source == ES_VARIANTS ? 2u : 1u;
         if (cf->names.size() != arity)
             Error(cat("const for source requires exactly ", arity, " binding(s)"));
         if (initializers) {
@@ -2118,7 +2427,7 @@ struct Parser {
             stmt_ended = false;
             if (IsNext(T_RCURLY)) break;
             if (lex.tok == T_EOF && eoferror) return;
-            auto nfunctions = ast.functions.size();
+            auto decls = ast.Mark();
             auto startp = lex.attr.data();
             auto stmtdepth = lex.DepthBefore();
             pendingdot = nullptr;
@@ -2133,8 +2442,12 @@ struct Parser {
                     b->stmts.push_back(pendingdot);
                 } else {
                     Report(e);
-                    for (auto i = nfunctions; i < ast.functions.size(); i++) delete ast.functions[i];
-                    ast.functions.resize(nfunctions);
+                    if (ast.structs.size() != decls.structs) {
+                        ast.DropSince(decls);
+                    } else {
+                        for (auto i = decls.functions; i < ast.functions.size(); i++) delete ast.functions[i];
+                        ast.functions.resize(decls.functions);
+                    }
                 }
                 pendingdot = nullptr;
                 if (b->brokenat < 0) b->brokenat = (int)b->stmts.size();
@@ -2147,7 +2460,7 @@ struct Parser {
     // One statement of b, or its tail; returns false once the block has
     // ended (its `}` consumed, by a guard's rest of the block included).
     bool ParseStatement(Block *b) {
-        if (AtInline() || AtCheckfree() || AtDeprecated()) goto nestedfndecl;
+        if (AtAsync() || AtInline() || AtCheckfree() || AtDeprecated()) goto nestedfndecl;
         switch (lex.tok) {
             case T_LET: case T_VAR: case T_CONST: case T_REUSABLE: {
                 if (lex.tok == T_CONST && lex.PeekTok() == T_FOR) {
@@ -2163,7 +2476,10 @@ struct Parser {
                 b->stmts.push_back(vd);
                 return true;
             }
-            case T_RECURSIVE: case T_FN: case T_THREADFN: case T_EXTERN: case T_EXPORT:
+            case T_FN:
+                if (lex.PeekTok() == T_LPAREN || lex.PeekTok() == T_LBRACKET) break;
+                [[fallthrough]];
+            case T_RECURSIVE: case T_THREADFN: case T_EXTERN: case T_EXPORT:
             case T_SIMD: nestedfndecl:
                 b->stmts.push_back(ParseFnDecl(true));
                 return true;

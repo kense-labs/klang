@@ -24,3 +24,7 @@ fn main() {
 // lsp: error 20
 // lsp: hover 9:9 "let kept: T"
 // lsp: hover 15:9 "let s: type of a"
+
+fn never_callable<T>(value: T) -> fn[16]() -> T {
+    return own_callable<fn[16]() -> T>(fn[capture: T = value]() -> T { capture });
+}

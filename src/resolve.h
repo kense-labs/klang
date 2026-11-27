@@ -123,8 +123,10 @@ inline void ResolveTypeNames(Ast &ast) {
                 default: break;
             }
         };
-    for (auto st : ast.structs)
+    for (auto st : ast.structs) {
         for (auto &f : st->fields) unknownin(f.type, &st->generics);
+        unknownin(st->decorator_signature, nullptr);
+    }
     for (auto en : ast.enums)
         for (auto &v : en->variants)
             for (auto &f : v.fields) unknownin(f.type, &en->generics);
@@ -206,9 +208,11 @@ inline void ResolveTypeNames(Ast &ast) {
         } else {
             auto line = t->line;
             auto cq = t->cq;
+            auto owns = t->owns;
             *t = *target;
             t->line = line;
             t->cq = t->cq || cq;   // `const Alias` keeps its qualifier.
+            t->owns |= owns;
         }
         t->aliasuse = true;
     }

@@ -161,13 +161,16 @@ if(WIN32)
 endif()
 set(tcc1_objs "")
 file(MAKE_DIRECTORY "${TCC_BUILD}/obj")   # tcc writes objects, it does not create paths.
+# TinyCC records the source spelling in its object files. Compile from the
+# vendor root so two checkouts emit the same support objects.
 foreach(src IN LISTS tcc1_srcs)
     get_filename_component(obj "${src}" NAME_WE)
     set(obj "${TCC_BUILD}/obj/${obj}.o")
     add_custom_command(OUTPUT "${obj}"
         COMMAND "${TCC_BUILD}/tcc${CMAKE_EXECUTABLE_SUFFIX}" ${tcc1_flags}
-                -c "${TCC_SRC}/${src}" -o "${obj}"
+                -c "${src}" -o "${obj}"
         DEPENDS tcc_driver "${TCC_SRC}/${src}"
+        WORKING_DIRECTORY "${TCC_SRC}"
         COMMENT "tcc ${src}"
         VERBATIM)
     list(APPEND tcc1_objs "${obj}")
@@ -184,8 +187,9 @@ add_custom_command(OUTPUT "${tcc_libdir}/libtcc1.a"
 # runs its constructors, so it is deliberately not inside the archive.
 add_custom_command(OUTPUT "${tcc_libdir}/runmain.o"
     COMMAND "${TCC_BUILD}/tcc${CMAKE_EXECUTABLE_SUFFIX}" ${tcc1_flags}
-            -c "${TCC_SRC}/lib/runmain.c" -o "${tcc_libdir}/runmain.o"
+            -c lib/runmain.c -o "${tcc_libdir}/runmain.o"
     DEPENDS tcc_driver "${TCC_SRC}/lib/runmain.c"
+    WORKING_DIRECTORY "${TCC_SRC}"
     COMMENT "tcc lib/runmain.c"
     VERBATIM)
 

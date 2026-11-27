@@ -43,10 +43,275 @@ inline void WarnDeprecatedValue(TypeCheck &tc, Node *at, const vector<SFunction 
 // Calls: builtin members, builtins, UFCS, overload resolution with
 // generic inference (§7.1, §7.7), and case-function tag dispatch (§8.2).
 
+inline SFunction *ClosureEntry(TypeExpr *t) {
+    if (!t) return nullptr;
+    if (t->kind == TY_REF) t = t->ref->sub;
+    return t->kind == TY_STRUCT ? t->struc->st->closure : nullptr;
+}
+
+inline Val TypeCheck::ResolveClosureCall(Call *c, Node *callee, Val &value, bool entryreach,
+                                         TypeExpr *expected) {
+    if (RuntimeCallableType(value.type)) return CheckRuntimeCall(c, callee, value);
+    auto sf = ClosureEntry(value.type);
+    if (!sf) Error(c, "this expression cannot be called");
+    if (IsOptional(value.type)) Error(c, "optional closure must be narrowed before calling it");
+    if (!c->tyargs.empty()) Error(c, "a closure's type arguments are fixed when it is created");
+    callee->exprtype = value.type;
+    auto d = Is<Dot>(c->callee);
+    if (!d || d->name != kClosureInvoke) {
+        d = ast.New<Dot>(c->line, callee, kClosureInvoke);
+        c->callee = d;
+    }
+    vector<SFunction *> cands { sf };
+    return ResolveCall(c, cands, nullptr, "closure", &value, d->obj, entryreach, nullptr, expected);
+}
+
+inline Val TypeCheck::CheckClosureCall(Call *c, TypeExpr *expected) {
+    auto entryreach = reachable;
+    Val value;
+    {
+        PathScope ps(*this, c->callee);
+        Discovering discovering(*this, c);
+        value = CheckV(c->callee, nullptr);
+    }
+    return ResolveClosureCall(c, c->callee, value, entryreach, expected);
+}
+
+inline void TypeCheck::ValidateCallableSignature(TypeExpr *type, Line line) {
+    const auto types = CallableSignature(type);
+    if (auto storage = CallableStorage(type); storage &&
+        ArraySize(storage->arr) > INT64_MAX - 8)
+        Error(line, "owned callable byte capacity exceeds the fixed layout limit");
+    auto arity = (size_t)type->struc->st->callable_arity;
+    for (size_t i = 0; i < types.size(); ++i) {
+        auto t = types[i];
+        if (HasOpaque(t)) continue;
+        ValidateType(t, line, i < arity ? VT_PARAM : VT_RET);
+        if (ClassOf(t) == SC_FIXED && IsFlat(t) && !HoldsIndexT(t)) continue;
+        if (i < arity && (RuntimeCallableType(t) == t ||
+            (IsRefOrSlice(t) && t->cq && !IsRelRef(t) && ClassOf(PointeeOf(t)) == SC_FIXED &&
+             IsFlat(PointeeOf(t)) && !HoldsIndexT(t)))) continue;
+        Error(line, "a runtime callable needs fixed reference-free results and fixed values, read-only views or runtime callables as parameters");
+    }
+}
+
+inline int64_t TypeCheck::CallableEnvironmentBytes(TypeExpr *type) {
+    return FixedStorageBytes(type, [&](TypeArray *a) { return ArraySize(a); },
+                            [&](TypeExpr *p) { return ClassOf(p) == SC_RESIZABLE; },
+                            [&](TypeExpr *t) {
+        int64_t payload = 0;
+        for (const auto &run : FieldRuns(t))
+            payload = max(payload, PackedFieldBytes(*run.fields, *run.ftypes,
+                [&](TypeExpr *field) { return CallableEnvironmentBytes(field); }, [](int64_t) {}));
+        if (t->kind == TY_STRUCT) return max<int64_t>(1, payload);
+        if (t->kind == TY_ENUM)
+            return AddLayoutBytes(payload, GetEnumInst(t)->en->variants.size() <= 256 ? 1 : 2);
+        return payload;
+    });
+}
+
+inline bool TypeCheck::StableCallableCaptureRoot(const RootAlt &origin) {
+    auto owner = origin.root;
+    return origin.exact && (!owner || (!IsTemp(owner) && owner->type &&
+           ClassOf(owner->type) == SC_FIXED && !TaskSharedStorage(owner->type)));
+}
+
+inline bool TypeCheck::DirectCallableEnvironment(VarDef *owner, TypeExpr *environment) {
+    return owner && !IsTemp(owner) && owner->type &&
+           TypeEq(ast.PlainOf(owner->type), ast.PlainOf(environment));
+}
+
+inline Val TypeCheck::CheckCallableConversion(Call *c, TypeExpr *expected, bool owning) {
+    auto operation = owning ? "own_callable" : "borrow_callable";
+    if (c->args.size() != 1 || c->tyargs.size() > 1 || c->trailing)
+        Error(c, cat(operation, " takes one function or closure and one explicit or contextual signature"));
+    auto type = c->tyargs.empty() ? expected : Subst(c->tyargs[0]);
+    if (!type || RuntimeCallableType(type) != type || (CallableStorage(type) != nullptr) != owning)
+        Error(c, owning ? "own_callable needs a fn[bytes](…) signature" :
+                          "borrow_callable needs a fn&(…) signature");
+    ValidateCallableSignature(type, c->line);
+
+    auto source = CheckV(c->args[0], nullptr);
+    auto arity = (size_t)type->struc->st->callable_arity;
+    const auto types = CallableSignature(type);
+    auto formal = [&](TypeExpr *t) {
+        Val val;
+        val.type = t;
+        auto holder = HoldsPlainRef(t) && !IsRefOrSlice(t);
+        if (holder || IsRefOrSlice(t)) {
+            auto root = ast.NewVarDef();
+            root->name = "callable argument";
+            root->depth = CurDepth();
+            root->ownerspec = CurRealFrame().spec;
+            val.Set(root, false);
+            if (holder) {
+                val.contents = val.AsRoots();
+                val.holderset = true;
+            }
+        }
+        return val;
+    };
+    Roots roots;
+    TypeExpr *borrowed_environment = nullptr;
+    VarDef *holderfrom = nullptr;
+    bool byteview = false;
+    vector<Val> arguments;
+    vector<SFunction *> entries;
+    if (source.type == fntype && source.fnv.named && !source.fnv.env) {
+        entries = source.fnv.set ? *source.fnv.set : vector<SFunction *> { source.fnv.named };
+        erase_if(entries, [](SFunction *fn) { return fn->isextern || fn->isnested || fn->isthread || fn->async_body; });
+        roots.Set(nullptr, true);
+    } else {
+        auto environment = IsPlainRef(source.type) ? source.type->ref->sub : source.type;
+        auto entry = ClosureEntry(environment);
+        if (!entry || environment->kind != TY_STRUCT || HasOwnership(environment))
+            Error(c, cat(operation, " needs a named K function or a closure with copyable captures"));
+        if (IsOptional(source.type)) Error(c, "optional closure must be narrowed before borrowing it");
+        if (HoldsIndexT(environment))
+            Error(c, "runtime callable captures cannot carry array-bound index types");
+        if (HasRelRefT(environment, true))
+            Error(c, cat(owning ? "owned" : "borrowed", " callable captures cannot contain relative references"));
+        auto captures_refs = HoldsPlainRef(environment);
+        auto capture_error = [&] {
+            Error(c, cat(owning ? "owned" : "borrowed",
+                         " callable captures need read-only references to stable fixed storage"));
+        };
+        if (captures_refs && Reaches(environment, [&](TypeExpr *t) {
+            if (!IsRefOrSlice(t)) return false;
+            auto target = PointeeOf(t);
+            return !t->cq || ClassOf(target) != SC_FIXED || !IsFlat(target) || TaskSharedStorage(target);
+        })) capture_error();
+        if (owning) {
+            auto capacity = ArraySize(CallableStorage(type)->arr);
+            // An editor exemplar can have an opaque capture type. Its
+            // concrete specialization will check the actual byte width.
+            if (!HasOpaque(environment)) {
+                auto bytes = environment->struc->st->fields.empty() ? 0 : CallableEnvironmentBytes(environment);
+                if (bytes > capacity)
+                    Error(c, cat("closure captures need ", bytes, " bytes but the callable reserves ", capacity));
+            }
+            if (captures_refs) {
+                auto value = DecayRef(source);
+                roots = ContentsOf(value);
+                holderfrom = value.holderfrom;
+                byteview = value.byteview;
+                if (roots.unknown || roots.Any([&](const RootAlt &root) { return !StableCallableCaptureRoot(root); }))
+                    capture_error();
+            }
+        } else {
+            roots = source.AsRoots();
+            if ((!IsPlainRef(source.type) && (!source.lvalue || !Is<Ident>(c->args[0]))) ||
+                roots.None() || roots.unknown || roots.Any([&](const RootAlt &root) {
+                    return !root.exact || (!DirectCallableEnvironment(root.root, environment) &&
+                           !(IsPlainRef(source.type) && IsClassRoot(root.root)));
+                }))
+                Error(c, "borrow_callable needs a closure in stable storage");
+            if (!IsPlainRef(source.type)) c->args[0] = AutoRef(c->args[0], source, false);
+            borrowed_environment = environment;
+        }
+        arguments.push_back(formal(environment));
+        entries.push_back(entry);
+    }
+    c->args[0]->exprtype = source.type;
+    const auto hidden = arguments.size();
+    for (size_t i = 0; i < arity; ++i) arguments.push_back(formal(types[i]));
+    auto matchsite = ast.New<Call>(c->line, c->callee);
+    vector<MatchInfo> matches;
+    auto same = [&](TypeExpr *a, TypeExpr *b) { return TypeEq(a, b); };
+    for (auto entry : entries) {
+        MatchInfo match;
+        match.sf = entry;
+        string why;
+        if (TryMatch(entry, matchsite, arguments, match, why, false) &&
+            match.paramtypes.size() == arguments.size() &&
+            equal(match.paramtypes.begin() + hidden, match.paramtypes.end(), types.begin(), same))
+            matches.push_back(std::move(match));
+    }
+    auto form = owning ? "owned" : "borrowed";
+    if (matches.empty()) Error(c, cat("target parameters do not match the ", form, " callable signature"));
+    if (matches.size() > 1) Error(c, cat("ambiguous target for the ", form, " callable signature"));
+    auto target = GetOrCreateSpec(matches[0], arguments, c);
+    if (!target->retsknown || target->inprogress || target->rets.size() != types.size() - arity ||
+        !equal(target->rets.begin(), target->rets.end(), types.begin() + arity, same))
+        Error(c, cat("target results do not match the ", form, " callable signature"));
+    const auto &effects = target->record;
+    vector<VarDef *> outside;
+    auto pending = NamedOutside(target, outside, true);
+    auto external = pending || !target->envreads.empty() || any_of(outside.begin(), outside.end(), [&](VarDef *v) {
+        return !v->isglobal || v->isvar || !v->type || !IsFlat(v->type) ||
+               (v->type->kind != TY_INT && v->type->kind != TY_FLT && v->type->kind != TY_BOOL);
+    });
+    // A holder can be initialized before its local declaration has a
+    // type. A store recorded at that point may now name a typed local.
+    auto external_store = any_of(effects.classevents.begin(), effects.classevents.end(), [&](const StoreEvent &store) {
+        if (store.bound || store.slot) return true;
+        auto v = store.container;
+        return !IsTemp(v) && (v->isglobal || v->ownerspec != target || !v->type || IsRefOrSlice(v->type));
+    });
+    if (external || !effects.shrinkexternals.empty() || !effects.shrinkexternalbounds.empty() ||
+        !effects.shrinkparams.empty() || !effects.shrinkparambounds.empty() ||
+        !effects.growexternals.empty() || !effects.growparams.empty() || !effects.reboundoptionals.empty() ||
+        external_store || !effects.relativestores.empty() || !target->needs.empty())
+        Error(c, cat(owning ? "an " : "a ", form,
+                     " callable cannot depend on external mutable bindings or change borrowed storage layout"));
+    if (borrowed_environment && exemplarbase < 0)
+        for (const auto &origin : roots.alts)
+            if (IsClassRoot(origin.root) || HoldsPlainRef(borrowed_environment))
+                borrowed_callable_environments.push_back({ origin.root, borrowed_environment, c->line });
+    c->callable_target = target;
+    c->rettypes = { type };
+    Val output;
+    output.type = type;
+    output.Set(TempRoot(), false);
+    output.contents = roots;
+    output.holderfrom = holderfrom;
+    output.byteview = byteview;
+    output.holderset = true;
+    lastcallrets = { output };
+    return output;
+}
+
+inline Val TypeCheck::CheckRuntimeCall(Call *c, Node *callee, const Val &value) {
+    if (IsOptional(value.type)) Error(c, "optional callable must be narrowed before calling it");
+    if (!c->tyargs.empty() || c->trailing)
+        Error(c, "a runtime callable takes its declared parameters");
+    auto type = RuntimeCallableType(value.type);
+    auto arity = (size_t)type->struc->st->callable_arity;
+    if (c->args.size() != arity)
+        Error(c, cat("runtime callable expects ", arity, " arguments"));
+    ValidateCallableSignature(type, c->line);
+    CheckWaitingArg(c, callee, reachable);
+    if (callee != c->callee) c->callee = callee;
+    callee->exprtype = value.type;
+    auto signature = CallableSignature(type);
+    for (size_t i = 0; i < arity; ++i) CheckArg(c->args[i], signature[i]);
+    c->callable_call = type;
+    c->rettypes.assign(signature.begin() + arity, signature.end());
+    lastcallrets.clear();
+    for (auto t : c->rettypes) {
+        Val result;
+        result.type = t;
+        lastcallrets.push_back(result);
+    }
+    return lastcallrets.empty() ? VoidVal() : lastcallrets[0];
+}
+
 inline Val TypeCheck::CheckCall(Call *c, TypeExpr *expected) {
     // A node may be re-checked in argument phase 2; reset annotations.
     c->spec = nullptr;
     c->dispatch.clear();
+    c->native_task = false;
+    c->callable_target = nullptr;
+    c->callable_call = nullptr;
+    c->decorator_value = nullptr;
+    c->task_scope = false;
+    c->scope_tasks.clear();
+    c->scope_loan_owners.clear();
+    c->scope_slot_loans.clear();
+    c->task_slot_loans.clear();
+    c->scope_resize_owners.clear();
+    c->scope_operation = TaskScopeOperation::None;
+    c->scope_controller = nullptr;
     c->builtin = -1;
     c->rettypes.clear();
     c->fmtspecs.clear();
@@ -76,19 +341,102 @@ inline Val TypeCheck::CheckCall(Call *c, TypeExpr *expected) {
     Saved<bool> forward(callforwarding, c == multidestnode);
     DestScope ds(*this, Dest {});
     SlotScope ss(*this, false);
+    if (c->task_await != TaskAwait::None) {
+        auto fi = RealFrameIndex();
+        if (!frames[fi].sf || !frames[fi].sf->task_flow || fi != (int)frames.size() - 1 || InDeferBody())
+            Error(c, "await must suspend the async body itself");
+        Val value;
+        if (c->task_await == TaskAwait::Child) {
+            value = CheckUfcsCall(c, Is<Dot>(c->callee), expected);
+        } else if (c->args.empty()) {
+            value = VoidVal();
+        } else {
+            value = CheckValue(c->args[0], expected);
+            if (ClassOf(value.type) != SC_FIXED || !IsFlat(value.type))
+                Error(c, "yield_now needs a fixed-size value without references");
+            c->rettypes = { value.type };
+        }
+        c->task_values.clear();
+        c->task_dead.clear();
+        c->task_loan_roots.clear();
+        c->task_shared_owners.clear();
+        for (auto i = frames[fi].varbase; i < (int)vars.size(); ++i) {
+            auto v = vars[i];
+            if (!v->assigned || v->isglobal || v->ownerspec != frames[fi].spec ||
+                v->type->kind == TY_FN || v->name == kClosureEnv)
+                continue;
+            c->task_values.push_back(v);
+            if (IsRefOrSlice(v->type) && !IsRelRef(v->type))
+                c->task_loan_roots.emplace_back(v, RefProvOf(v).AsRoots());
+            else if (TaskHolderStorage(v->type))
+                c->task_loan_roots.emplace_back(v, v->contents);
+            for (auto component : v->components) {
+                if (!component) continue;
+                c->task_values.push_back(component);
+                auto t = component->type;
+                if (TaskHolderStorage(t)) c->task_loan_roots.emplace_back(component, component->contents);
+                if (!IsRefOrSlice(t) || IsRelRef(t)) continue;
+                LVal slot;
+                // An initialized optional slot with no possible stored
+                // roots contains null. The general read-back fallback
+                // enumerates possible owners for unknown containers.
+                if (IsOptional(t) && component->contents.None() && !component->contents.unknown) {
+                    c->task_loan_roots.emplace_back(component, Roots {});
+                    continue;
+                }
+                slot.type = t;
+                slot.Set(component, true);
+                slot.isslot = true;
+                ReadBackLVal(slot);
+                c->task_loan_roots.emplace_back(component, slot.AsRoots());
+            }
+        }
+        // The scheduler can run another task before this body resumes.
+        cur.kills.clear();
+        for (auto global : ast.globals)
+            for (auto v : global->defs)
+                if (v->isvar) v->narrowed = nullptr;
+        return value;
+    }
+    if (c->task_stage) {
+        vector<SFunction *> cands { c->task_stage };
+        Node *receiver = nullptr;
+        return ResolveCall(c, cands, nullptr, c->task_stage->name, nullptr, receiver,
+                           reachable, nullptr, expected);
+    }
+    if (c->decorator_forward) return CheckDecoratorContinuation(c, DecoratorFrame());
     if (auto d = Is<Dot>(c->callee)) return CheckUfcsCall(c, d, expected);
     if (auto id = Is<Ident>(c->callee)) return CheckNamedCall(c, id, expected);
-    Error(c, "this expression cannot be called");
+    return CheckClosureCall(c, expected);
 }
 
 inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
+    if (auto sf = id->boundfn) {
+        id->fnref = sf;
+        vector<SFunction *> target { sf };
+        Node *receiver = nullptr;
+        return ResolveCall(c, target, nullptr, id->name, nullptr, receiver, reachable, nullptr, expected);
+    }
+    if (id->name == "next") {
+        auto frame = DecoratorFrame();
+        if (frame && frame->sf->decorator_layer) {
+            if (frame->sf->task_stage)
+                Error(c, "an async decorator continuation is awaited as await next()");
+            if (!c->args.empty() || !c->tyargs.empty() || c->trailing)
+                Error(c, "a decorator continuation is called as next() and forwards the current arguments");
+            c->decorator_forward = true;
+            return CheckDecoratorContinuation(c, frame);
+        }
+    }
+    if (id->name == kTaskAwait)
+        Error(c, "await needs a statement or value-binding position in an async fn");
     if (!id->expansionerror.empty()) Error(id, string(id->expansionerror));
-    // A variable in scope hides the functions of its name (§11.1). A global
-    // one does not: no variable can be called, so the call names the
-    // functions the namespaces declare, which a global variable of the same
-    // name is declared beside.
-    if (auto vd = LookupVar(id->name, id->ns); vd && !vd->isglobal)
+    // Local variables hide functions of the same name. Namespace functions
+    // and builtins still take precedence over the same-named global variable.
+    if (auto vd = LookupVar(id->name, id->ns); vd && !vd->isglobal) {
+        if (ClosureEntry(vd->type) || RuntimeCallableType(vd->type)) return CheckClosureCall(c, expected);
         Error(c, cat(id->name, " is a variable, not a function"));
+    }
     const FnValBind *fb;
     if (auto t = LookupTypeParam(id->name, fb))
         Error(c, cat("type parameter ", id->name, " is bound to the type ", TypeStr(t),
@@ -106,6 +454,16 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
     // The builtins are global: `::f` reaches one past a namespaced f, and
     // `ns::f` never names one.
     auto bd = LookupBuiltin(GlobalLeaf(id->name));
+    if (cands.empty() && GlobalLeaf(id->name) == "task_scope")
+        return CheckTaskScope(c, expected);
+    if (cands.empty() && GlobalLeaf(id->name) == "native_task")
+        return CheckNativeTask(c);
+    if (cands.empty() && GlobalLeaf(id->name) == "borrow_callable")
+        return CheckCallableConversion(c, expected, false);
+    if (cands.empty() && GlobalLeaf(id->name) == "own_callable")
+        return CheckCallableConversion(c, expected, true);
+    if (cands.empty() && GlobalLeaf(id->name) == "decorator_metadata")
+        return CheckDecoratorMetadata(c);
     if (!cands.empty()) {
         Node *nopre = nullptr;
         // A user function set sharing a builtin's name (a `format`
@@ -123,8 +481,10 @@ inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
         return CheckBuiltin(c, *bd, c->args, nullptr);
     }
     if (!bd) {
-        if (LookupVar(id->name, id->ns))
+        if (auto vd = LookupVar(id->name, id->ns)) {
+            if (ClosureEntry(vd->type) || RuntimeCallableType(vd->type)) return CheckClosureCall(c, expected);
             Error(c, cat(id->name, " is a variable, not a function"));
+        }
         Error(c, cat("unknown function: ", id->name));
     }
     if (bd->flags & BF_PROPERTY)
@@ -199,8 +559,264 @@ inline FnValBind TypeCheck::LocalFnValue(const vector<SFunction *> &fns, FnSpec 
     return fb;
 }
 
+inline Val TypeCheck::CheckNativeTask(Call *c) {
+    if (c->tyargs.size() != 1 || c->args.size() != 1 || c->trailing)
+        Error(c, "native_task<T> takes one result type and one owned native task handle");
+    auto result = ValueType(Subst(c->tyargs[0]));
+    ValidateType(result, c->line, VT_RET);
+    string why;
+    if (HasOwnership(result) || !ExternValueOk(result, why))
+        Error(c, cat("a native task needs a plain C-compatible result", why.empty() ? "" : cat(": ", why)));
+    auto handle = CheckValue(c->args[0], nullptr).type;
+    if (!handle->owns || handle->kind != TY_STRUCT)
+        Error(c->args[0], "native_task needs an owned handle record containing one u64 token");
+    auto storage = GetStructInst(handle);
+    if (storage->ftypes.size() != 1 || !storage->ftypes[0] ||
+        storage->ftypes[0]->kind != TY_INT || storage->ftypes[0]->intstorage != IS_U64 ||
+        storage->ftypes[0]->ix)
+        Error(c->args[0], "native_task needs an owned handle record containing one u64 token");
+
+    SStruct *record = nullptr;
+    for (auto st : ast.structs)
+        if (st->task_join && st->task_join->task_foreign && TypeEq(st->task_join->rets[0], result)) {
+            record = st;
+            break;
+        }
+    if (!record) {
+        record = new SStruct();
+        record->name = record->qname = ast.Intern(cat("task#native#", ast.structs.size()));
+        record->line = c->line;
+        record->task_frame = true;
+        record->fields.push_back({ "token", c->line, {}, ast.inttypes[IS_U64] });
+        ast.structs.push_back(record);
+        auto join = new SFunction();
+        join->name = join->qname = ast.Intern(cat(record->name, "#join"));
+        join->line = c->line;
+        join->task_join = join->task_foreign = true;
+        join->params.push_back({ "task#native", c->line, ast.StructOf(record, {}, c->line) });
+        join->rets = { result };
+        join->has_rets = true;
+        join->body = ast.New<Block>(c->line);
+        record->task_join = join;
+        ast.functions.push_back(join);
+    }
+    c->native_task = true;
+    Val out;
+    out.type = ast.StructOf(record, {}, c->line);
+    GetStructInst(out.type);
+    c->rettypes = { out.type };
+    return out;
+}
+
+inline bool TypeCheck::TaskResizeOverlaps(VarDef *owner, const Roots &roots) {
+    return roots.unknown || roots.Any([&](const RootAlt &a) {
+        return (owner->componentowner && owner->componentowner == a.root) ||
+               MayAliasRoots(owner, true, a.root, a.exact, owner->ownerspec) != AL_NO;
+    });
+}
+
+inline Roots TypeCheck::LocalTaskReferents(Node *at, TypeExpr *type, const Roots &roots) {
+    auto outer = TaskInputHolderRef(type) ? PointeeOf(type) : nullptr;
+    auto spec = CurRealFrame().spec;
+    vector<VarDef *> pending;
+    set<VarDef *> seen;
+    auto follow = [&](const Roots &edges, TypeExpr *expected) {
+        for (const auto &edge : edges.alts) {
+            if (TaskInputLifetime(edge.root, spec)) continue;
+            auto owner = TaskBorrowOwner(at, edge, "a task holder needs a stable referent owner", expected, true);
+            if (owner && !owner->isglobal && TaskHolderStorage(owner->type) && seen.insert(owner).second)
+                pending.push_back(owner);
+        }
+    };
+    follow(roots, outer);
+    Roots referents;
+    for (size_t i = 0; i < pending.size(); ++i) {
+        const auto &contents = pending[i]->contents;
+        referents.Add(contents);
+        follow(contents, nullptr);
+    }
+    return referents;
+}
+
+inline vector<VarDef *> TypeCheck::CheckTaskBorrowUse(Node *at, Node *operand, TaskBorrowUse use,
+                                                   vector<VarDef *> *resize_owners) {
+    auto task = Is<Call>(operand);
+    if (!task || !task->spec || !task->spec->sf->async_body) return {};
+    task->task_borrow_consumed = true;
+    vector<VarDef *> owners;
+    auto scoped = use == TaskBorrowUse::Scope;
+    auto site = Is<Call>(at);
+    // A decorator continuation forwards the unchanged input list. Its
+    // caller already checked disjointness before the task could start.
+    auto forwarded_inputs = site && site->decorator_await;
+    auto message = scoped ? "a scoped task argument needs stable storage or a resizable array owner" :
+                            "a borrowed task argument needs a stable storage owner";
+    const auto &arguments = task->task_arg_roots;
+    for (const auto &input : arguments) {
+        const auto &[arg, type, roots, field] = input;
+        auto resize = TaskResizeInput(type);
+        auto holder = TaskInputHolderRef(type) ? PointeeOf(type) : nullptr;
+        // For other awaited inputs the liveness pass checks and parks the
+        // backing storage after finally evaluating all arguments.
+        if (!resize && use == TaskBorrowUse::Await) continue;
+        auto holder_contents = TaskInputHolder(type);
+        if (roots.unknown || (roots.None() && IsRefOrSlice(type) && !IsOptional(type))) Error(arg, message);
+        for (const auto &origin : roots.alts) {
+            if (resize) {
+                if (!origin.root && IsOptional(type)) continue;
+                auto owner = origin.root;
+                auto spec = CurRealFrame().spec;
+                auto array = PointeeOf(type);
+                auto need = "a mutable task input needs its own local array owner";
+                if (!origin.exact || !owner || owner->isglobal || owner->ownerspec != spec ||
+                    !owner->type || !TypeEq(owner->type, array) || owner->reusable ||
+                    !TaskResidentStorage(owner->type))
+                    Error(arg, need);
+                if (scoped && owner->task_input_root)
+                    Error(arg, "forward a writable task input with direct await or join");
+                if (!forwarded_inputs)
+                    for (const auto &other : arguments) {
+                        if (&other == &input) continue;
+                        if (TaskResizeOverlaps(owner, std::get<2>(other)))
+                            Error(std::get<0>(other), "another task argument may alias the mutable array");
+                    }
+                if (array->arr->akind != A_LIMITED)
+                    ShrinkThrough(at, "resize through a task borrow of", string(owner->name),
+                                  RootsOf(owner), array);
+                NoteGrow(at, RootsOf(owner), cat("resize through a task borrow of ", owner->name), array);
+                if (resize_owners) {
+                    RecordTaskLoan(*resize_owners, owner);
+                    ast.has_task_resize_loans = true;
+                }
+                continue;
+            }
+            if (TaskInputLifetime(origin.root, CurRealFrame().spec)) {
+                if (scoped && origin.root->task_input_root)
+                    Error(arg, "a scoped task needs a shared array loan");
+                continue;
+            }
+            auto owner = TaskBorrowOwner(arg, origin, message, holder, holder_contents);
+            if (!owner) continue;
+            auto local = owner->componentowner ? owner->componentowner : owner;
+            if (!owner->isglobal && find(vars.begin(), vars.end(), local) == vars.end())
+                Error(arg, message);
+            auto seal = holder || (holder_contents && TaskHolderStorage(owner->type));
+            if (seal || (TaskSharedStorage(owner->type) && (scoped || owner->isglobal))) {
+                if (!owner->isglobal && owner->ownerspec != CurRealFrame().spec) Error(arg, message);
+                RecordTaskLoan(owners, owner);
+            } else if (scoped && !TaskStableLayout(owner->type)) Error(arg, message);
+        }
+    }
+    return owners;
+}
+
+inline Val TypeCheck::CheckTaskScope(Call *c, TypeExpr *expected) {
+    auto block_syntax = c->trailing;
+    if (!c->tyargs.empty() || !block_syntax ||
+        (block_syntax->explicit_params && (block_syntax->params.size() != 1 ||
+         block_syntax->params[0].type || block_syntax->params[0].isvar)))
+        Error(c, "task_scope takes tasks and a block with one untyped immutable controller");
+    for (auto &arg : c->args) {
+        auto value = CheckValue(arg, nullptr);
+        auto type = value.type;
+        if (type->kind != TY_STRUCT || !type->struc->st->task_join)
+            Error(arg, "task_scope requires an owned task constructed by an async fn");
+        c->scope_resize_owners.emplace_back();
+        c->scope_loan_owners.push_back(CheckTaskBorrowUse(c, arg, TaskBorrowUse::Scope,
+                                                        &c->scope_resize_owners.back()));
+        MatchInfo match;
+        match.sf = type->struc->st->task_join;
+        match.paramtypes = { type };
+        match.nwritten = 1;
+        vector<Val> values { value };
+        c->scope_tasks.push_back(GetOrCreateSpec(match, values, arg));
+    }
+    for (size_t i = 0; i < c->args.size(); ++i) {
+        for (auto owner : c->scope_resize_owners[i]) {
+            for (size_t j = 0; j < c->args.size(); ++j) {
+                if (i == j) continue;
+                if (auto peer = Is<Call>(c->args[j]))
+                    for (const auto &[arg, type, roots, field] : peer->task_arg_roots)
+                        if (TaskResizeOverlaps(owner, roots))
+                            Error(arg, "another scoped task may alias the mutable array");
+            }
+        }
+    }
+    c->task_scope = true;
+    // Use the ordinary trailing-block scope and result checks. The marker
+    // binds a name for the controller but never receives runtime storage.
+    Saved<vector<Node *>> operands(c->args, { ast.New<IntLit>(c->line, 0) });
+    FnValBind block;
+    block.fv = c->trailing;
+    block.env = frames.back().lexspec;
+    auto result = CheckFunValCall(c, block, expected);
+    cur.kills.clear();  // An implicit shutdown may execute a task's cleanup.
+    return result;
+}
+
+inline Val TypeCheck::CheckTaskScopeOperation(Call *c, Dot *member, VarDef *controller) {
+    if (controller->ownerspec != CurRealFrame().spec)
+        Error(member, "a task scope controller cannot be captured by another function");
+    if (!c->tyargs.empty() || c->trailing) Error(c, "a task scope operation takes no type arguments or block");
+    const auto &tasks = controller->task_scope->scope_tasks;
+    if (member->name == "step" || member->name == "wait") {
+        if (!c->args.empty()) Error(c, "task scope step and wait take no arguments");
+        c->scope_operation = member->name == "step" ? TaskScopeOperation::Step : TaskScopeOperation::Wait;
+    } else if (member->name == "wait_for") {
+        if (c->args.size() != 1) Error(c, "task scope wait_for takes one millisecond duration");
+        auto duration = CheckValue(c->args[0], ast.inttypes[IS_I64]);
+        if (duration.type->kind != TY_INT || !FitsAt(duration, ast.inttypes[IS_I64]))
+            Error(c->args[0], "task scope wait_for requires an i64 millisecond duration");
+        c->scope_operation = TaskScopeOperation::WaitFor;
+    } else if (member->name == "join" || member->name == "cancel" || member->name == "finished") {
+        if (c->args.size() != 1) Error(c, "this task scope operation takes one constant task index");
+        ConstNames(c->args[0], "task index");
+        auto index = ConstIntOrError(c->args[0], "task index");
+        if (index < 0 || (uint64_t)index >= tasks.size()) Error(c->args[0], "task index is outside this scope");
+        c->scope_slot = (size_t)index;
+        if (member->name == "join") c->scope_operation = TaskScopeOperation::Join;
+        else if (member->name == "cancel") c->scope_operation = TaskScopeOperation::Cancel;
+        else c->scope_operation = TaskScopeOperation::Finished;
+    } else {
+        Error(member, "a task scope controller provides step, wait, wait_for, finished, join and cancel");
+    }
+    c->scope_controller = controller;
+    Is<Ident>(member->obj)->vdef = controller;
+    member->obj->exprtype = controller->type;
+    if (c->scope_operation == TaskScopeOperation::Finished) {
+        c->rettypes = { ast.booltype };
+        Val result;
+        result.type = ast.booltype;
+        return result;
+    }
+
+    // A scheduler step may run any member, including a peer while join or
+    // cancellation waits for its target. Apply all their possible effects.
+    for (auto task : tasks) {
+        Val payload;
+        payload.type = task->argtypes[0];
+        vector<Val> values { payload };
+        vector<Node *> nodes { member->obj };
+        ApplyCalleeShrinks(c, task, values, "task scope", nodes);
+        ApplyCalleeGrows(c, task, values, "task scope");
+        ApplyCalleeRebinds(task);
+    }
+    cur.kills.clear();
+    Val result = VoidVal();
+    if (c->scope_operation == TaskScopeOperation::Step || c->scope_operation == TaskScopeOperation::Wait ||
+        c->scope_operation == TaskScopeOperation::WaitFor)
+        result.type = ast.booltype;
+    if (c->scope_operation == TaskScopeOperation::Join && !tasks[c->scope_slot]->rets.empty())
+        result.type = tasks[c->scope_slot]->rets[0];
+    if (result.type != ast.voidtype) c->rettypes = { result.type };
+    return result;
+}
+
 inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
     if (d->accessorowner) Error(d, "const for field accessor is not callable");
+    if (auto id = Is<Ident>(d->obj))
+        if (auto controller = LookupVar(id->name, id->ns); controller && controller->task_scope)
+            return CheckTaskScopeOperation(c, d, controller);
     auto entryreach = reachable;
     Val ov;
     {
@@ -209,9 +825,20 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
         ov = CheckV(d->obj, nullptr);
     }
     d->obj->exprtype = ov.type;
+    if (d->name == kClosureInvoke) return ResolveClosureCall(c, d->obj, ov, entryreach, expected);
     auto rt = ov.type;
     auto optional = IsOptional(rt);
     if (rt->kind == TY_REF) rt = rt->ref->sub;
+    auto join = rt->kind == TY_STRUCT ? rt->struc->st->task_join : nullptr;
+    if (d->name == kTaskAwaitResult && (!join || ov.type != rt))
+        Error(c, "await needs an owned task constructed by an async fn");
+    if (join && (d->name == "join" || d->name == kTaskAwaitResult)) {
+        vector<SFunction *> cands { join };
+        auto result = ResolveCall(c, cands, nullptr, d->name, &ov, d->obj, entryreach, nullptr, expected);
+        c->task_shared_owners = CheckTaskBorrowUse(
+            c, d->obj, c->task_await == TaskAwait::Child ? TaskBorrowUse::Await : TaskBorrowUse::Join);
+        return result;
+    }
     // Built-in members first (§7.1), then free functions, then the
     // remaining builtins (a.f(b) is exactly f(a, b)). Only a member needs
     // an optional receiver narrowed first: the others take it as f(a, b)
@@ -231,10 +858,17 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
         c->SetArgNodes(argnodes);
         return v;
     }
-    if (rt->kind == TY_STRUCT) {
-        for (auto &f : rt->struc->st->fields)
-            if (!f.ispad && f.name == d->name)
+    if (rt->kind == TY_STRUCT && !rt->struc->st->closure) {
+        const auto &fields = rt->struc->st->fields;
+        for (size_t i = 0; i < fields.size(); i++) {
+            if (fields[i].ispad || fields[i].name != d->name) continue;
+            auto field = GetStructInst(rt)->ftypes[i];
+            if (!ClosureEntry(field) && !RuntimeCallableType(field))
                 Error(c, cat("field ", d->name, " is not callable"));
+            auto value = d->CheckValueMember(*this, std::move(ov));
+            RecordVal(d, value);
+            return ResolveClosureCall(c, d, value, entryreach, expected);
+        }
     }
     // Past the variables, which a member call passes over, the name resolves
     // as a call's does, with the receiver type's namespace ahead of the
@@ -369,7 +1003,8 @@ inline void TypeCheck::AddParamDefaults(Call *c, MatchInfo &best, vector<Node *>
 // each against its concrete parameter type (adapting literals etc.).
 inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *env,
                                   string_view name, Val *preval, Node *&prenode, bool entryreach,
-                                  bool *nomatch, TypeExpr *expected) {
+                                  bool *nomatch, TypeExpr *expected, FnSpec *forwarded,
+                                  bool signature_only) {
     vector<Node *> argnodes;
     vector<Val> argvals;
     argnodes.reserve(c->args.size() + 1);
@@ -407,6 +1042,16 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     for (auto sf : cands)
         if (sf->brokensig) throw Abandoned {};
     MatchInfo best;
+    if (forwarded) {
+        assert(cands.size() == 1 && argvals.size() == forwarded->argtypes.size());
+        best.sf = cands[0];
+        best.paramtypes = forwarded->argtypes;
+        best.bindings = forwarded->bindings;
+        best.fnvals = forwarded->fnvals;
+        best.litparams = forwarded->litparams;
+        best.nwritten = argvals.size();
+        return FinishMatchedCall(c, cands, name, best, argnodes, argvals, nullptr, entryreach, signature_only);
+    }
     vector<MatchInfo> tied, converting;
     string failures;
     MatchCandidates(c, cands, env, argvals, tied, converting, &failures, name);
@@ -478,6 +1123,12 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
         denv = ParamDefaultEnv(best);
         AddParamDefaults(c, best, argnodes, argvals, prenode != nullptr, denv);
     }
+    return FinishMatchedCall(c, cands, name, best, argnodes, argvals, denv, entryreach);
+}
+
+inline Val TypeCheck::FinishMatchedCall(Call *c, vector<SFunction *> &cands, string_view name,
+                                         MatchInfo &best, vector<Node *> &argnodes, vector<Val> &argvals,
+                                         FnSpec *denv, bool entryreach, bool signature_only) {
     LoadSliceArgs(argvals, best.paramtypes);
     RefSliceArgs(argvals, best.paramtypes, c->line);
     {
@@ -485,6 +1136,10 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
         BindBranchesByRef(argnodes, argvals, best.paramtypes, best.sf, -1, best.nwritten);
     }
     auto spec = GetOrCreateSpec(best, argvals, c);
+    if (signature_only) {
+        c->spec = spec;
+        return VoidVal();
+    }
     ApplyCalleeShrinks(c, spec, argvals, name, argnodes);
     ApplyCalleeGrows(c, spec, argvals, name);
     // Phase 2 starts at the call's entry again: a later argument may have
@@ -527,6 +1182,9 @@ inline void TypeCheck::RecheckArgs(Call *c, vector<SFunction *> &cands, MatchInf
     if (waits) phase2waits.insert(c);
     else reachable = entryreach;
     DestScope ds(*this, Dest {});
+    auto stage = CurRealFrame().sf;
+    auto track_loans = !waits && (mi.sf->async_body || (stage && stage->task_flow && ContainsTaskAwait(c)));
+    c->task_arg_roots.clear();
     for (size_t i = 0; i < mi.paramtypes.size(); i++) {
         if ((int)i == skip) {
             atskip();
@@ -544,9 +1202,18 @@ inline void TypeCheck::RecheckArgs(Call *c, vector<SFunction *> &cands, MatchInf
             Warn(argnodes[i], cat("redundant &: ", ExprStr(Is<Unary>(argnodes[i])->child),
                                   " is passed by reference without it (§4.1)"));
         if (!waits) {
-            if (i < mi.nwritten) CheckArg(argnodes[i], mi.paramtypes[i]);
+            Val value;
+            if (i < mi.nwritten) value = CheckArg(argnodes[i], p.borrows ? ast.WithOwnership(mi.paramtypes[i], true)
+                                                                        : mi.paramtypes[i]);
             else InParamDefault(c, mi, denv, i,
-                                [&]() { CheckArg(argnodes[i], mi.paramtypes[i]); });
+                                [&]() { value = CheckArg(argnodes[i], mi.paramtypes[i]); });
+            if (track_loans) {
+                auto type = mi.paramtypes[i];
+                if (IsRefOrSlice(type) && !IsRelRef(type))
+                    c->task_arg_roots.emplace_back(argnodes[i], type, value.AsRoots(), (int)i);
+                else if (TaskInputHolder(type))
+                    c->task_arg_roots.emplace_back(argnodes[i], type, ContentsOf(value), (int)i);
+            }
         }
         // A by-value non-fixed-size parameter takes a copy of its
         // argument (§4.1), a temporary of the statement whatever the
@@ -555,6 +1222,20 @@ inline void TypeCheck::RecheckArgs(Call *c, vector<SFunction *> &cands, MatchInf
         // The call's own operands are what later arguments' checks see
         // held (HeldOperands), so a rebound one replaces its original now.
         c->SetArgNode(i, argnodes[i]);
+    }
+    if (track_loans && mi.sf->async_body) {
+        // Taking the address samples the holder's location. Its contents
+        // can still be changed by later arguments before the task starts.
+        auto count = c->task_arg_roots.size();
+        for (size_t i = 0; i < count; ++i) {
+            const auto &[arg, type, roots, field] = c->task_arg_roots[i];
+            auto byref = TaskInputHolderRef(type);
+            if (!byref && !TaskInputHolder(type)) continue;
+            auto referents = LocalTaskReferents(arg, type, roots);
+            if (!referents.None() || referents.unknown)
+                c->task_arg_roots.emplace_back(static_cast<Node *>(arg), byref ? PointeeOf(type) : type,
+                                               std::move(referents), -2 - field);
+        }
     }
 }
 
@@ -768,6 +1449,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
                                 string &why, bool defaults) {
     auto P = sf->params.size();
     auto N = argvals.size();
+    auto hidden = (int64_t)(sf->closure_body != nullptr);
     auto R = P;   // The parameters without a default, which every call gives.
     if (defaults)
         for (R = 0; R < P && !sf->params[R].defaultval;) R++;
@@ -777,8 +1459,8 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
     auto K = std::min(N, P);
     while (K > R && argvals[K - 1].type == fntype) K--;
     if (K < R) {
-        why = cat("too few arguments: ", (int64_t)K, " given, ", R < P ? "at least " : "",
-                  (int64_t)R, " needed");
+        why = cat("too few arguments: ", (int64_t)K - hidden, " given, ",
+                  R < P ? "at least " : "", (int64_t)R - hidden, " needed");
         return false;
     }
     for (auto i = K; i < N; i++) {
@@ -863,12 +1545,20 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
                 mi.tier = std::max(mi.tier, 1);
                 continue;
             }
-            auto ct = UnifyArg(p.type, av, mi.bindings, mi.tier);
+            TypeExpr *ct = nullptr;
+            if (!p.borrows) {
+                ct = UnifyArg(p.type, av, mi.bindings, mi.tier);
+            } else if (av.type->owns) {
+                auto input = av;
+                input.type = ast.WithOwnership(av.type, false);
+                ct = UnifyArg(p.type, input, mi.bindings, mi.tier);
+            }
             if (!ct) {
                 auto st = SubstOwn(p.type, mi.bindings);
                 auto at = st && st->kind == TY_REF ? StorageType(av) : av.type;
-                why = cat("argument ", (int64_t)i + 1, ": cannot pass ", TypeStr(at), " as ",
-                          TypeStr(p.type));
+                auto arg = i == 0 && hidden ? string("closure environment")
+                                            : cat("argument ", (int64_t)i + 1 - hidden);
+                why = cat(arg, ": cannot pass ", TypeStr(at), " as ", TypeStr(p.type));
                 string litwhy;
                 auto tofloat = false;
                 if (av.litelems && st && !LitElemsAt(av, st, tofloat, &litwhy) &&
@@ -2658,6 +3348,10 @@ inline void TypeCheck::AddNeed(FnSpec *s, FnSpec *t) {
 // A fixed-size value C takes by value (§7.10): a scalar, bool, or a flat
 // fixed struct or array (packed, no references).
 inline bool TypeCheck::ExternValueOk(TypeExpr *t, string &why) {
+    if (t->kind == TY_STRUCT && t->struc->st->closure) {
+        why = "closures have a private calling convention";
+        return false;
+    }
     if (HoldsIndexT(t)) {
         why = "C code is not checked against the array an index type names (§3.11)";
         return false;
@@ -2671,7 +3365,7 @@ inline bool TypeCheck::ExternValueOk(TypeExpr *t, string &why) {
         default: break;
     }
     if (ClassOf(t) != SC_FIXED) { why = "only fixed-size values cross by value"; return false; }
-    if (!IsFlat(t)) { why = "values holding references do not cross"; return false; }
+    if (!IsFlat(ast.WithOwnership(t, false))) { why = "values holding references do not cross"; return false; }
     return true;
 }
 
@@ -2750,6 +3444,8 @@ inline void TypeCheck::CheckExternSpec(FnSpec *spec) {
                                          " needs a type"));
         auto pt = spec->argtypes[i];
         ValidateType(pt, sf->line, VT_PARAM);
+        if (p.borrows && (pt->kind != TY_STRUCT || pt->owns || !IsFlat(pt) || ClassOf(pt) != SC_FIXED))
+            Error(p.line, "borrow requires a fixed-size C-compatible handle record");
         string why;
         if (!ExternParamOk(pt, why) || !DylibValueOk(sf, pt, why))
             Error(sf->line, cat("extern fn ", sf->name, ": parameter ", p.name, " of type ",
@@ -2818,7 +3514,8 @@ inline void TypeCheck::CheckExport(SFunction *sf) {
     }
     set<string_view> names = { sf->name };
     auto foreign = false;
-    if (sf->body) ScanForeignFrom(sf->body, names, foreign);
+    if (auto body = sf->decorator_written ? sf->decorator_written : sf->body)
+        ScanForeignFrom(body, names, foreign);
     if (foreign) fail("cannot use return ... from across the C boundary");
     if (sf->specs.size() != 1)
         fail("could not resolve one concrete function signature");
@@ -3202,10 +3899,13 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
             held.Set(cr, ra.heldexact, nullptr, ra.slotread);
             auto stored = vd->storedinto;
             auto first = storeevents.size();
+            auto first_global = madestores.size();
             RecordStore(vd, held, ra.byteview, nullptr);
             vd->storedinto = stored;
-            if (!ra.heldexact)
+            if (!ra.heldexact) {
                 for (auto k = first; k < storeevents.size(); k++) storeevents[k].incoming = true;
+                for (auto k = first_global; k < madestores.size(); k++) madestores[k].incoming = true;
+            }
         }
         spec->params.push_back(vd);
     }
@@ -3316,9 +4016,17 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
                 it->second.bounded = true;
         }
     }
+    if (sf->task_final_of && !spec->retsknown) {
+        auto owner = frames[fi - 1].spec;
+        assert(owner && owner->sf == sf->task_final_of);
+        if (owner->retsknown) {
+            spec->rets = owner->rets;
+            spec->retsknown = true;
+        }
+    }
     if (sf->has_rets && !spec->retsknown) {
         for (auto rt : sf->rets) {
-            auto ct = Subst(rt);
+            auto ct = sf->decorator_layer ? SubstOwn(rt, spec->bindings) : Subst(rt);
             // A result is a value, which is never relative (§3.9): written so,
             // it is an error, and one a type argument makes relative is the
             // plain reference a load of it gives.
@@ -3333,12 +4041,40 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
         }
         spec->retsknown = true;
     }
+    if (sf->task_join && sf->decorator_result_source && !spec->retsknown) {
+        MatchInfo original;
+        original.sf = sf->decorator_result_source;
+        original.paramtypes = { original.sf->params[0].type };
+        original.nwritten = 1;
+        Val input;
+        input.type = original.paramtypes[0];
+        vector<Val> arguments { input };
+        spec->rets = GetOrCreateSpec(original, arguments, sf->body)->rets;
+        spec->retsknown = true;
+    }
+    if (sf->decorator_original && !spec->retsknown) {
+        auto probe = ast.New<Call>(sf->line, ast.New<Ident>(sf->line, "next", sf->ns));
+        CheckDecoratorContinuation(probe, spec, sf->decorator_original);
+        spec->rets = probe->spec->rets;
+        spec->retsknown = true;
+    }
     // A cycle's later rounds check the same clone again, as a loop's passes
     // do a body: what a round rewrote in it (an inserted &, a function value
     // an argument yielded) is what the next round reads, and the function
     // values written in it keep their identity, which specialization keys
     // carry (FnValBind).
-    if (!spec->body) spec->body = (Block *)sf->body->Clone(ast);
+    if (!spec->body) {
+        spec->body = (Block *)sf->body->Clone(ast);
+        auto tail = Is<Call>(spec->body->tail);
+        auto callee = tail ? Is<Ident>(tail->callee) : nullptr;
+        if (!spec->rets.empty() && (sf->decorator_written ||
+            (sf->decorator_layer && spec->rets.size() > 1 && callee && callee->name == "next"))) {
+            auto ret = ast.New<Return>(sf->line);
+            ret->vals.push_back(spec->body->tail);
+            spec->body->tail = nullptr;
+            spec->body->stmts.push_back(ret);
+        }
+    }
     // A body the parser lost a statement of, or that holds an incomplete
     // `.` (SFunction::broken), is checked up to there, which ends it as
     // every path returning would (Abandoned, CheckStmts, IncompleteDot):
@@ -3417,6 +4153,9 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
             rr.writable = true;
             rr.set = true;
         }
+    } else if (sf->task_foreign) {
+        // The native driver delivers the declared result at completion.
+        NoteExit(fi);
     } else if (reachable) {
         NoteExit(fi);
         if (spec->retsknown && !spec->rets.empty())
@@ -3424,6 +4163,64 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
                                 " can fall off the end without returning value(s)"));
     }
     spec->retsknown = true;   // Where no return settled them: none, void.
+    if (sf->task_suspends && !exits.reached) {
+        // Every path returned from the task (or never returns). The
+        // unchecked suffix cannot produce a saved frame or a child.
+        spec->rets.clear();
+    } else if (sf->task_child_start) {
+        auto child = spec->rets.size() == 2 ? spec->rets[1] : nullptr;
+        if (!child || child->kind != TY_STRUCT || !child->struc->st->task_join)
+            Error(spec->body->stmts.back(), "await needs an owned task constructed by an async fn");
+    }
+    TypeExpr *cleanup_frame = nullptr;
+    if (sf->task_stage && !spec->rets.empty()) {
+        auto saved = spec->rets[0];
+        if (saved->kind == TY_STRUCT && saved->struc->st->task_saved) {
+            if (sf->task_cleanup) cleanup_frame = saved;
+            else if (HasOwnership(saved))
+                Error(sf->line, "an owned value across await needs a defer to release it on cancellation");
+        }
+    }
+    if (sf->task_join && !sf->task_foreign && GetStructInst(spec->argtypes[0])->owns) {
+        if (!sf->task_cleanup)
+            Error(sf->line, "an owned async parameter needs a leading defer to release it before the first poll");
+        cleanup_frame = spec->argtypes[0];
+    }
+    if (cleanup_frame) {
+        MatchInfo match;
+        match.sf = sf->task_cleanup;
+        match.paramtypes = { cleanup_frame };
+        match.nwritten = 1;
+        Val state;
+        state.type = cleanup_frame;
+        vector<Val> args { state };
+        FlagScope can_cancel(reachable, true);
+        spec->task_cleanup = GetOrCreateSpec(match, args, spec->body);
+        // A scope can cancel after evaluating its return value. Until
+        // borrow checking models that edge, cleanup cannot invalidate
+        // storage reachable from a different activation.
+        const auto &effects = spec->task_cleanup->record;
+        auto replaces_view = any_of(effects.bodyevents.begin(), effects.bodyevents.end(),
+            [](const auto &event) {
+                auto container = event.container;
+                if (container && container->componentowner) container = container->componentowner;
+                return container && container->isglobal;
+            });
+        if (!effects.shrinkexternals.empty() || !effects.shrinkexternalbounds.empty() ||
+            !effects.growexternals.empty() || !effects.reboundoptionals.empty() || replaces_view)
+            Error(sf->line, sf->task_join ?
+                  "async parameter cleanup cannot resize external K storage or replace external references" :
+                  "defer across await cannot resize external K storage or replace external references");
+    }
+    if (sf->task_join) {
+        if (spec->rets.size() > 1) Error(sf->line, "an async fn supports at most one result");
+        if (!spec->rets.empty()) {
+            auto result = spec->rets[0];
+            if (ClassOf(result) != SC_FIXED || !IsFlat(result) || HasOwnership(result))
+                Error(sf->rets.empty() ? sf->line : sf->rets[0]->line,
+                      "an async result needs a fixed-size type without references");
+        }
+    }
     if (!abandoned) {
         NamedResultCopyWarning(spec);
         CheckNamedResultUses(spec);
@@ -3768,7 +4565,15 @@ inline void TypeCheck::CheckReturn(Return *r) {
     // compile-time path; a plain return inside a function value exits the
     // lexically enclosing named function (§7.6, §7.9).
     auto tf = -1;
-    if (!r->from.empty()) {
+    if (r->task_exit) {
+        for (auto i = (int)frames.size() - 1; i >= 0; i--)
+            if (frames[i].sf == r->task_exit) { tf = i; break; }
+        if (tf < 0) Error(r, "cannot resolve the task of this return");
+        auto stage = RealFrameIndex();
+        if (stage != tf + 1 || !frames[stage].sf->task_suspends)
+            Error(r, "return before await cannot unwind through a separate function call");
+        frames[stage].spec->task_exit = frames[tf].spec;
+    } else if (!r->from.empty()) {
         // `f` resolves in this function's definition context: a nested
         // function in scope, else the overload set the name reaches from
         // here (docs/design/namespaces.md). The target is the innermost
@@ -3780,7 +4585,10 @@ inline void TypeCheck::CheckReturn(Return *r) {
         if (targets.empty()) Error(r, cat("return from ", r->from, ": unknown function"));
         for (auto i = (int)frames.size() - 1; i >= 1 && tf < 0; i--) {
             if (frames[i].isfunval || !frames[i].sf) continue;
-            for (auto t : targets) if (frames[i].sf == t) tf = i;
+            for (auto t : targets)
+                if (frames[i].sf == t ||
+                    (!frames[i].sf->decorator_layer && frames[i].sf->decorator_public == t))
+                    tf = i;
         }
         if (tf < 0)
             Error(r, cat("return from ", r->from, ": no enclosing call of ", r->from,
@@ -3795,13 +4603,16 @@ inline void TypeCheck::CheckReturn(Return *r) {
         tf = (int)frames.size() - 1;
         if (!frames[tf].sf) Error(r, "return outside of a function");
     }
+    if (frames[tf].sf->task_flow && RealFrameIndex() != tf)
+        Error(r, "an async poll cannot return through a separate function call");
     // A return written in a defer body, or in a function value written in
     // one, would leave the body (§6.6), whichever function it exits.
     if (deferbodies && InDeferBody()) Error(r, "return cannot leave a defer body (§6.6)");
     auto tspec = frames[tf].spec;
     r->target = frames[tf].sf;
     r->targetspec = tspec;
-    for (auto i = tf + 1; i < (int)frames.size(); i++) AddNeed(frames[i].spec, tspec);
+    if (!r->task_exit)
+        for (auto i = tf + 1; i < (int)frames.size(); i++) AddNeed(frames[i].spec, tspec);
     // Values.
     vector<Val> vals;
     auto expectone = [&](size_t i) -> TypeExpr * {
@@ -3925,7 +4736,7 @@ inline FnSpec *TypeCheck::EnsureThreadSpec(SFunction *sf, Line l) {
 // in the lexical environment it was written in (§7.6).
 
 inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *expected) {
-    if (c->trailing)
+    if (c->trailing && !c->task_scope)
         Error(c, "a function value call cannot itself take a trailing block");
     if (fb.named) {
         vector<SFunction *> cands = fb.set ? *fb.set : vector<SFunction *> { fb.named };
@@ -3962,13 +4773,21 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
     }
     // A non-fixed lvalue binds an untyped parameter by reference (§4.1).
     for (size_t i = 0; i < params.size(); i++) {
-        if (params[i].type) continue;
+        if (params[i].type || argvals[i].type == fntype) continue;
         RefArg(c->args[i], argvals[i]);
         c->args[i]->exprtype = argvals[i].type;
     }
     // Parameter types: annotations resolve in the defining environment.
     vector<TypeExpr *> ptypes;
     for (size_t i = 0; i < params.size(); i++) {
+        if (argvals[i].type == fntype) {
+            if (params[i].type || params[i].isvar)
+                Error(c->args[i], "a function value requires an untyped immutable block parameter");
+            if (!argvals[i].fnv.fv && !argvals[i].fnv.named)
+                Error(c->args[i], "a block argument must name one compile-time function");
+            ptypes.push_back(fntype);
+            continue;
+        }
         if (params[i].type) {
             auto t = SubstEnv(params[i].type, fb.env);
             ValidateType(t, c->line, VT_PARAM);
@@ -3987,6 +4806,7 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
     {
         DestScope ds(*this, Dest {});
         for (size_t i = 0; i < ptypes.size(); i++) {
+            if (ptypes[i] == fntype) continue;
             auto byref = argvals[i].storagebranches && ptypes[i]->kind == TY_REF;
             if (!byref) RefCopyWarnings(argvals[i]);
             auto viewed = ViewedWhole(c->args[i], argvals[i], ptypes[i]);
@@ -4022,9 +4842,17 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
     frames.push_back(f);
     PushScope(SK_FN);
     c->fvparams.clear();
+    size_t runtimeargs = 0;
     for (size_t i = 0; i < params.size(); i++) {
         auto vd = NewVar(params[i].name, ptypes[i], c->line, params[i].isvar);
         vd->assigned = vd->maybeassigned = true;
+        if (c->task_scope) vd->task_scope = c;
+        if (ptypes[i] == fntype) {
+            // Record a lexical binding to hide an outer variable of the
+            // same name. It does not receive a runtime parameter slot.
+            env->fnvals.emplace_back(params[i].name, argvals[i].fnv);
+            continue;
+        }
         if (IsRefOrSlice(ptypes[i])) {
             BindRefProvenance(vd, argvals[i]);
             if (ptypes[i]->cq) vd->ref.writable = false;
@@ -4037,7 +4865,9 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
             vd->unsizedorigin = argvals[i].unsizedparam;
         }
         c->fvparams.push_back(vd);
+        c->args[runtimeargs++] = c->args[i];
     }
+    c->args.resize(runtimeargs);
     c->fvbody = (Block *)fv->body->Clone(ast);
     BlockScope bs(*this, c->fvbody);
     CheckStmts(c->fvbody);

@@ -17,6 +17,7 @@ FetchContent_Declare(k_box3d
     URL_HASH SHA256=75c99b70170172b0dce7a1a6e3d83c29ecabcf3a4ba437b5bb72ee6429529e20
     SOURCE_SUBDIR klang-source-only)
 FetchContent_MakeAvailable(k_box3d)
+set_property(DIRECTORY PROPERTY K_PACKAGE_LICENSES "box3d\t${k_box3d_SOURCE_DIR}/LICENSE")
 
 # --- Box3D -------------------------------------------------------------------
 # Only the library: its samples, tests and documentation are options of a

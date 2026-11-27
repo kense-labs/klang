@@ -210,6 +210,9 @@ def check_git_packages(exe, base, *, jit):
     run_git("tag", "-f", "v1", "HEAD")
     run_git("fetch", "-q", "--tags", "--force", str(work), cwd=bare)
     expect(use_tag, "5")
+    for flags in (("--offline", "--update"), ("--update", "--offline")):
+        klang("fetch", *flags, use_tag)
+        expect(use_tag, "5")
     out, err = klang("fetch", "--update", use_tag)
     if "updating the package gitpkg" not in err:
         raise RuntimeError(f"k fetch --update did not report the update:\n{out}{err}")

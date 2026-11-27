@@ -83,7 +83,7 @@ An `extern fn` has one of three implementations (spec §7.10, implementation §6
   built once per toolchain and linked statically.
 
 For a JIT run, the native part is built again as a shared library exporting one
-table, `k_symbols`. The compiler loads that table (`process.cpp`,
+table, `k_symbols`. The compiler loads that table (`shared_library.cpp`,
 `LoadSharedSymbols`) and passes its symbols to TinyCC one by one
 (`tcc_add_symbol`, `jit.h`). Codegen emits a prototype for every used extern
 that the runtime does not declare, and calls the symbol directly

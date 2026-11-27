@@ -126,6 +126,13 @@ R"KRT(/* The function a dynamic extern is called through (§7.10). Its pointer h
 R"KRT(#ifndef K_NEED_THREADS
 #define K_NEED_THREADS 0
 #endif
+#ifndef K_NEED_TASK_WAIT
+#ifdef K_RUNTIME_OBJECT
+#define K_NEED_TASK_WAIT 1
+#else
+#define K_NEED_TASK_WAIT 0
+#endif
+#endif
 #ifndef K_DEBUG
 #define K_DEBUG 0          /* 1: overflow, `as` range, and tag checks (§9.3). */
 #endif
@@ -1006,6 +1013,17 @@ K_API void k_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
                         uint64_t budget, int64_t mainregions, int64_t workerregions);
 /* A fresh region, registered to the calling thread program. */
 K_API uint8_t *k_reserve_region(k_stack *stack);
+/* A task-local data stack lives at a stable address until its lexical
+   scope exits. The slot is zeroed at task construction. */
+K_API void k_task_stack_open(k_stack **slot);
+K_API void k_task_stack_close(k_stack **slot);
+/* Heap-resident task resources also unwind when a worker aborts. */
+typedef struct k_task_cleanup {
+    struct k_task_cleanup *next, **link;
+    void (*release)(struct k_task_cleanup *);
+} k_task_cleanup;
+K_API void k_task_cleanup_open(k_task_cleanup *entry, void (*release)(k_task_cleanup *));
+K_API void k_task_cleanup_close(k_task_cleanup *entry);
 /* The calling thread program's stack use, on stderr (K_STACK_STATS):
    `stacks` is how many of its indexed data stacks exist. */
 K_API void k_stack_stats(int64_t stacks);
@@ -1050,6 +1068,15 @@ R"KRT(/* -----------------------------------------------------------------------
 
 )KRT"
 R"KRT(K_API int64_t k_hardware_threads(void);
+
+)KRT"
+R"KRT(#if K_NEED_TASK_WAIT
+K_API void *k_task_event_open(void);
+K_API void k_task_event_close(void *event);
+K_API void k_task_event_signal(void *event, uint32_t flags);
+K_API uint32_t k_task_event_take(void *event, int block);
+K_API uint32_t k_task_event_take_for(void *event, uint32_t millis);
+#endif
 /* Runs run(entry, args) and then release() on a new thread, args a copy of
    argsize bytes, and returns the worker's id. In a contained worker an
    abort ends run early. */
@@ -1608,6 +1635,29 @@ static K_TLS volatile long k_nregions;
 static K_TLS long k_regions_cap;
 
 )KRT"
+R"KRT(/* Indexed stacks have a static count. Suspended tasks own their regions
+   separately, so two tasks can use the same poll stack indices. */
+typedef struct k_task_region {
+    k_stack stack;  /* First member, so the descriptor identifies its owner. */
+    k_region region;
+    struct k_task_region *previous, *next;
+} k_task_region;
+static K_TLS k_task_region *k_task_regions;
+
+)KRT"
+R"KRT(static k_region *k_find_region(const void *at) {
+    for (long i = 0; i < k_nregions; i++) {
+        k_region *r = &k_regions[i];
+        if ((uintptr_t)at - (uintptr_t)r->base < r->size) return r;
+    }
+    for (k_task_region *entry = k_task_regions; entry; entry = entry->next) {
+        k_region *r = &entry->region;
+        if ((uintptr_t)at - (uintptr_t)r->base < r->size) return r;
+    }
+    return NULL;
+}
+
+)KRT"
 R"KRT(/* Text without stdio, which a fault handler may not call (nor malloc):
    decimal digits, a size in the largest unit that holds it exactly, and a
    string. Each returns the end of what it wrote. */
@@ -1666,13 +1716,11 @@ static size_t k_overflow_text(char *buf, const k_region *r) {
 
 )KRT"
 R"KRT(K_API K_NORETURN void k_stack_overflow(const void *at) {
-    for (long i = 0; i < k_nregions; i++) {
-        const k_region *r = &k_regions[i];
-        if ((uintptr_t)at - (uintptr_t)r->base < r->size) {
-            char msg[K_OVERFLOW_TEXT];
-            fwrite(msg, 1, k_overflow_text(msg, r), stderr);
-            k_end(1);
-        }
+    const k_region *r = k_find_region(at);
+    if (r) {
+        char msg[K_OVERFLOW_TEXT];
+        fwrite(msg, 1, k_overflow_text(msg, r), stderr);
+        k_end(1);
     }
     k_panic("data stack overflow");
 }
@@ -1691,8 +1739,34 @@ R"KRT(static void k_release_region(const k_region *r);
 static void k_native_stack_free(void);
 
 )KRT"
+R"KRT(static K_TLS k_task_cleanup *k_task_cleanups;
+
+)KRT"
+R"KRT(K_API void k_task_cleanup_open(k_task_cleanup *entry, void (*release)(k_task_cleanup *)) {
+    entry->release = release;
+    entry->link = &k_task_cleanups;
+    entry->next = k_task_cleanups;
+    if (entry->next) entry->next->link = &entry->next;
+    k_task_cleanups = entry;
+}
+
+)KRT"
+R"KRT(K_API void k_task_cleanup_close(k_task_cleanup *entry) {
+    *entry->link = entry->next;
+    if (entry->next) entry->next->link = entry->link;
+    entry->release(entry);
+}
+
+)KRT"
 R"KRT(/* Unregister before unmapping, then drop the registry. */
 K_API void k_release_regions(void) {
+    while (k_task_cleanups) k_task_cleanup_close(k_task_cleanups);
+    while (k_task_regions) {
+        k_task_region *entry = k_task_regions;
+        k_task_regions = entry->next;
+        k_release_region(&entry->region);
+        free(entry);
+    }
     while (k_nregions) {
         long i = k_nregions - 1;
         k_region r = k_regions[i];
@@ -1738,39 +1812,37 @@ R"KRT(static LONG WINAPI k_fault_filter(EXCEPTION_POINTERS *ep) {
     if (code != STATUS_ACCESS_VIOLATION)
         return EXCEPTION_CONTINUE_SEARCH;
     uint8_t *hit = (uint8_t *)ep->ExceptionRecord->ExceptionInformation[1];
-    for (long i = 0; i < k_nregions; i++) {
-        k_region *r = &k_regions[i];
-        if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
-            /* Within the usable part: commit another chunk (clamped to the
-               region) and resume, or where the system has no more memory to
-               commit, say so. A read below the commit mark (a page that was
-               skipped or decommitted by slice_pool's trim) commits only its
-               page, so a stale view does not take back the pages around it;
-               a write there still takes a chunk, as reuse writes on. Within
-               the gap: a data stack overran. */
-            if (hit < r->base + r->usable) {
-                uint8_t *page = (uint8_t *)((size_t)hit & ~(k_page_size - 1));
-                size_t n = page < r->committed && ep->ExceptionRecord->ExceptionInformation[0] == 0
-                               ? k_page_size : K_COMMIT_CHUNK;
-                if (page + n > r->base + r->usable)
-                    n = (size_t)(r->base + r->usable - page);
-                if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
-                    if (page + n > r->committed) r->committed = page + n;
-                    return EXCEPTION_CONTINUE_EXECUTION;
-                }
-                static const char nomem[] =
-                    "klang runtime error: out of memory committing a data stack\n";
-                DWORD written;
-                WriteFile(GetStdHandle(STD_ERROR_HANDLE), nomem, sizeof(nomem) - 1, &written,
-                          NULL);
-                ExitProcess(1);
+    k_region *r = k_find_region(hit);
+    if (r) {
+        /* Within the usable part: commit another chunk (clamped to the
+           region) and resume, or where the system has no more memory to
+           commit, say so. A read below the commit mark (a page that was
+           skipped or decommitted by slice_pool's trim) commits only its
+           page, so a stale view does not take back the pages around it;
+           a write there still takes a chunk, as reuse writes on. Within
+           the gap: a data stack overran. */
+        if (hit < r->base + r->usable) {
+            uint8_t *page = (uint8_t *)((size_t)hit & ~(k_page_size - 1));
+            size_t n = page < r->committed && ep->ExceptionRecord->ExceptionInformation[0] == 0
+                           ? k_page_size : K_COMMIT_CHUNK;
+            if (page + n > r->base + r->usable)
+                n = (size_t)(r->base + r->usable - page);
+            if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
+                if (page + n > r->committed) r->committed = page + n;
+                return EXCEPTION_CONTINUE_EXECUTION;
             }
-            char msg[K_OVERFLOW_TEXT];
+            static const char nomem[] =
+                "klang runtime error: out of memory committing a data stack\n";
             DWORD written;
-            WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, (DWORD)k_overflow_text(msg, r),
-                      &written, NULL);
+            WriteFile(GetStdHandle(STD_ERROR_HANDLE), nomem, sizeof(nomem) - 1, &written,
+                      NULL);
             ExitProcess(1);
         }
+        char msg[K_OVERFLOW_TEXT];
+        DWORD written;
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, (DWORD)k_overflow_text(msg, r),
+                  &written, NULL);
+        ExitProcess(1);
     }
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -1883,14 +1955,12 @@ static size_t k_page_size = 0;
 R"KRT(static void k_fault_handler(int sig, siginfo_t *info, void *ctx) {
     (void)ctx;
     uint8_t *hit = (uint8_t *)info->si_addr;
-    for (long i = 0; i < k_nregions; i++) {
-        k_region *r = &k_regions[i];
-        if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
-            char msg[K_OVERFLOW_TEXT];
-            ssize_t w = write(2, msg, k_overflow_text(msg, r));
-            (void)w;
-            _exit(1);
-        }
+    k_region *r = k_find_region(hit);
+    if (r) {
+        char msg[K_OVERFLOW_TEXT];
+        ssize_t w = write(2, msg, k_overflow_text(msg, r));
+        (void)w;
+        _exit(1);
     }
     if ((uintptr_t)hit - k_native_lo < k_native_hi - k_native_lo) {
         static const char msg[] = "klang runtime error: native call stack overflow\n";
@@ -2073,9 +2143,7 @@ R"KRT(/* A region of the size new ones currently get. Where the platform refuses
    sooner. Workers racing through a refusal may each halve the size once
    more than needed, or restore a larger one for a moment; it only ever
    settles downward. */
-K_API uint8_t *k_reserve_region(k_stack *stack) {
-    if (k_nregions >= k_regions_cap)
-        k_panic("too many data stack regions");
+static k_region k_make_region(k_stack *stack) {
     size_t usable = k_region_usable;
     uint8_t *p;
     for (;;) {
@@ -2086,12 +2154,15 @@ K_API uint8_t *k_reserve_region(k_stack *stack) {
         usable -= usable % k_region_page;
         k_region_usable = usable;
     }
+    return (k_region){ p, usable, usable + k_region_gap, stack, p };
+}
+
+)KRT"
+R"KRT(K_API uint8_t *k_reserve_region(k_stack *stack) {
+    if (k_nregions >= k_regions_cap)
+        k_panic("too many data stack regions");
     long i = k_nregions;
-    k_regions[i].base = p;
-    k_regions[i].usable = usable;
-    k_regions[i].size = usable + k_region_gap;
-    k_regions[i].stack = stack;
-    k_regions[i].committed = p;
+    k_regions[i] = k_make_region(stack);
     k_nregions = i + 1;  /* Publish only the initialized entry. */
 
 )KRT"
@@ -2104,7 +2175,33 @@ R"KRT(    /* Region bases agree in their low 16 or more address bits (Windows
        smallest page breaks the match. */
     long colors = 4096 / 64;
     size_t pad = (size_t)(i % colors) * 64;
-    return p + pad;
+    return k_regions[i].base + pad;
+}
+
+)KRT"
+R"KRT(K_API void k_task_stack_open(k_stack **slot) {
+    if (*slot) k_panic("task data stack already open");
+    k_task_region *entry = (k_task_region *)malloc(sizeof(k_task_region));
+    if (!entry) k_panic("out of memory allocating task data stack");
+    entry->region = k_make_region(&entry->stack);
+    entry->stack.top = entry->region.base;
+    entry->previous = NULL;
+    entry->next = k_task_regions;
+    if (k_task_regions) k_task_regions->previous = entry;
+    k_task_regions = entry;
+    *slot = &entry->stack;
+}
+
+)KRT"
+R"KRT(K_API void k_task_stack_close(k_stack **slot) {
+    k_task_region *entry = (k_task_region *)*slot;
+    if (!entry) return;
+    *slot = NULL;
+    if (entry->previous) entry->previous->next = entry->next;
+    else k_task_regions = entry->next;
+    if (entry->next) entry->next->previous = entry->previous;
+    k_release_region(&entry->region);
+    free(entry);
 }
 
 )KRT"
@@ -2151,33 +2248,32 @@ R"KRT(   Only generated code may call this, through os.trim_memory, whose caller
    publish their cached tops first (SFunction::readsalltops). C reached
    from K through another extern must not: tops cached by the K
    frames above it would still be stale, and live pages above them lost. */
-K_API uint8_t k_trim_memory(void) {
+static int k_trim_region(k_region *r) {
     uintptr_t page = (uintptr_t)k_page_size;
+    uintptr_t base = (uintptr_t)r->base, top = (uintptr_t)r->stack->top;
+    /* An invalid top could make trimming discard live data. */
+    if (top < base || top - base > r->usable)
+        k_panic("data stack top outside its region in trim_memory");
+    uintptr_t start = (top + page - 1) / page * page;
+    uintptr_t end = (base + r->usable) / page * page;
+#ifdef _WIN32
+    /* Nothing above the commit mark needs decommitting. */
+    if ((uintptr_t)r->committed < end) end = (uintptr_t)r->committed;
+#endif
+    if (start >= end) return 1;
+    if (!k_discard_pages(start, (size_t)(end - start))) return 0;
+#ifdef _WIN32
+    r->committed = (uint8_t *)start;
+#endif
+    return 1;
+}
+
+)KRT"
+R"KRT(K_API uint8_t k_trim_memory(void) {
     int ok = 1;
-    for (long i = 0; i < k_nregions; i++) {
-        k_region *r = &k_regions[i];
-        uintptr_t base = (uintptr_t)r->base, top = (uintptr_t)r->stack->top;
-        /* A top outside its own region is a compiler or runtime bug, not
-           something the OS refused: carrying on could discard live data. */
-        if (top < base || top - base > r->usable)
-            k_panic("data stack top outside its region in trim_memory");
-        uintptr_t start = (top + page - 1) / page * page;
-        uintptr_t end = (base + r->usable) / page * page;
-#ifdef _WIN32
-        /* Nothing above the commit mark was ever committed (base is
-           allocation-aligned and the mark page-aligned). */
-        if ((uintptr_t)r->committed < end) end = (uintptr_t)r->committed;
-#endif
-        if (start >= end) continue;
-        if (!k_discard_pages(start, (size_t)(end - start))) {
-            ok = 0;
-            continue;
-        }
-#ifdef _WIN32
-        /* Everything from start up is decommitted now. */
-        r->committed = (uint8_t *)start;
-#endif
-    }
+    for (long i = 0; i < k_nregions; i++) ok &= k_trim_region(&k_regions[i]);
+    for (k_task_region *entry = k_task_regions; entry; entry = entry->next)
+        ok &= k_trim_region(&entry->region);
     return (uint8_t)ok;
 }
 
@@ -3544,7 +3640,7 @@ R"KRT(K_API void k_stack_stats(int64_t stacks) {
 }
 
 )KRT"
-R"KRT(#if K_NEED_THREADS
+R"KRT(#if K_NEED_THREADS || K_NEED_TASK_WAIT
 
 )KRT"
 R"KRT(#ifdef _WIN32
@@ -3583,6 +3679,127 @@ typedef pthread_cond_t k_cond;
 
 )KRT"
 R"KRT(#endif
+#endif
+
+)KRT"
+R"KRT(#if K_NEED_TASK_WAIT
+
+)KRT"
+R"KRT(typedef struct {
+    k_mutex mutex;
+    k_cond condition;
+    uint32_t flags;
+} k_task_event;
+
+)KRT"
+R"KRT(#ifdef __linux__
+static int k_task_event_cond_init(k_cond *condition) {
+    pthread_condattr_t attr;
+    int status = pthread_condattr_init(&attr);
+    if (status) return status;
+    status = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    if (!status) status = pthread_cond_init(condition, &attr);
+    pthread_condattr_destroy(&attr);
+    return status;
+}
+#else
+#define k_task_event_cond_init(c) k_cond_init(c)
+#endif
+
+)KRT"
+R"KRT(K_API void *k_task_event_open(void) {
+    k_task_event *event = (k_task_event *)malloc(sizeof(*event));
+    if (!event) return NULL;
+    event->flags = 0;
+#ifdef _WIN32
+    k_mutex_init(&event->mutex);
+    k_cond_init(&event->condition);
+#else
+    if (k_mutex_init(&event->mutex)) {
+        free(event);
+        return NULL;
+    }
+    if (k_task_event_cond_init(&event->condition)) {
+        pthread_mutex_destroy(&event->mutex);
+        free(event);
+        return NULL;
+    }
+#endif
+    return event;
+}
+
+)KRT"
+R"KRT(K_API void k_task_event_close(void *opaque) {
+    k_task_event *event = (k_task_event *)opaque;
+#ifndef _WIN32
+    pthread_cond_destroy(&event->condition);
+    pthread_mutex_destroy(&event->mutex);
+#endif
+    free(event);
+}
+
+)KRT"
+R"KRT(K_API void k_task_event_signal(void *opaque, uint32_t flags) {
+    k_task_event *event = (k_task_event *)opaque;
+    k_mutex_lock(&event->mutex);
+    event->flags |= flags;
+    k_cond_signal(&event->condition);
+    k_mutex_unlock(&event->mutex);
+}
+
+)KRT"
+R"KRT(K_API uint32_t k_task_event_take(void *opaque, int block) {
+    k_task_event *event = (k_task_event *)opaque;
+    k_mutex_lock(&event->mutex);
+    while (block && !event->flags) k_cond_wait(&event->condition, &event->mutex);
+    uint32_t flags = event->flags;
+    event->flags = 0;
+    k_mutex_unlock(&event->mutex);
+    return flags;
+}
+
+)KRT"
+R"KRT(K_API uint32_t k_task_event_take_for(void *opaque, uint32_t millis) {
+    k_task_event *event = (k_task_event *)opaque;
+    k_mutex_lock(&event->mutex);
+    if (millis && !event->flags) {
+#ifdef _WIN32
+        SleepConditionVariableSRW(&event->condition, &event->mutex, millis, 0);
+#else
+        struct timespec timeout = { 0, 0 };
+#ifdef __APPLE__
+        timeout.tv_sec = millis / 1000;
+        timeout.tv_nsec = (long)(millis % 1000) * 1000000;
+        pthread_cond_timedwait_relative_np(&event->condition, &event->mutex, &timeout);
+#else
+#ifdef __linux__
+        const clockid_t clock = CLOCK_MONOTONIC;
+#else
+        const clockid_t clock = CLOCK_REALTIME;
+#endif
+        if (!clock_gettime(clock, &timeout)) {
+            timeout.tv_sec += millis / 1000;
+            timeout.tv_nsec += (long)(millis % 1000) * 1000000;
+            if (timeout.tv_nsec >= 1000000000L) {
+                timeout.tv_sec++;
+                timeout.tv_nsec -= 1000000000L;
+            }
+            pthread_cond_timedwait(&event->condition, &event->mutex, &timeout);
+        }
+#endif
+#endif
+    }
+    uint32_t flags = event->flags;
+    event->flags = 0;
+    k_mutex_unlock(&event->mutex);
+    return flags;
+}
+
+)KRT"
+R"KRT(#endif
+
+)KRT"
+R"KRT(#if K_NEED_THREADS
 
 )KRT"
 R"KRT(/* ---------------------------------------------------------------------------
@@ -4332,6 +4549,9 @@ static uint64_t k_byte_swap64(uint64_t x) {
 
 )KRT"
 R"KRT(K_API uint8_t k_os_read_file(sl_u8 path, k_rref out);
+K_API uint64_t k_os_reader_open(sl_u8 path);
+K_API int64_t k_os_reader_read(uint64_t id, k_rref out, int64_t max);
+K_API void k_os_reader_close(uint64_t id);
 K_API uint8_t k_os_write_file(sl_u8 path, sl_u8 data);
 K_API uint8_t k_os_write_file_atomic(sl_u8 path, sl_u8 data);
 K_API uint8_t k_os_append_file(sl_u8 path, sl_u8 data);
@@ -4399,14 +4619,14 @@ R"KRT(#include <time.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#include <limits.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
 #endif
 #if defined(__APPLE__) || defined(__linux__)
 #include <sys/random.h>
-#else
-#include <unistd.h>
 #endif
 #endif
 
@@ -4530,28 +4750,164 @@ static int k_os_kind(const k_os_char *p) {
 }
 
 )KRT"
+R"KRT(#ifndef _WIN32
+/* Bytes the kernel can write without reaching a data stack guard page. */
+static size_t k_os_read_room(k_rref out) {
+    uintptr_t top = (uintptr_t)out.stk->top;
+    for (long i = 0; i < k_nregions; i++) {
+        const k_region *r = &k_regions[i];
+        if (r->stack != out.stk) continue;
+        uintptr_t base = (uintptr_t)r->base;
+        if (top < base || top - base > r->usable) break;
+        size_t room = r->usable - (top - base);
+        uint64_t lenroom = (uint64_t)(INT64_MAX - out.hdr->len);
+        return room > lenroom ? (size_t)lenroom : room;
+    }
+    return 0;
+}
+
+)KRT"
+R"KRT(static ssize_t k_os_read_retry(int fd, void *dst, size_t size) {
+    ssize_t n;
+    do {
+        n = read(fd, dst, size);
+    } while (n < 0 && errno == EINTR);
+    return n;
+}
+
+)KRT"
+R"KRT(static int k_os_read_fd(int fd, k_rref out) {
+    enum { block = 65536, initial = 2 * block };
+    size_t room = k_os_read_room(out);
+    size_t chunk = room >= initial ? initial : block;
+    int first = 1;
+    while (room >= block) {
+        ssize_t n = k_os_read_retry(fd, out.stk->top, room < chunk ? room : chunk);
+        if (n <= 0) return n == 0;
+        out.stk->top += n;
+        out.hdr->len += n;
+        room -= (size_t)n;
+
+)KRT"
+R"KRT(        /* Probe for a bulk transfer size after the larger first request
+           fills. Completion still depends on observing EOF. */
+        if (first) {
+            first = 0;
+            chunk = block;
+            struct stat st;
+            if (n == initial && room > block && fstat(fd, &st) == 0 &&
+                S_ISREG(st.st_mode) && st.st_size > initial + block) {
+                uintmax_t left = (uintmax_t)st.st_size - initial;
+                chunk = left < INT_MAX ? (size_t)left : (size_t)INT_MAX;
+            }
+        }
+    }
+
+)KRT"
+R"KRT(    /* Keep the full read size when there is less than a block of room.
+       Appending in user space lets the guard page report any overflow. */
+    uint8_t buf[block];
+    for (;;) {
+        ssize_t n = k_os_read_retry(fd, buf, sizeof buf);
+        if (n <= 0) return n == 0;
+        k_bld_append(out, buf, (int64_t)n);
+    }
+}
+#endif
+
+)KRT"
 R"KRT(/* Appends the whole file; on a failure, nothing. */
 K_API uint8_t k_os_read_file(sl_u8 path, k_rref out) {
     k_os_char p[K_OS_PATH_MAX];
     if (k_os_native(path, p) < 0) return 0;
-    FILE *f = k_os_fopen(p, "rb");
-    if (!f) return 0;
     int64_t len = out.hdr->len;
     uint8_t *top = out.stk->top;
+#ifdef _WIN32
+    /* Windows commits data stack pages when user-space stores touch them. */
+    FILE *f = k_os_fopen(p, "rb");
+    if (!f) return 0;
     uint8_t buf[65536];
-    for (;;) {
+    while (!feof(f) && !ferror(f)) {
         size_t n = fread(buf, 1, sizeof buf, f);
         if (n == 0) break;
         k_bld_append(out, buf, (int64_t)n);
     }
-    int bad = ferror(f);
+    int ok = !ferror(f);
     fclose(f);
-    if (bad) {
+#else
+    int fd = open(p, O_RDONLY);
+    if (fd < 0) return 0;
+    int ok = k_os_read_fd(fd, out);
+    close(fd);
+#endif
+    if (!ok) {
         out.hdr->len = len;
         out.stk->top = top;
+    }
+    return (uint8_t)ok;
+}
+
+)KRT"
+R"KRT(/* Active scoped readers in this thread. The ABI carries an ID instead of
+   accepting a FILE pointer from K. A closed ID cannot name a later stream. */
+typedef struct k_os_reader {
+    struct k_os_reader *next;
+    FILE *stream;
+    uint64_t id;
+} k_os_reader;
+
+)KRT"
+R"KRT(static K_TLS k_os_reader *k_os_readers;
+static K_TLS uint64_t k_os_last_reader;
+
+)KRT"
+R"KRT(static k_os_reader **k_os_reader_slot(uint64_t id) {
+    k_os_reader **slot = &k_os_readers;
+    while (*slot && (*slot)->id != id) slot = &(*slot)->next;
+    return slot;
+}
+
+)KRT"
+R"KRT(K_API uint64_t k_os_reader_open(sl_u8 path) {
+    k_os_char p[K_OS_PATH_MAX];
+    if (k_os_last_reader == UINT64_MAX || k_os_native(path, p) < 0) return 0;
+    FILE *f = k_os_fopen(p, "rb");
+    if (!f) return 0;
+    k_os_reader *reader = (k_os_reader *)malloc(sizeof *reader);
+    if (!reader) {
+        fclose(f);
         return 0;
     }
-    return 1;
+    reader->next = k_os_readers;
+    reader->stream = f;
+    reader->id = ++k_os_last_reader;
+    k_os_readers = reader;
+    return reader->id;
+}
+
+)KRT"
+R"KRT(K_API int64_t k_os_reader_read(uint64_t id, k_rref out, int64_t max) {
+    k_os_reader *reader = *k_os_reader_slot(id);
+    if (!reader || max < 0) return -1;
+    if (max == 0) return 0;
+    FILE *f = reader->stream;
+    if (ferror(f)) return -1;
+    uint8_t buf[65536];
+    size_t limit = max < (int64_t)sizeof buf ? (size_t)max : sizeof buf;
+    size_t n = fread(buf, 1, limit, f);
+    if (n == 0) return ferror(f) ? -1 : 0;
+    k_bld_append(out, buf, (int64_t)n);
+    return (int64_t)n;
+}
+
+)KRT"
+R"KRT(K_API void k_os_reader_close(uint64_t id) {
+    k_os_reader **slot = k_os_reader_slot(id);
+    k_os_reader *reader = *slot;
+    if (!reader) return;
+    *slot = reader->next;
+    fclose(reader->stream);
+    free(reader);
 }
 
 )KRT"
@@ -5953,6 +6309,7 @@ void *malloc(size_t);
 void *calloc(size_t, size_t);
 void *realloc(void *, size_t);
 void free(void *);
+void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 int abs(int);
 
 )KRT"
@@ -6030,6 +6387,704 @@ float nanf(const char *);
 #undef K_JIT_MATH1
 #undef K_JIT_MATH2
 #endif
+)KRT"
+    ) },
+    { "runtime_tasks.h", string_view(
+R"KRT(/* Single-thread task driver. Each task and its frame have caller-supplied,
+   stable storage. A scope has a bounded intrusive queue and allocates nothing. */
+#ifndef K_RUNTIME_TASKS_H
+#define K_RUNTIME_TASKS_H
+
+)KRT"
+R"KRT(#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+)KRT"
+R"KRT(typedef enum {
+    K_TASK_EMPTY = 0,
+    K_TASK_CREATED,
+    K_TASK_PENDING,
+    K_TASK_DRAINING,
+    K_TASK_SUCCEEDED,
+    K_TASK_FAILED,
+    K_TASK_CANCELLED
+} k_task_state;
+
+)KRT"
+R"KRT(typedef enum {
+    K_TASK_POLL_PENDING,
+    K_TASK_POLL_READY,
+    K_TASK_POLL_ERROR
+} k_task_poll;
+
+)KRT"
+R"KRT(typedef enum {
+    K_TASK_STEP_IDLE,
+    K_TASK_STEP_PENDING,
+    K_TASK_STEP_FINISHED,
+    K_TASK_STEP_BUSY,
+    K_TASK_STEP_WAITING
+} k_task_step;
+
+)KRT"
+R"KRT(enum { K_TASK_WAKE_READY = 1, K_TASK_WAKE_CANCEL = 2 };
+
+)KRT"
+R"KRT(typedef struct {
+    void *context;
+    void (*signal)(void *context, uint32_t flags);
+} k_task_waker;
+
+)KRT"
+R"KRT(/* These two helpers may be called from other threads. A waker stays valid
+   through task finish, or until a host stops its external signal senders. */
+static inline void k_task_wake(k_task_waker waker) {
+    if (waker.signal) waker.signal(waker.context, K_TASK_WAKE_READY);
+}
+
+)KRT"
+R"KRT(static inline void k_task_request_shutdown(k_task_waker waker) {
+    if (waker.signal) waker.signal(waker.context, K_TASK_WAKE_CANCEL);
+}
+
+)KRT"
+R"KRT(/* A host event latches signals until take consumes them. A blocking take
+   waits for at least one flag. The task driver remains single-threaded. */
+typedef struct {
+    void *(*open)(void);
+    void (*close)(void *event);
+    void (*signal)(void *event, uint32_t flags);
+    uint32_t (*take)(void *event, int block);
+    uint32_t (*take_for)(void *event, uint32_t millis);
+} k_task_wait_ops;
+
+)KRT"
+R"KRT(/* Callbacks run on the scope's driving thread and return to the driver.
+   poll may start work. READY and ERROR both relinquish any foreign loans.
+   After a cancellation request, request_cancel runs at most once. Subsequent
+   drain calls can observe completion but cannot start more work. A true
+   drain means no foreign operation can still access the frame or its resources.
+   finish runs once, with started false if poll never ran, and quiesces its
+   signal senders before returning. After pending or incomplete drain, arm
+   atomically checks readiness and registers a waker. It returns true only
+   when the task can park and the provider will signal its next progress.
+   A waker with a null signal probes readiness without changing registration.
+   Copy the waker before returning when registering it. */
+typedef struct {
+    k_task_poll (*poll)(void *frame);
+    void (*request_cancel)(void *frame);
+    bool (*drain)(void *frame);
+    void (*finish)(void *frame, k_task_state terminal, bool started);
+    bool (*arm)(void *frame, const k_task_waker *waker);
+} k_task_ops;
+
+)KRT"
+R"KRT(/* Native operation transferred from C to K as an owned u64 token. The
+   token is (uint64_t)(uintptr_t)descriptor. The descriptor and its frame
+   stay live through finish, including cancellation before the first poll.
+   A pending poll may retain the fixed result slot. READY, ERROR and a
+   true drain relinquish that loan. */
+#define K_FOREIGN_TASK_ABI_VERSION 1
+typedef struct k_foreign_task {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    size_t result_size;
+    void *frame;
+    k_task_poll (*poll)(void *frame, void *result);
+    void (*request_cancel)(void *frame);
+    bool (*drain)(void *frame);
+    void (*finish)(void *frame, k_task_state terminal, bool started);
+} k_foreign_task;
+
+)KRT"
+R"KRT(/* Optional ABI v1 extension. Return &task.base with struct_size set to
+   sizeof(k_foreign_task_ready). The v1 base layout is unchanged. */
+typedef struct {
+    k_foreign_task base;
+    bool (*arm)(void *frame, const k_task_waker *waker);
+} k_foreign_task_ready;
+
+)KRT"
+R"KRT(static inline const k_foreign_task *k_foreign_task_get(uint64_t token) {
+    const k_foreign_task *op = (const k_foreign_task *)(uintptr_t)token;
+    if (!op || op->abi_version != K_FOREIGN_TASK_ABI_VERSION || op->struct_size < sizeof(*op) ||
+        !op->poll || !op->drain || !op->finish) return NULL;
+    return op;
+}
+
+)KRT"
+R"KRT(static inline bool k_foreign_task_arm(const k_foreign_task *op, const k_task_waker *waker) {
+    if (!op || op->struct_size < sizeof(k_foreign_task_ready)) return false;
+    const k_foreign_task_ready *extension = (const k_foreign_task_ready *)op;
+    return extension->arm && extension->arm(op->frame, waker);
+}
+
+)KRT"
+R"KRT(typedef struct k_task_scope k_task_scope;
+typedef struct k_task {
+    const k_task_ops *ops;
+    void *frame;
+    k_task_scope *scope;
+    struct k_task *next;
+    k_task_state state;
+    bool cancel_requested, parked;
+} k_task;
+
+)KRT"
+R"KRT(struct k_task_scope {
+    k_task *head, *tail;
+    size_t count, capacity;
+    bool closing, driving;
+    const k_task_wait_ops *wait;
+    void *event;
+};
+
+)KRT"
+R"KRT(#if K_NEED_TASK_RESIZE_LOANS
+/* A synchronous nested drive (an awaited child) keeps the authority of
+   its caller. A peer polled after that caller returns starts a fresh chain. */
+typedef struct k_task_drive {
+    const k_task *task;
+    const struct k_task_drive *parent;
+} k_task_drive;
+static K_TLS const k_task_drive *k_task_current_drive;
+
+)KRT"
+R"KRT(static inline bool k_task_in_drive(const k_task *task) {
+    for (const k_task_drive *drive = k_task_current_drive; drive; drive = drive->parent)
+        if (drive->task == task) return true;
+    return false;
+}
+#endif
+
+)KRT"
+R"KRT(#if K_NEED_TASK_LOANS
+#if K_NEED_TASK_HOLDER_GRAPHS
+typedef struct k_task_holder_graph k_task_holder_graph;
+typedef void (*k_task_holder_visit)(k_task_holder_graph *, const void *);
+typedef struct {
+    const void *start;
+    size_t bytes;
+    k_task_holder_visit visit;
+} k_task_holder_range;
+
+)KRT"
+R"KRT(struct k_task_holder_graph {
+    k_task_cleanup cleanup;
+    k_task_holder_range *ranges;
+    size_t count, capacity;
+    size_t *seen;
+};
+
+)KRT"
+R"KRT(static inline size_t k_task_holder_key(const k_task_holder_graph *graph, const void *start,
+                                      size_t bytes, k_task_holder_visit visit) {
+    uintptr_t address = (uintptr_t)start;
+    size_t mask = 2 * graph->capacity - 1;
+    size_t index = (size_t)((address >> 3) ^ (address >> 13)) & mask;
+    while (graph->seen[index]) {
+        const k_task_holder_range *range = &graph->ranges[graph->seen[index] - 1];
+        if (range->start == start && range->bytes == bytes && range->visit == visit) break;
+        index = (index + 1) & mask;
+    }
+    return index;
+}
+
+)KRT"
+R"KRT(static inline void k_task_holder_add(k_task_holder_graph *graph, const void *start,
+                                     size_t bytes, k_task_holder_visit visit) {
+    if (!start || (!bytes && !visit)) return;
+    size_t key = graph->capacity ? k_task_holder_key(graph, start, bytes, visit) : 0;
+    if (graph->capacity && graph->seen[key]) return;
+    if (graph->count == graph->capacity) {
+        if (graph->capacity > (size_t)-1 / (4 * sizeof(k_task_holder_range)))
+            k_panic("task holder graph is too large");
+        size_t capacity = graph->capacity ? graph->capacity * 2 : 8;
+        k_task_holder_range *ranges = (k_task_holder_range *)realloc(graph->ranges, capacity * sizeof(*ranges));
+        size_t *seen = (size_t *)calloc(capacity * 2, sizeof(*seen));
+        if (!ranges || !seen) k_panic("out of memory sampling a task holder graph");
+        free(graph->seen);
+        graph->ranges = ranges;
+        graph->capacity = capacity;
+        graph->seen = seen;
+        for (size_t i = 0; i < graph->count; ++i) {
+            k_task_holder_range range = ranges[i];
+            seen[k_task_holder_key(graph, range.start, range.bytes, range.visit)] = i + 1;
+        }
+        key = k_task_holder_key(graph, start, bytes, visit);
+    }
+    graph->ranges[graph->count] = (k_task_holder_range){start, bytes, visit};
+    graph->seen[key] = ++graph->count;
+}
+
+)KRT"
+R"KRT(static int k_task_holder_range_order(const void *a, const void *b) {
+    uintptr_t first = (uintptr_t)((const k_task_holder_range *)a)->start;
+    uintptr_t second = (uintptr_t)((const k_task_holder_range *)b)->start;
+    return (first > second) - (first < second);
+}
+
+)KRT"
+R"KRT(/* Merge adjacent and overlapping ranges once. Writes can then find the
+   first possible conflict with a binary search. */
+static inline void k_task_holder_compact(k_task_holder_graph *graph) {
+    if (graph->count > 1)
+        qsort(graph->ranges, graph->count, sizeof(*graph->ranges), k_task_holder_range_order);
+    size_t count = 0;
+    for (size_t i = 0; i < graph->count; ++i) {
+        k_task_holder_range range = graph->ranges[i];
+        if (!range.bytes) continue;
+        if (count) {
+            k_task_holder_range *previous = &graph->ranges[count - 1];
+            size_t offset = (uintptr_t)range.start - (uintptr_t)previous->start;
+            if (offset <= previous->bytes) {
+                if (range.bytes > previous->bytes - offset) previous->bytes = offset + range.bytes;
+                continue;
+            }
+        }
+        graph->ranges[count++] = range;
+    }
+    graph->count = count;
+}
+#endif
+
+)KRT"
+R"KRT(/* A growable region has a stable stack identity. Inline array storage can
+   also be overwritten through an enclosing aggregate, so lease its byte
+   extent. The owning worker drives all tasks that can access these bytes. */
+typedef struct k_task_loan {
+    struct k_task_loan *next, **link;
+    const k_stack *owner;
+    uintptr_t start;
+    size_t bytes;
+    const k_task *task;
+    bool resize;
+#if K_NEED_TASK_HOLDER_GRAPHS
+    k_task_holder_graph *graph;
+#endif
+} k_task_loan;
+
+)KRT"
+R"KRT(static K_TLS k_task_loan *k_task_loans;
+
+)KRT"
+R"KRT(static inline void k_task_loan_open(k_task_loan *loan, const k_stack *owner,
+                                   const void *start, size_t bytes, const k_task *task, bool resize) {
+    loan->owner = owner;
+    loan->start = (uintptr_t)start;
+    loan->bytes = bytes;
+    loan->task = task;
+    loan->resize = resize;
+#if K_NEED_TASK_HOLDER_GRAPHS
+    loan->graph = NULL;
+#endif
+    loan->link = &k_task_loans;
+    loan->next = k_task_loans;
+    if (loan->next) loan->next->link = &loan->next;
+    k_task_loans = loan;
+}
+
+)KRT"
+R"KRT(#if K_NEED_TASK_HOLDER_GRAPHS
+static inline void k_task_holder_release(k_task_cleanup *entry) {
+    k_task_holder_graph *graph = (k_task_holder_graph *)entry;
+    free(graph->ranges);
+    free(graph->seen);
+    free(graph);
+}
+
+)KRT"
+R"KRT(static inline void k_task_holder_open(k_task_loan *loan, const k_task *task, const void *root,
+                                     size_t bytes, k_task_holder_visit visit) {
+    k_task_loan_open(loan, NULL, NULL, 0, task, false);
+    if (!root) return;
+    k_task_holder_graph *graph = (k_task_holder_graph *)calloc(1, sizeof(*graph));
+    if (!graph) k_panic("out of memory opening a task holder graph");
+    k_task_cleanup_open(&graph->cleanup, k_task_holder_release);
+    k_task_holder_add(graph, root, bytes, visit);
+    for (size_t i = 0; i < graph->count; ++i) {
+        k_task_holder_range range = graph->ranges[i];
+        if (range.visit) range.visit(graph, range.start);
+    }
+    free(graph->seen);
+    graph->seen = NULL;
+    k_task_holder_compact(graph);
+    loan->graph = graph;
+}
+#endif
+
+)KRT"
+R"KRT(static inline void k_task_loans_close(k_task_loan *loans, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        k_task_loan *loan = &loans[i];
+        *loan->link = loan->next;
+        if (loan->next) loan->next->link = loan->link;
+#if K_NEED_TASK_HOLDER_GRAPHS
+        if (loan->graph) k_task_cleanup_close(&loan->graph->cleanup);
+#endif
+    }
+}
+
+)KRT"
+R"KRT(static inline bool k_task_ranges_overlap(uintptr_t a, size_t n, uintptr_t b, size_t m) {
+    return n && m && (a <= b ? b - a < n : a - b < m);
+}
+
+)KRT"
+R"KRT(#if K_NEED_TASK_HOLDER_GRAPHS
+static inline bool k_task_holder_overlaps(const k_task_holder_graph *graph, uintptr_t address, size_t bytes) {
+    size_t first = 0, last = graph->count;
+    while (first < last) {
+        size_t middle = first + (last - first) / 2;
+        k_task_holder_range range = graph->ranges[middle];
+        uintptr_t start = (uintptr_t)range.start;
+        if (start <= address && address - start >= range.bytes) first = middle + 1;
+        else last = middle;
+    }
+    if (first == graph->count) return false;
+    k_task_holder_range range = graph->ranges[first];
+    return k_task_ranges_overlap(address, bytes, (uintptr_t)range.start, range.bytes);
+}
+#endif
+
+)KRT"
+R"KRT(static inline bool k_task_loan_conflicts(const k_stack *owner, const void *start, size_t bytes,
+                                        bool reserve) {
+    uintptr_t address = (uintptr_t)start;
+    for (const k_task_loan *loan = k_task_loans; loan; loan = loan->next) {
+        /* A scope input is protected from construction through finish.
+           Detachment follows finish, and the scope owns the token itself. */
+        if (loan->task && !loan->task->scope && loan->task->state != K_TASK_EMPTY) continue;
+        bool overlaps = k_task_ranges_overlap(address, bytes, loan->start, loan->bytes);
+#if K_NEED_TASK_HOLDER_GRAPHS
+        if (!overlaps && bytes && loan->graph)
+            overlaps = k_task_holder_overlaps(loan->graph, address, bytes);
+#endif
+        if (!(owner && loan->owner == owner) && !overlaps) continue;
+        if (!reserve && loan->resize) {
+#if K_NEED_TASK_RESIZE_LOANS
+            if (k_task_in_drive(loan->task)) continue;
+#endif
+        }
+        return true;
+    }
+    return false;
+}
+
+)KRT"
+R"KRT(static inline void k_task_check_shrink(const k_stack *owner, const void *start, size_t bytes,
+                                       const char *file, int line) {
+    static const uint8_t message[] = "cannot shrink an array borrowed by a task";
+    if (k_task_loan_conflicts(owner, start, bytes, false))
+        k_abort_msg(message, sizeof message - 1, file, line);
+}
+
+)KRT"
+R"KRT(#if K_NEED_TASK_HOLDER_LOANS
+static inline void k_task_check_holder_write(const void *start, size_t bytes,
+                                             const char *file, int line) {
+    static const uint8_t message[] = "cannot replace reference slots borrowed by a task";
+    if (k_task_loan_conflicts(NULL, start, bytes, false))
+        k_abort_msg(message, sizeof message - 1, file, line);
+}
+#endif
+
+)KRT"
+R"KRT(#if K_NEED_TASK_RESIZE_LOANS
+static inline void k_task_check_resize_loan(const k_stack *owner, const void *start, size_t bytes,
+                                           const char *file, int line) {
+    static const uint8_t message[] = "cannot exclusively borrow an array already borrowed by a task";
+    if (k_task_loan_conflicts(owner, start, bytes, true))
+        k_abort_msg(message, sizeof message - 1, file, line);
+}
+#endif
+#endif
+
+)KRT"
+R"KRT(static inline bool k_task_terminal(k_task_state state) {
+    return state == K_TASK_SUCCEEDED || state == K_TASK_FAILED || state == K_TASK_CANCELLED;
+}
+
+)KRT"
+R"KRT(/* Initialize zeroed storage, or reuse a detached terminal task. The task,
+   frame, scope and operations table must stay valid until the step detaches
+   the task. finish releases payloads and leaves that storage to its caller. */
+static inline bool k_task_init(k_task *task, void *frame, const k_task_ops *ops) {
+    if (task->scope || (task->state != K_TASK_EMPTY && !k_task_terminal(task->state)) ||
+        !ops || !ops->poll || !ops->drain) return false;
+    task->ops = ops;
+    task->frame = frame;
+    task->next = NULL;
+    task->state = K_TASK_CREATED;
+    task->cancel_requested = false;
+    task->parked = false;
+    return true;
+}
+
+)KRT"
+R"KRT(/* Initialize zeroed or fully drained scope storage. */
+static inline bool k_task_scope_init(k_task_scope *scope, size_t capacity) {
+    if (scope->count || scope->driving || scope->event) return false;
+    scope->head = scope->tail = NULL;
+    scope->capacity = capacity;
+    scope->closing = false;
+    scope->wait = NULL;
+    return true;
+}
+
+)KRT"
+R"KRT(static inline bool k_task_scope_use_waiter(k_task_scope *scope, const k_task_wait_ops *wait) {
+    if (scope->wait || scope->closing || scope->driving ||
+        !wait || !wait->open || !wait->close || !wait->signal || !wait->take) return false;
+    scope->wait = wait;
+    return true;
+}
+
+)KRT"
+R"KRT(static inline void k_task_scope_hosted(k_task_scope *scope) {
+#if K_NEED_TASK_WAIT
+    static const k_task_wait_ops host = {
+        k_task_event_open, k_task_event_close, k_task_event_signal, k_task_event_take, k_task_event_take_for
+    };
+    k_task_scope_use_waiter(scope, &host);
+#else
+    (void)scope;
+#endif
+}
+
+)KRT"
+R"KRT(/* May also be acquired on the driving thread before handing a shutdown
+   signal to an external owner. Ordinary cooperative tasks allocate no event. */
+static inline k_task_waker k_task_scope_waker(k_task_scope *scope) {
+    k_task_waker waker = { NULL, NULL };
+    if (scope->wait) {
+        if (!scope->event) scope->event = scope->wait->open();
+        if (scope->event) {
+            waker.context = scope->event;
+            waker.signal = scope->wait->signal;
+        } else {
+            scope->wait = NULL;
+        }
+    }
+    return waker;
+}
+
+)KRT"
+R"KRT(static inline bool k_task_scope_release(k_task_scope *scope) {
+    if (scope->count || scope->driving) return false;
+    if (scope->event) scope->wait->close(scope->event);
+    scope->wait = NULL;
+    scope->event = NULL;
+    return true;
+}
+
+)KRT"
+R"KRT(static inline void k_task_scope_append(k_task_scope *scope, k_task *task) {
+    task->next = NULL;
+    if (scope->tail) scope->tail->next = task;
+    else scope->head = task;
+    scope->tail = task;
+}
+
+)KRT"
+R"KRT(static inline bool k_task_scope_submit(k_task_scope *scope, k_task *task) {
+    if (scope->closing || scope->count == scope->capacity || task->scope ||
+        task->state != K_TASK_CREATED) return false;
+    task->scope = scope;
+    k_task_scope_append(scope, task);
+    ++scope->count;
+    return true;
+}
+
+)KRT"
+R"KRT(/* Requests are idempotent. Work already inside a poll runs to its boundary.
+   A terminal result from that poll settles it. A pending result enters the
+   cancellation path on the next step and never runs poll again. */
+static inline void k_task_cancel(k_task *task) {
+    if (task->state != K_TASK_EMPTY && !k_task_terminal(task->state) && !task->cancel_requested) {
+        task->cancel_requested = true;
+        task->parked = false;
+    }
+}
+
+)KRT"
+R"KRT(/* Close submissions and request cancellation of all outstanding tasks. Drive
+   steps until the scope has no tasks before releasing its storage. */
+static inline void k_task_scope_shutdown(k_task_scope *scope) {
+    scope->closing = true;
+    for (k_task *task = scope->head; task; task = task->next) k_task_cancel(task);
+}
+
+)KRT"
+R"KRT(static inline k_task_state k_task_advance(k_task *task) {
+    if (task->cancel_requested) {
+        if (task->state == K_TASK_CREATED) return K_TASK_CANCELLED;
+        if (task->state != K_TASK_DRAINING) {
+            task->state = K_TASK_DRAINING;
+            if (task->ops->request_cancel) task->ops->request_cancel(task->frame);
+        }
+        return task->ops->drain(task->frame) ? K_TASK_CANCELLED : K_TASK_DRAINING;
+    }
+
+)KRT"
+R"KRT(    // Publish the active state before poll, which may submit or cancel tasks.
+    task->state = K_TASK_PENDING;
+    switch (task->ops->poll(task->frame)) {
+        case K_TASK_POLL_PENDING: return K_TASK_PENDING;
+        case K_TASK_POLL_READY: return K_TASK_SUCCEEDED;
+        case K_TASK_POLL_ERROR: return K_TASK_FAILED;
+    }
+    // An invalid provider result cannot certify that its loans have ended.
+    task->cancel_requested = true;
+    return K_TASK_PENDING;
+}
+
+)KRT"
+R"KRT(static inline void k_task_scope_signals(k_task_scope *scope, uint32_t flags) {
+    if (flags & K_TASK_WAKE_CANCEL) k_task_scope_shutdown(scope);
+    if (flags & K_TASK_WAKE_READY)
+        for (k_task *task = scope->head; task; task = task->next) task->parked = false;
+}
+
+)KRT"
+R"KRT(static inline k_task_step k_task_scope_run_ready(k_task_scope *scope) {
+    k_task *task = scope->head;
+    if (!task) return K_TASK_STEP_IDLE;
+    for (size_t remaining = scope->count; task->parked && remaining > 1; --remaining) {
+        scope->head = task->next;
+        k_task_scope_append(scope, task);
+        task = scope->head;
+    }
+    if (task->parked) return K_TASK_STEP_WAITING;
+    scope->driving = true;
+#if K_NEED_TASK_RESIZE_LOANS
+    k_task_drive drive = { task, k_task_current_drive };
+    k_task_current_drive = &drive;
+#endif
+    bool started = task->state != K_TASK_CREATED || !task->cancel_requested;
+    task->state = k_task_advance(task);
+    bool terminal = k_task_terminal(task->state);
+    if (terminal && task->ops->finish) task->ops->finish(task->frame, task->state, started);
+    if (!terminal && scope->wait && task->ops->arm &&
+        (!task->cancel_requested || task->state == K_TASK_DRAINING)) {
+        k_task_waker probe = { NULL, NULL };
+        if (scope->event || task->ops->arm(task->frame, &probe)) {
+            k_task_waker waker = k_task_scope_waker(scope);
+            if (waker.signal) task->parked = task->ops->arm(task->frame, &waker);
+        }
+    }
+
+)KRT"
+R"KRT(#if K_NEED_TASK_RESIZE_LOANS
+    k_task_current_drive = drive.parent;
+#endif
+    scope->head = task->next;
+    if (!scope->head) scope->tail = NULL;
+    if (terminal) {
+        task->scope = NULL;
+        task->next = NULL;
+        --scope->count;
+    } else {
+        k_task_scope_append(scope, task);
+    }
+    scope->driving = false;
+    return terminal ? K_TASK_STEP_FINISHED : K_TASK_STEP_PENDING;
+}
+
+)KRT"
+R"KRT(/* One nonblocking round-robin step. A parked task waits for a signal.
+   Return BUSY for re-entry from a callback into this scope. */
+static inline k_task_step k_task_scope_step(k_task_scope *scope) {
+    if (scope->driving) return K_TASK_STEP_BUSY;
+    if (scope->event) k_task_scope_signals(scope, scope->wait->take(scope->event, 0));
+    return k_task_scope_run_ready(scope);
+}
+
+)KRT"
+R"KRT(/* When no task can run, take the latched event and check the queue again.
+   Signals racing the transition to waiting remain latched. */
+static inline k_task_step k_task_scope_wait_step(k_task_scope *scope) {
+    k_task_step step = k_task_scope_step(scope);
+    while (step == K_TASK_STEP_WAITING) {
+        k_task_scope_signals(scope, scope->wait->take(scope->event, 1));
+        step = k_task_scope_run_ready(scope);
+    }
+    return step;
+}
+
+)KRT"
+R"KRT(/* Drive one task, allowing the host to park until a wake or the time budget.
+   The caller can recheck its own deadline after a timeout or spurious wake. */
+static inline k_task_step k_task_scope_wait_for(k_task_scope *scope, int64_t millis) {
+    k_task_step step = k_task_scope_step(scope);
+    if (step != K_TASK_STEP_WAITING || millis <= 0 || !scope->wait->take_for) return step;
+    uint32_t timeout = millis > INT32_MAX ? INT32_MAX : (uint32_t)millis;
+    uint32_t flags = scope->wait->take_for(scope->event, timeout);
+    if (!flags) return step;
+    k_task_scope_signals(scope, flags);
+    return k_task_scope_run_ready(scope);
+}
+
+)KRT"
+R"KRT(/* An embedded child has one stable record. Its parent advances it at most
+   once per poll, and waits for terminal drain before dropping its storage. */
+typedef struct {
+    k_task task;
+    k_task_scope scope;
+} k_task_child;
+
+)KRT"
+R"KRT(static inline bool k_task_child_init(k_task_child *child, void *frame, const k_task_ops *ops) {
+    return k_task_scope_init(&child->scope, 1) && k_task_init(&child->task, frame, ops) &&
+           k_task_scope_submit(&child->scope, &child->task);
+}
+
+)KRT"
+R"KRT(static inline k_task_poll k_task_child_poll(k_task_child *child) {
+    if (!k_task_terminal(child->task.state)) k_task_scope_step(&child->scope);
+    switch (child->task.state) {
+        case K_TASK_SUCCEEDED: return K_TASK_POLL_READY;
+        case K_TASK_FAILED: case K_TASK_CANCELLED: case K_TASK_EMPTY: return K_TASK_POLL_ERROR;
+        default: return K_TASK_POLL_PENDING;
+    }
+}
+
+)KRT"
+R"KRT(static inline void k_task_child_cancel(k_task_child *child) {
+    k_task_cancel(&child->task);
+}
+
+)KRT"
+R"KRT(static inline bool k_task_child_drain(k_task_child *child) {
+    k_task_child_cancel(child);
+    return k_task_child_poll(child) != K_TASK_POLL_PENDING;
+}
+
+)KRT"
+R"KRT(static inline bool k_task_child_arm(k_task_child *child, const k_task_waker *waker) {
+    k_task *task = &child->task;
+    return task->scope && task->ops->arm && task->ops->arm(task->frame, waker);
+}
+
+)KRT"
+R"KRT(static inline bool k_task_drain_local(void *frame) {
+    (void)frame;
+    return true;
+}
+
+)KRT"
+R"KRT(static inline bool k_task_join_local(void *frame, const k_task_ops *ops) {
+    k_task_child root = {0};
+    if (!k_task_child_init(&root, frame, ops)) return false;
+    k_task_scope_hosted(&root.scope);
+    while (root.scope.count) k_task_scope_wait_step(&root.scope);
+    k_task_scope_release(&root.scope);
+    return root.task.state == K_TASK_SUCCEEDED;
+}
+
+)KRT"
+R"KRT(#endif
 )KRT"
     ) },
 };

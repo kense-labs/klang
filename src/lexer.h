@@ -16,7 +16,7 @@ namespace klang {
     F(T_LPAREN,   "(")   F(T_RPAREN,   ")") \
     F(T_LBRACKET, "[")   F(T_RBRACKET, "]") \
     F(T_LCURLY,   "{")   F(T_RCURLY,   "}") \
-    F(T_COMMA,    ",")   F(T_SEMI,     ";")  F(T_COLON, ":")  F(T_QUESTION, "?") \
+    F(T_COMMA,    ",")   F(T_SEMI,     ";")  F(T_COLON, ":")  F(T_QUESTION, "?") F(T_AT, "@") \
     F(T_COLONCOLON, "::") \
     F(T_DOT,      ".")   F(T_DOTDOT,   "..") F(T_DOTASSIGN, ".=") \
     F(T_DOTEQ,    ".==") F(T_DOTNEQ,   ".!=") \
@@ -281,6 +281,7 @@ struct Lexer {
                 if (*p == ':') { p++; Set(T_COLONCOLON); } else Set(T_COLON);
                 return;
             case '?': Set(T_QUESTION); return;
+            case '@': Set(T_AT);       return;
             case '~': Set(T_BITNOT);   return;
 
             case '.':
