@@ -175,7 +175,9 @@
     closeBtn = document.getElementById("k-cmdk-close");
     if (!backdrop || !input || !resultsEl) return;
 
-    if (openBtn) openBtn.addEventListener("click", openModal);
+    document.querySelectorAll("#k-search-open, [data-search-open]").forEach(function (btn) {
+      btn.addEventListener("click", openModal);
+    });
     if (closeBtn) closeBtn.addEventListener("click", closeModal);
     backdrop.addEventListener("click", function (e) {
       if (e.target === backdrop) closeModal();

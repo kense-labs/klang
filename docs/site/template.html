@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="$doclang$" data-page-lang="$pagelang$" data-lang="$pagelang$" data-theme="light" data-accent="neutral">
+<html lang="$doclang$" data-page-lang="$pagelang$" data-lang="$pagelang$" data-theme="light" data-accent="neutral" data-layout="<!--KUI_LAYOUT-->">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,12 +11,21 @@ $if(alt-zh)$<meta name="k-alt-zh" content="$alt-zh$">$endif$
 <script>
 (function() {
   try {
-    var t = localStorage.getItem('k-docs-theme');
-    if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    document.documentElement.setAttribute('data-theme', t);
-    var a = localStorage.getItem('k-docs-accent') || 'neutral';
-    document.documentElement.setAttribute('data-accent', a);
-    var pLang = document.documentElement.getAttribute('data-page-lang') || 'en';
+    var rootEl = document.documentElement;
+    window.addEventListener('pointerdown', function() { rootEl.setAttribute('data-pointer-focus', ''); }, { passive: true });
+    window.addEventListener('keydown', function(e) {
+      if (e.key === 'Tab' || e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        rootEl.removeAttribute('data-pointer-focus');
+      }
+    }, { passive: true });
+    var t = localStorage.getItem('k-docs-theme') || localStorage.getItem('theme');
+    if (t !== 'dark' && t !== 'light') {
+      t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    rootEl.setAttribute('data-theme', t);
+    var a = localStorage.getItem('k-docs-accent') || localStorage.getItem('kui-accent') || 'neutral';
+    rootEl.setAttribute('data-accent', a);
+    var pLang = rootEl.getAttribute('data-page-lang') || 'en';
     var hasPair = !!document.querySelector('meta[name="k-alt-zh"]') && !!document.querySelector('meta[name="k-alt-en"]');
     var uiLang = pLang;
     if (pLang === 'zh') {
@@ -25,7 +34,7 @@ $if(alt-zh)$<meta name="k-alt-zh" content="$alt-zh$">$endif$
     } else if (!hasPair) {
       uiLang = localStorage.getItem('k-docs-lang') || 'en';
     }
-    document.documentElement.setAttribute('data-lang', uiLang);
+    rootEl.setAttribute('data-lang', uiLang);
   } catch (e) {}
 })();
 </script>
@@ -44,10 +53,21 @@ $endif$
         <button type="button" class="mobile-nav-btn" id="k-mobile-nav" aria-label="Toggle navigation" aria-expanded="false">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/></svg>
         </button>
+        <a class="kense-parent-link" href="https://kense-labs.github.io/" data-en-href="https://kense-labs.github.io/en/" data-zh-href="https://kense-labs.github.io/" title="Kense">
+          <svg class="kense-parent-mark" width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 3.5A1.5 1.5 0 0 1 5.5 2h2.2A1.5 1.5 0 0 1 9.2 3.5v17A1.5 1.5 0 0 1 7.7 22H5.5A1.5 1.5 0 0 1 4 20.5v-17Zm6.3 8.1L17.6 2h4.1l-7.5 9.6L22 22h-4.3l-7.4-10.4Z"/></svg>
+          <span>Kense</span>
+        </a>
+        <span class="brand-slash" aria-hidden="true">/</span>
         <a class="brand-split" href="$root$index.html" data-en-href="$root$index.html" data-zh-href="$root$README.zh-CN.html">
-          <img class="brand-mark brand-mark-light" src="$root$docs/logo/kense-mark-light.png" alt="Kense mark" width="22" height="22">
-          <img class="brand-mark brand-mark-dark" src="$root$docs/logo/kense-mark-dark.png" alt="Kense mark" width="22" height="22">
-          <span class="brand-wordmark">K</span>
+          <svg class="k-brand-emblem" width="20" height="20" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+            <path fill="#FB7185" d="M11 12a3 3 0 0 1 3-3h5a3 3 0 0 1 3 3v40a3 3 0 0 1-3 3h-5a3 3 0 0 1-3-3Z"/>
+            <path fill="#FDA4AF" d="M11 12a3 3 0 0 1 3-3h5a3 3 0 0 1 3 3v8H11Z"/>
+            <path fill="#FDA4AF" d="M23 29.5 40.5 9H52.5L33.5 31.5H23Z"/>
+            <path fill="#E11D48" d="M32.5 29.5 53.5 55H40.5L23 34V29.5Z"/>
+            <path fill="#9F1239" d="m32.5 29.5 6.8 8.2-9.5 1.8L23 34Z"/>
+            <path fill="#FFF1F2" d="m27.5 27.2 4.8 4.8-4.8 4.8-4.8-4.8Z"/>
+          </svg>
+          <span class="brand-wordmark" data-en="K Language" data-zh="K 语言">K</span>
           <span class="brand-ver">v0.1.0</span>
         </a>
       </div>
@@ -55,6 +75,11 @@ $endif$
       <!--KUI_TOPNAV-->
 
       <div class="topbar-actions">
+        <button type="button" class="topbar-search-pill" data-search-open aria-label="Search documentation">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+          <span class="topbar-search-lbl" data-en="Search" data-zh="搜索">Search</span>
+          <kbd>⌘K</kbd>
+        </button>
         <button type="button" class="icon-chip" id="k-theme-toggle" aria-label="Toggle color theme" title="Toggle theme / 切换主题">
           <svg class="theme-icon-moon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 9.8A5.7 5.7 0 0 1 6.2 2.5a5.7 5.7 0 1 0 7.3 7.3Z"/></svg>
           <svg class="theme-icon-sun" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.6v1.4M8 13v1.4M1.6 8H3M13 8h1.4M3.5 3.5l1 1M11.5 11.5l1 1M12.5 3.5l-1 1M4.5 11.5l-1 1"/></svg>
@@ -71,7 +96,7 @@ $endif$
               <button type="button" class="accent-swatch" data-accent-val="blue"><span class="accent-dot" style="background:#245bc4"></span>Blue</button>
               <button type="button" class="accent-swatch" data-accent-val="violet"><span class="accent-dot" style="background:#7142b6"></span>Violet</button>
               <button type="button" class="accent-swatch" data-accent-val="teal"><span class="accent-dot" style="background:#08776d"></span>Teal</button>
-              <button type="button" class="accent-swatch" data-accent-val="rose"><span class="accent-dot" style="background:#b93c67"></span>Rose</button>
+              <button type="button" class="accent-swatch" data-accent-val="rose"><span class="accent-dot" style="background:#e11d48"></span>Rose</button>
               <button type="button" class="accent-swatch" data-accent-val="amber"><span class="accent-dot" style="background:#955a08"></span>Amber</button>
             </div>
           </div>
@@ -84,6 +109,8 @@ $endif$
       </div>
     </div>
   </header>
+
+  <!--KUI_LANDING-->
 
   <div class="docs-frame">
     <div class="aside-backdrop" id="k-aside-backdrop"></div>
@@ -105,6 +132,7 @@ $endif$
         <article class="doc">
           <!--KUI_HERO-->
           <!--KUI_DOC_HEAD-->
+          <!--KUI_SPEC_OPEN-->
           $if(toc)$
           <details class="toc-drawer">
             <summary>
@@ -119,11 +147,9 @@ $endif$
           <div class="doc-body<!--KUI_BODY_CLASS-->">
             $body$
           </div>
+          <!--KUI_SPEC_CLOSE-->
           <!--KUI_PAGER-->
-          <footer class="doc-footer">
-            <span data-en="K Programming Language · Kense Labs" data-zh="K 编程语言 · Kense Labs">K Programming Language · Kense Labs</span>
-            $if(source)$<span><span data-en="Built from" data-zh="源文件">Built from</span> <a href="https://github.com/kense-labs/klang/blob/main/$source$"><code>$source$</code></a></span>$endif$
-          </footer>
+          <!--KUI_FOOTER-->
         </article>
       </div>
     </main>

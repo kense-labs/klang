@@ -22,6 +22,9 @@ from urllib.parse import quote, unquote
 
 SITE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(SITE))
+if SITE not in sys.path:
+    sys.path.insert(0, SITE)
+from landing import render_landing, render_landing_footer, render_spec_close, render_spec_open
 
 # Markdown pages, as (source relative to the repository, output page).
 PAGES = []
@@ -292,7 +295,7 @@ def render_topnav(root, out_url):
             f'<a href="{root}{href}" data-en-href="{root}{en_tgt}" data-zh-href="{root}{zh_tgt}" '
             f'data-en="{html.escape(en_lbl)}" data-zh="{html.escape(zh_lbl)}"{cur_attr}>{html.escape(txt)}</a>'
         )
-    return '<nav class="company-nav" aria-label="Primary sections">' + "".join(links) + "</nav>"
+    return '<nav class="company-nav" data-k-pill-bar="topnav" aria-label="Primary sections"><span class="k-pill-indicator company-nav-pill" aria-hidden="true"></span>' + "".join(links) + "</nav>"
 
 
 def render_sidebar(root, out_url, groups):
@@ -580,13 +583,30 @@ def apply_kui_chrome(out_path, root, out_url, src_rel, groups):
     raw = open(out_path, encoding="utf-8").read()
     is_home = out_url in ("index.html", "README.zh-CN.html")
     zh_mode = is_zh_page(out_url)
+    doc_footer = (
+        '<footer class="doc-footer">'
+        '<span data-en="K Programming Language · Kense Labs" data-zh="K 编程语言 · Kense Labs">'
+        + ("K 编程语言 · Kense Labs" if zh_mode else "K Programming Language · Kense Labs")
+        + "</span>"
+        + (
+            f'<span><span data-en="Built from" data-zh="源文件">{"源文件" if zh_mode else "Built from"}</span> '
+            f'<a href="https://github.com/kense-labs/klang/blob/main/{html.escape(src_rel)}"><code>{html.escape(src_rel)}</code></a></span>'
+            if src_rel else ""
+        )
+        + "</footer>"
+    )
+    raw = raw.replace("<!--KUI_LAYOUT-->", "landing" if is_home else "docs")
     raw = raw.replace("<!--KUI_TOPNAV-->", render_topnav(root, out_url))
     raw = raw.replace("<!--KUI_LANG_DROPDOWN-->", render_lang_dropdown(root, out_url))
     raw = raw.replace("<!--KUI_SIDEBAR-->", render_sidebar(root, out_url, groups))
-    raw = raw.replace("<!--KUI_HERO-->", render_hero(root, zh_mode) if is_home else "")
+    raw = raw.replace("<!--KUI_LANDING-->", render_landing(root, zh_mode) if is_home else "")
+    raw = raw.replace("<!--KUI_HERO-->", "")
     raw = raw.replace("<!--KUI_DOC_HEAD-->", "" if is_home else render_doc_head(root, out_url, src_rel, groups))
+    raw = raw.replace("<!--KUI_SPEC_OPEN-->", render_spec_open(zh_mode) if is_home else "")
+    raw = raw.replace("<!--KUI_SPEC_CLOSE-->", render_spec_close() if is_home else "")
     raw = raw.replace("<!--KUI_BODY_CLASS-->", " home-readme-body" if is_home else "")
     raw = raw.replace("<!--KUI_PAGER-->", "" if is_home else render_pager(root, out_url, groups))
+    raw = raw.replace("<!--KUI_FOOTER-->", render_landing_footer(root, zh_mode, src_rel) if is_home else doc_footer)
     if out_url == "README.zh-CN.html":
         raw = localize_zh_home_body(raw)
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
