@@ -444,7 +444,7 @@ if(K_BUILD_LSP_TESTS)
             add_library(k_cordis_app_stream_${provider} MODULE
                 test/cordis/tcp_application_provider.cpp $<TARGET_OBJECTS:k_cordis_test_stream_impl>)
             target_include_directories(k_cordis_app_stream_${provider} PRIVATE src)
-            target_compile_definitions(k_cordis_app_stream_${provider} PRIVATE K_TEST_CORDIS_PROVIDER_ID="${provider}")
+            target_compile_definitions(k_cordis_app_stream_${provider} PRIVATE K_CORDIS_TCP_READ_SHARED K_TEST_CORDIS_PROVIDER_ID="${provider}")
             target_link_libraries(k_cordis_app_stream_${provider} PRIVATE Threads::Threads)
             if(WIN32)
                 target_link_libraries(k_cordis_app_stream_${provider} PRIVATE ws2_32)
