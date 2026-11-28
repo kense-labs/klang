@@ -19,7 +19,7 @@ add_executable(k
     src/process.cpp
     src/shared_library.cpp
     src/version.cpp
-    src/process.h
+    src/subproc.h
     src/shared_library.h
     src/progress.cpp
     src/progress.h

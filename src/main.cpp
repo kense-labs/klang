@@ -46,7 +46,7 @@
 #include "codegen_merge.h"
 #include "codegen_nodes.h"
 #include "runtime_inline.h"
-#include "process.h"
+#include "subproc.h"
 #include "shared_library.h"
 #include "jit.h"
 #include "progress.h"

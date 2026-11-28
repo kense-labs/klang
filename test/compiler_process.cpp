@@ -4,7 +4,7 @@
 #undef NDEBUG
 #endif
 #include "../src/includes.h"
-#include "../src/process.h"
+#include "../src/subproc.h"
 #include <filesystem>
 
 using namespace klang;

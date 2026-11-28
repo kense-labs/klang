@@ -6,7 +6,7 @@
 #include "../content_digest.h"
 #include "../json.h"
 #include "../paths.h"
-#include "../process.h"
+#include "../subproc.h"
 
 #include <fstream>
 #include <random>

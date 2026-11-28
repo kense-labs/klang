@@ -1,9 +1,9 @@
-// K compiler — other processes (process.h), over subprocess.h. This is
+// K compiler — other processes (subproc.h), over subprocess.h. This is
 // kept apart so the platform headers it needs stay out of the compiler.
 
 #include "includes.h"
 #include "utils.h"
-#include "process.h"
+#include "subproc.h"
 #include "progress.h"
 
 #ifdef _MSC_VER
