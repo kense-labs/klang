@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="500" viewBox="0 0 920 500" role="img" aria-labelledby="title description">
+  <title id="title">K · Data stacks &amp; value lifetimes</title>
+  <desc id="description">Address-stable growable storage with checked reference roots and O(1) scope-exit rewind.</desc>
+  <rect width="920" height="500" rx="14" fill="#F8F6F0"/>
+  <g font-family="Menlo, SFMono-Regular, Consolas, monospace">
+    <rect x="36" y="24" width="848" height="42" rx="8" fill="#141413"/>
+    <text x="54" y="51" fill="#FDFCF9" font-size="20" text-anchor="start" font-weight="700">DATA STACKS &amp; VALUE LIFETIMES</text>
+    <text x="36" y="92" fill="#645F56" font-size="14.5" text-anchor="start">Address-stable growable storage with checked reference roots and scope-exit rewind.</text>
+
+    <!-- Top context bar -->
+    <rect x="36" y="112" width="848" height="48" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="460" y="141" fill="#141413" font-size="14.5" text-anchor="middle" font-weight="700">Lexical Scope · Enter frame -&gt; Allocate on Data Stack -&gt; Rewind at return</text>
+
+    <!-- Left column: Call Stack Frames -->
+    <rect x="36" y="182" width="256" height="236" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <rect x="36" y="182" width="256" height="36" rx="8" fill="#141413"/>
+    <rect x="36" y="206" width="256" height="12" fill="#141413"/>
+    <text x="164" y="205" fill="#FDFCF9" font-size="14" text-anchor="middle" font-weight="700">CALL STACK FRAMES</text>
+
+    <rect x="52" y="232" width="224" height="54" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1.1"/>
+    <text x="164" y="254" fill="#141413" font-size="13.5" text-anchor="middle" font-weight="700">fn main() frame</text>
+    <text x="164" y="274" fill="#645F56" font-size="12" text-anchor="middle">buf: String (mark = 0x00)</text>
+
+    <path d="M164 286V304" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round"/>
+    <polyline points="160,298 164,304 168,298" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="52" y="306" width="224" height="58" rx="6" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.25"/>
+    <text x="164" y="328" fill="#141413" font-size="13.5" text-anchor="middle" font-weight="700">fn parse(&amp;buf) frame</text>
+    <text x="164" y="348" fill="#394DF2" font-size="12" text-anchor="middle">checked ref · mark = 0x40</text>
+
+    <text x="164" y="395" fill="#645F56" font-size="12" text-anchor="middle">checker verifies root depth</text>
+
+    <!-- Arrows Left -> Center -->
+    <path d="M292 259H324" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round"/>
+    <polyline points="317,255 324,259 317,263" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M292 335H324" fill="none" stroke="#394DF2" stroke-width="1.6" stroke-dasharray="4 4" stroke-linecap="round"/>
+    <polyline points="317,331 324,335 317,339" fill="none" stroke="#394DF2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Center column: Address-Stable Data Stack -->
+    <rect x="326" y="182" width="290" height="236" rx="8" fill="#141413"/>
+    <text x="471" y="208" fill="#FDFCF9" font-size="14" text-anchor="middle" font-weight="700">ADDRESS-STABLE DATA STACK</text>
+    <text x="471" y="226" fill="#B5B0A6" font-size="11.5" text-anchor="middle">contiguous segments · never relocates</text>
+
+    <rect x="342" y="240" width="258" height="46" rx="6" fill="#FDFCF9"/>
+    <text x="354" y="259" fill="#141413" font-size="12.5" text-anchor="start" font-weight="700">[0x00] String bytes</text>
+    <text x="354" y="276" fill="#645F56" font-size="11.5" text-anchor="start">fixed base addr · owned by main</text>
+
+    <rect x="342" y="294" width="258" height="50" rx="6" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.4"/>
+    <text x="354" y="314" fill="#141413" font-size="12.5" text-anchor="start" font-weight="700">[0x40] Array / enum payload</text>
+    <text x="354" y="332" fill="#394DF2" font-size="11.5" text-anchor="start">inline record size · zero heap hdr</text>
+
+    <rect x="342" y="354" width="258" height="46" rx="6" fill="#232321" stroke="#645F56" stroke-width="1" stroke-dasharray="4 3"/>
+    <text x="471" y="375" fill="#FDFCF9" font-size="12" text-anchor="middle">Next free cursor (bump alloc)</text>
+    <text x="471" y="391" fill="#B5B0A6" font-size="11" text-anchor="middle">reserve chunk if segment full</text>
+
+    <!-- Arrow Center -> Right -->
+    <path d="M616 300H648" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round"/>
+    <polyline points="641,296 648,300 641,304" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Right column: Scope Exit Rewind -->
+    <rect x="650" y="182" width="234" height="236" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.25"/>
+    <rect x="650" y="182" width="234" height="36" rx="8" fill="#394DF2"/>
+    <rect x="650" y="206" width="234" height="12" fill="#394DF2"/>
+    <text x="767" y="205" fill="#FDFCF9" font-size="14" text-anchor="middle" font-weight="700">SCOPE EXIT REWIND</text>
+
+    <rect x="666" y="232" width="202" height="52" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1.1"/>
+    <text x="767" y="253" fill="#141413" font-size="13" text-anchor="middle" font-weight="700">O(1) Cursor Reset</text>
+    <text x="767" y="272" fill="#645F56" font-size="11.5" text-anchor="middle">restore stack mark = 0x40</text>
+
+    <rect x="666" y="294" width="202" height="52" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1.1"/>
+    <text x="767" y="315" fill="#141413" font-size="13" text-anchor="middle" font-weight="700">Zero GC · Zero free()</text>
+    <text x="767" y="334" fill="#645F56" font-size="11.5" text-anchor="middle">no tracing pause or scatter</text>
+
+    <rect x="666" y="356" width="202" height="44" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1.1"/>
+    <text x="767" y="376" fill="#141413" font-size="12.5" text-anchor="middle" font-weight="700">Return Move Support</text>
+    <text x="767" y="392" fill="#645F56" font-size="11" text-anchor="middle">caller slot receives value</text>
+
+    <!-- Footer invariant bar -->
+    <rect x="36" y="438" width="848" height="38" rx="8" fill="#394DF2"/>
+    <text x="460" y="462" fill="#FDFCF9" font-size="13.5" text-anchor="middle" font-weight="700">Values stay address-stable for their lifetime; checked references never dangle.</text>
+  </g>
+</svg>

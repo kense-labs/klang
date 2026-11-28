@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="520" viewBox="0 0 920 520" role="img" aria-labelledby="title description">
+  <title id="title">K · Performance &amp; memory profile</title>
+  <desc id="description">Geometric-mean speedup and peak memory advantage across 16 large benchmarks versus C++ and Safe Rust.</desc>
+  <rect width="920" height="520" rx="14" fill="#F8F6F0"/>
+  <g font-family="Menlo, SFMono-Regular, Consolas, monospace">
+    <rect x="36" y="24" width="848" height="42" rx="8" fill="#141413"/>
+    <text x="54" y="51" fill="#FDFCF9" font-size="20" text-anchor="start" font-weight="700">PERFORMANCE &amp; MEMORY PROFILE (16 BENCHMARKS)</text>
+    <text x="36" y="92" fill="#645F56" font-size="14.5" text-anchor="start">Geometric mean across 16 large workloads (bench/summary.md · MSVC / Clang).</text>
+
+    <!-- Left Card: Speedup -->
+    <rect x="36" y="114" width="424" height="324" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <rect x="36" y="114" width="424" height="36" rx="8" fill="#141413"/>
+    <rect x="36" y="138" width="424" height="12" fill="#141413"/>
+    <text x="54" y="137" fill="#FDFCF9" font-size="13.5" text-anchor="start" font-weight="700">SPEEDUP RATIO (HIGHER IS FASTER)</text>
+
+    <!-- Bar 1: Idiomatic C++ -->
+    <text x="54" y="178" fill="#141413" font-size="13" text-anchor="start" font-weight="700">vs Idiomatic C++</text>
+    <text x="442" y="178" fill="#394DF2" font-size="13" text-anchor="end" font-weight="700">3.51x / 3.54x</text>
+    <rect x="54" y="188" width="388" height="22" rx="4" fill="#F0ECE3"/>
+    <rect x="54" y="188" width="354" height="22" rx="4" fill="#394DF2"/>
+    <text x="64" y="203" fill="#FDFCF9" font-size="11" text-anchor="start">Clang 3.54x · MSVC 3.51x</text>
+
+    <!-- Bar 2: Expert C++ -->
+    <text x="54" y="246" fill="#141413" font-size="13" text-anchor="start" font-weight="700">vs Expert C++</text>
+    <text x="442" y="246" fill="#141413" font-size="13" text-anchor="end" font-weight="700">1.24x / 1.26x</text>
+    <rect x="54" y="256" width="388" height="22" rx="4" fill="#F0ECE3"/>
+    <rect x="54" y="256" width="126" height="22" rx="4" fill="#141413"/>
+    <text x="190" y="271" fill="#645F56" font-size="11" text-anchor="start">Clang 1.26x · MSVC 1.24x</text>
+
+    <!-- Bar 3: Safe Rust -->
+    <text x="54" y="314" fill="#141413" font-size="13" text-anchor="start" font-weight="700">vs Best Safe Rust</text>
+    <text x="442" y="314" fill="#394DF2" font-size="13" text-anchor="end" font-weight="700">1.13x / 1.19x</text>
+    <rect x="54" y="324" width="388" height="22" rx="4" fill="#F0ECE3"/>
+    <rect x="54" y="324" width="119" height="22" rx="4" fill="#394DF2"/>
+    <text x="183" y="339" fill="#645F56" font-size="11" text-anchor="start">Clang 1.19x · MSVC 1.13x</text>
+
+    <rect x="54" y="370" width="388" height="50" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1"/>
+    <text x="66" y="391" fill="#141413" font-size="12" text-anchor="start" font-weight="700">Baseline 1.00x = target reference row</text>
+    <text x="66" y="408" fill="#645F56" font-size="11.5" text-anchor="start">Includes full input generation &amp; teardown</text>
+
+    <!-- Right Card: Memory & Standouts -->
+    <rect x="476" y="114" width="408" height="324" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.25"/>
+    <rect x="476" y="114" width="408" height="36" rx="8" fill="#394DF2"/>
+    <rect x="476" y="138" width="408" height="12" fill="#394DF2"/>
+    <text x="494" y="137" fill="#FDFCF9" font-size="13.5" text-anchor="start" font-weight="700">PEAK MEMORY &amp; KEY KERNELS</text>
+
+    <rect x="494" y="166" width="116" height="68" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1.1"/>
+    <text x="552" y="196" fill="#141413" font-size="18" text-anchor="middle" font-weight="700">1.95x</text>
+    <text x="552" y="218" fill="#645F56" font-size="11" text-anchor="middle">less vs Idm C++</text>
+
+    <rect x="622" y="166" width="116" height="68" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1.1"/>
+    <text x="680" y="196" fill="#141413" font-size="18" text-anchor="middle" font-weight="700">1.32x</text>
+    <text x="680" y="218" fill="#645F56" font-size="11" text-anchor="middle">less vs Exp C++</text>
+
+    <rect x="750" y="166" width="116" height="68" rx="6" fill="#141413"/>
+    <text x="808" y="196" fill="#FDFCF9" font-size="18" text-anchor="middle" font-weight="700">1.25x</text>
+    <text x="808" y="218" fill="#B5B0A6" font-size="11" text-anchor="middle">less vs Rust</text>
+
+    <rect x="494" y="248" width="372" height="54" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1"/>
+    <text x="508" y="270" fill="#141413" font-size="12.5" text-anchor="start" font-weight="700">records: 2.02-2.26x faster · 3.98x less RAM</text>
+    <text x="508" y="289" fill="#645F56" font-size="11.5" text-anchor="start">variable-mode enum stores inline payload size</text>
+
+    <rect x="494" y="310" width="372" height="54" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1"/>
+    <text x="508" y="332" fill="#141413" font-size="12.5" text-anchor="start" font-weight="700">graph CSR: 1.16-1.32x faster than Rust</text>
+    <text x="508" y="351" fill="#645F56" font-size="11.5" text-anchor="start">checkfree fn bfs + u32 in dist bounds proof</text>
+
+    <rect x="494" y="372" width="372" height="50" rx="6" fill="#F8F6F0" stroke="#D4CDC0" stroke-width="1"/>
+    <text x="508" y="393" fill="#141413" font-size="12.5" text-anchor="start" font-weight="700">interp: 1.29-1.41x faster · 2.04x less RAM</text>
+    <text x="508" y="410" fill="#645F56" font-size="11.5" text-anchor="start">sexp uses 2.43x less RAM than Rust arena</text>
+
+    <!-- Footer invariant bar -->
+    <rect x="36" y="458" width="848" height="38" rx="8" fill="#394DF2"/>
+    <text x="460" y="482" fill="#FDFCF9" font-size="13.5" text-anchor="middle" font-weight="700">Compact inline storage + check-free loops outperform heap-heavy abstractions.</text>
+  </g>
+</svg>

@@ -47,6 +47,8 @@ specification. The other documents cover the library, tools, and compiler.
 
 * [Architecture](architecture.md): microkernel boundaries, resource contracts,
   and how each target selects and runs components.
+* [Architecture & Kense OS diagrams](diagrams.md): visual maps of data stacks,
+  bounds-check elimination, structured async, benchmarks, targets, and Cordis.
 * [Development roadmap](roadmap.md): milestones and acceptance criteria for
   the language, toolchain, and runtimes.
 * [Implementation notes](implementation.md): how the compiler works, pass

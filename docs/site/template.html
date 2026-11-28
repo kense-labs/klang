@@ -1,11 +1,22 @@
 <!DOCTYPE html>
-<html lang="$if(lang)$$lang$$else$en$endif$">
+<html lang="$if(lang)$$lang$$else$en$endif$" data-theme="light" data-accent="neutral">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>$pagetitle$ · K</title>
 <link rel="icon" href="$root$docs/logo/logo_black_fg_white_bg_square.png">
-<link rel="stylesheet" href="$root$style.css">
+<script>
+(function() {
+  try {
+    var t = localStorage.getItem('k-docs-theme');
+    if (!t) t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+    var a = localStorage.getItem('k-docs-accent') || 'neutral';
+    document.documentElement.setAttribute('data-accent', a);
+  } catch (e) {}
+})();
+</script>
+<link rel="stylesheet" href="$root$style.css?v=$stylever$">
 $if(highlighting-css)$
 <style>
 $highlighting-css$
@@ -13,35 +24,133 @@ $highlighting-css$
 $endif$
 </head>
 <body>
-<header class="top">
-  <a class="brand" href="$root$index.html"><img src="$root$docs/logo/logo_black_fg_trans_bg.png" alt=""> K</a>
-  <nav>
-    <a href="$root$docs/index.html">Docs</a>
-    <a href="$root$docs/tutorial.html">Tutorial</a>
-    <a href="$root$docs/reference.html">Reference</a>
-    <a href="$root$docs/k_spec.html">Spec</a>
-    <a href="$root$docs/stdlib.html">Library</a>
-    <a href="$root$samples/index.html">Samples</a>
-    <a href="$root$bench/summary.html">Benchmarks</a>
-    <a href="https://github.com/kense-labs/klang">GitHub</a>
-  </nav>
-</header>
-<script>var root = '$root$', searchFile = '$searchfile$';</script>
-<script src="$root$search.js?v=$searchver$"></script>
-<div class="page$if(toc)$ with-toc$endif$">
-$if(toc)$
-<aside class="toc">
-<nav aria-label="Contents">
-$table-of-contents$
-</nav>
-</aside>
-$endif$
-<main>
-$body$
-<footer>
-$if(source)$<p>Built from <a href="https://github.com/kense-labs/klang/blob/main/$source$"><code>$source$</code></a>.</p>$endif$
-</footer>
-</main>
+<div class="site-shell">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-left">
+        <button type="button" class="mobile-nav-btn" id="k-mobile-nav" aria-label="Toggle navigation" aria-expanded="false">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/></svg>
+        </button>
+        <a class="brand-split" href="$root$index.html">
+          <img class="brand-mark brand-mark-light" src="$root$docs/logo/kense-mark-light.png" alt="Kense mark" width="22" height="22">
+          <img class="brand-mark brand-mark-dark" src="$root$docs/logo/kense-mark-dark.png" alt="Kense mark" width="22" height="22">
+          <span class="brand-wordmark">K</span>
+          <span class="brand-ver">v0.1.0</span>
+        </a>
+      </div>
+
+      <!--KUI_TOPNAV-->
+
+      <div class="topbar-actions">
+        <button type="button" class="icon-chip" id="k-theme-toggle" aria-label="Toggle color theme" title="Toggle theme">
+          <svg class="theme-icon-moon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 9.8A5.7 5.7 0 0 1 6.2 2.5a5.7 5.7 0 1 0 7.3 7.3Z"/></svg>
+          <svg class="theme-icon-sun" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="2.8"/><path d="M8 1.6v1.4M8 13v1.4M1.6 8H3M13 8h1.4M3.5 3.5l1 1M11.5 11.5l1 1M12.5 3.5l-1 1M4.5 11.5l-1 1"/></svg>
+        </button>
+        <div class="accent-wrap">
+          <button type="button" class="icon-chip" id="k-accent-btn" aria-label="Choose accent color" aria-expanded="false" title="Accent color">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2a6 6 0 1 0 0 12 1.7 1.7 0 0 0 1.7-1.7c0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1a1.6 1.6 0 0 1 1.6-1.6H12A2 2 0 0 0 14 6.5C14 4 11.3 2 8 2Z"/><circle cx="5.2" cy="7.5" r=".7" fill="currentColor"/><circle cx="7.4" cy="5.2" r=".7" fill="currentColor"/><circle cx="10.4" cy="5.5" r=".7" fill="currentColor"/></svg>
+          </button>
+          <div class="accent-popover" id="k-accent-popover" role="dialog" aria-label="Accent preset">
+            <p class="accent-popover-title">Accent</p>
+            <div class="accent-grid">
+              <button type="button" class="accent-swatch" data-accent-val="neutral"><span class="accent-dot" style="background:#171717"></span>Neutral</button>
+              <button type="button" class="accent-swatch" data-accent-val="kense"><span class="accent-dot" style="background:#394DF2"></span>Kense</button>
+              <button type="button" class="accent-swatch" data-accent-val="blue"><span class="accent-dot" style="background:#245bc4"></span>Blue</button>
+              <button type="button" class="accent-swatch" data-accent-val="violet"><span class="accent-dot" style="background:#7142b6"></span>Violet</button>
+              <button type="button" class="accent-swatch" data-accent-val="teal"><span class="accent-dot" style="background:#08776d"></span>Teal</button>
+              <button type="button" class="accent-swatch" data-accent-val="rose"><span class="accent-dot" style="background:#b93c67"></span>Rose</button>
+              <button type="button" class="accent-swatch" data-accent-val="amber"><span class="accent-dot" style="background:#955a08"></span>Amber</button>
+            </div>
+          </div>
+        </div>
+        <!--KUI_LANG_SWITCH-->
+        <a class="cta-chip" href="https://github.com/kense-labs/klang" aria-label="GitHub repository">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+          <span class="cta-label">GitHub</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-frame">
+    <div class="aside-backdrop" id="k-aside-backdrop"></div>
+    <aside class="aside" aria-label="Documentation navigation">
+      <button type="button" class="search-trigger" id="k-search-open" aria-label="Search documentation">
+        <span class="search-trigger-left">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+          <span>Search</span>
+        </span>
+        <kbd>⌘K</kbd>
+      </button>
+      <div class="scroll">
+        <!--KUI_SIDEBAR-->
+      </div>
+    </aside>
+
+    <main class="docs-main">
+      <div class="docs-pad">
+        <article class="doc">
+          <!--KUI_HERO-->
+          <!--KUI_DOC_HEAD-->
+          $if(toc)$
+          <details class="toc-drawer">
+            <summary>
+              <span>On this page</span>
+              <svg class="toc-drawer-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+            </summary>
+            <div class="toc-drawer-body">
+              $table-of-contents$
+            </div>
+          </details>
+          $endif$
+          <div class="doc-body<!--KUI_BODY_CLASS-->">
+            $body$
+          </div>
+          <!--KUI_PAGER-->
+          <footer class="doc-footer">
+            <span>K Programming Language · Kense Labs</span>
+            $if(source)$<span>Built from <a href="https://github.com/kense-labs/klang/blob/main/$source$"><code>$source$</code></a></span>$endif$
+          </footer>
+        </article>
+      </div>
+    </main>
+  </div>
 </div>
+
+<!-- Command Palette Search Modal -->
+<div class="kui-cmdk-backdrop" id="k-cmdk-backdrop" role="dialog" aria-modal="true" aria-label="Search documentation">
+  <div class="kui-cmdk">
+    <div class="kui-cmdk-head">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+      <input type="text" id="k-cmdk-input" class="kui-cmdk-input" placeholder="Search documentation, spec, benchmarks, samples..." autocomplete="off">
+      <kbd class="kui-cmdk-esc" id="k-cmdk-close">ESC</kbd>
+    </div>
+    <div class="kui-cmdk-results" id="k-cmdk-results"></div>
+    <div class="kui-cmdk-foot">
+      <span>↑↓ navigate · Enter open · Esc close</span>
+      <span id="k-cmdk-count"></span>
+    </div>
+  </div>
+</div>
+
+<!-- Diagram Lightbox Modal -->
+<div class="kui-lightbox" id="k-lightbox" role="dialog" aria-modal="true" aria-label="Diagram viewer">
+  <div class="kui-lightbox-card">
+    <div class="kui-lightbox-head">
+      <span class="kui-lightbox-title" id="k-lightbox-title">Diagram</span>
+      <div style="display:flex;gap:0.4rem;align-items:center;">
+        <a class="stage-chip" id="k-lightbox-open" href="#" target="_blank" rel="noopener">Open SVG</a>
+        <button type="button" class="stage-chip" id="k-lightbox-close">Close</button>
+      </div>
+    </div>
+    <div class="kui-lightbox-body">
+      <img id="k-lightbox-img" src="" alt="">
+    </div>
+  </div>
+</div>
+
+<script>var root = '$root$', searchFile = '$searchfile$';</script>
+<script src="$root$site.js?v=$sitever$"></script>
+<script src="$root$search.js?v=$searchver$"></script>
 </body>
 </html>

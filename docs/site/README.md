@@ -18,10 +18,12 @@ links between documents, and fails on a broken one.
 
 | File | Role |
 |---|---|
-| `build.py` | lists the pages, runs pandoc on each, copies the logo, the extension and `docs/html`, checks the links |
-| `template.html` | the page: a top bar, a sidebar table of contents, the text |
-| `style.css` | the only stylesheet |
-| `links.lua` | a pandoc filter: `.md` links become `.html`, `.k` links point to the sample pages, and the `<details>` table of contents each file carries for GitHub is dropped in favour of the sidebar |
+| `build.py` | lists the pages, runs pandoc on each, injects KUI navigation/hero chrome, copies assets and `docs/html`, checks internal links |
+| `template.html` | KUI-styled page shell: sticky segmented topbar, collapsible left sidebar, main content frame, command-palette modal, diagram lightbox |
+| `style.css` | KUI design system tokens (light/dark themes, accent presets) and component styles |
+| `site.js` | theme/accent switching, code block copy headers, interactive hero stage, diagram lightbox, mobile drawer |
+| `search.js` | zero-dependency fuzzy search driving the `⌘K` / `/` command palette |
+| `links.lua` | a pandoc filter: `.md` links become `.html`, `.k` links point to the sample pages, and the `<details>` table of contents each file carries for GitHub is dropped in favour of the site navigation |
 | `klang.xml` | K syntax highlighting for pandoc, in the KDE syntax definition format |
 
 Pandoc reads the files as GitHub-flavored markdown, so heading anchors

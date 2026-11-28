@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="500" viewBox="0 0 920 500" role="img" aria-labelledby="title description">
+  <title id="title">K · Optimization &amp; bounds-check elimination</title>
+  <desc id="description">Compile-time range proofs, checkfree verification, and LTO native code generation.</desc>
+  <rect width="920" height="500" rx="14" fill="#F8F6F0"/>
+  <g font-family="Menlo, SFMono-Regular, Consolas, monospace">
+    <rect x="36" y="24" width="848" height="42" rx="8" fill="#141413"/>
+    <text x="54" y="51" fill="#FDFCF9" font-size="20" text-anchor="start" font-weight="700">OPTIMIZATION &amp; BOUNDS-CHECK ELIMINATION</text>
+    <text x="36" y="92" fill="#645F56" font-size="14.5" text-anchor="start">Proves index safety at compile time and lowers checked IR under -O3 --lto --cpu=native.</text>
+
+    <!-- Top Row: 4-Stage Optimizer & BCE Pipeline -->
+    <rect x="36" y="114" width="192" height="90" rx="8" fill="#141413"/>
+    <text x="132" y="141" fill="#FDFCF9" font-size="14" text-anchor="middle" font-weight="700">1. Checked FnSpec</text>
+    <text x="132" y="162" fill="#B5B0A6" font-size="12" text-anchor="middle">types · lifetimes</text>
+    <text x="132" y="182" fill="#B5B0A6" font-size="12" text-anchor="middle">in dist / upto out</text>
+
+    <path d="M228 159H252" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round"/>
+    <polyline points="245,155 252,159 245,163" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="254" y="114" width="192" height="90" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="350" y="141" fill="#141413" font-size="14" text-anchor="middle" font-weight="700">2. IR Optimizer</text>
+    <text x="350" y="162" fill="#645F56" font-size="12" text-anchor="middle">optimize*.h</text>
+    <text x="350" y="182" fill="#645F56" font-size="12" text-anchor="middle">inlining · loop LICM</text>
+
+    <path d="M446 159H470" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round"/>
+    <polyline points="463,155 470,159 463,163" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="472" y="114" width="192" height="90" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.35"/>
+    <text x="568" y="141" fill="#141413" font-size="14" text-anchor="middle" font-weight="700">3. BCE Solver</text>
+    <text x="568" y="162" fill="#394DF2" font-size="12" text-anchor="middle">bce.h · range facts</text>
+    <text x="568" y="182" fill="#645F56" font-size="12" text-anchor="middle">CFG + aliasing proof</text>
+
+    <path d="M664 159H688" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round"/>
+    <polyline points="681,155 688,159 681,163" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="690" y="114" width="194" height="90" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="787" y="141" fill="#141413" font-size="14" text-anchor="middle" font-weight="700">4. checkfree Gate</text>
+    <text x="787" y="162" fill="#645F56" font-size="12" text-anchor="middle">checkfree fn kernel</text>
+    <text x="787" y="182" fill="#645F56" font-size="12" text-anchor="middle">fail build if check left</text>
+
+    <!-- Branching arrow down from BCE Solver -->
+    <path d="M568 204V228H248V248" fill="none" stroke="#394DF2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="244,241 248,248 252,241" fill="none" stroke="#394DF2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M568 228H672V248" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="668,241 672,248 676,241" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Left Split Box: Proven Safe -->
+    <rect x="36" y="250" width="414" height="96" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.35"/>
+    <text x="54" y="276" fill="#394DF2" font-size="14" text-anchor="start" font-weight="700">PROVEN IN-BOUNDS -> ZERO CHECKS</text>
+    <text x="54" y="298" fill="#141413" font-size="12.5" text-anchor="start">• Slice loop bounds &amp; induction variables</text>
+    <text x="54" y="317" fill="#141413" font-size="12.5" text-anchor="start">• Typed index contracts: u32 in dist / upto out</text>
+    <text x="54" y="336" fill="#645F56" font-size="12" text-anchor="start">-> direct C pointer/index emission (no branch)</text>
+
+    <!-- Right Split Box: Unproven Fallback -->
+    <rect x="470" y="250" width="414" height="96" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="488" y="276" fill="#141413" font-size="14" text-anchor="start" font-weight="700">UNPROVEN ACCESS -> SAFE TRAP RETAINED</text>
+    <text x="488" y="298" fill="#645F56" font-size="12.5" text-anchor="start">• Dynamic or unverified external index</text>
+    <text x="488" y="317" fill="#645F56" font-size="12.5" text-anchor="start">• Rejected inside `checkfree fn` functions</text>
+    <text x="488" y="336" fill="#141413" font-size="12" text-anchor="start">-> emits fast runtime bounds guard before load</text>
+
+    <!-- Converging arrow to Backend -->
+    <path d="M248 346V364H460V372" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M672 346V364H460" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="456,366 460,373 464,366" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Bottom Output Bar -->
+    <rect x="36" y="374" width="848" height="48" rx="8" fill="#141413"/>
+    <text x="460" y="403" fill="#FDFCF9" font-size="14.5" text-anchor="middle" font-weight="700">C Emitter (codegen*.h) -&gt; Clang / GCC / MSVC (-O3 --lto --cpu=native)</text>
+
+    <!-- Footer Invariant -->
+    <rect x="36" y="438" width="848" height="38" rx="8" fill="#394DF2"/>
+    <text x="460" y="462" fill="#FDFCF9" font-size="13.5" text-anchor="middle" font-weight="700">Memory safety with C-level inner loops: prove bounds once, compile away the check.</text>
+  </g>
+</svg>
