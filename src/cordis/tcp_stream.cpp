@@ -44,6 +44,7 @@ struct k_tcp_stream_reader {
     size_t reserved = 0;
     ReadResult received {};
     bool stop = false;
+    CancelableRead io;
     k_task_waker waker {};
 
     k_tcp_stream_reader(Socket socket, uint32_t capacity) : socket(socket), chunks(capacity) {}
@@ -61,7 +62,7 @@ struct k_tcp_stream_reader {
             auto &destination = chunks[reserved].bytes;
             read = ReadState::receiving;
             lock.unlock();
-            auto result = Read(socket, destination.data(), (int)destination.size());
+            auto result = io.Read(socket, destination.data(), (int)destination.size());
             lock.lock();
             received = result;
             read = ReadState::complete;
@@ -113,7 +114,7 @@ struct k_tcp_stream_reader {
         cancelled = true;
         queued = head_offset = 0;
         if (read == ReadState::receiving) {
-            InterruptReceive(socket);
+            io.Interrupt(socket);
         } else {
             // A submitted read that the worker has not claimed can be revoked.
             read = ReadState::idle;

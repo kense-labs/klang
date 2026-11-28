@@ -17,13 +17,14 @@ struct Receive {
     std::thread work;
     std::mutex mutex;
     bool completed = false;
+    CancelableRead io;
     k_task_waker waker {};
 
     explicit Receive(Socket fd) : socket(fd) {}
 
     void read(void *destination) {
         unsigned char byte;
-        auto [count, error] = Read(socket, &byte, 1);
+        auto [count, error] = io.Read(socket, &byte, 1);
         k_tcp_read_result result;
         if (count == 1) result = { K_TCP_READ_BYTE, byte, 0 };
         else if (count == 0) result = { K_TCP_READ_EOF, 0, 0 };
@@ -53,7 +54,7 @@ k_task_poll poll_receive(void *frame, void *result) {
 
 void cancel_receive(void *frame) {
     auto &read = *static_cast<Receive *>(frame);
-    if (read.work.joinable()) InterruptReceive(read.socket);
+    if (read.work.joinable()) read.io.Interrupt(read.socket);
 }
 
 bool drain_receive(void *frame) {

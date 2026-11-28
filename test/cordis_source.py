@@ -15,8 +15,8 @@ def check(driver, compiler, library, wrong_library):
         root = Path(temp).resolve()
         manifest, lock, log = (root / name for name in ("providers.json", "cordis.lock", "provider.log"))
         source, helper, rules = (root / name for name in ("program.ext", "helper.src", "rules"))
-        source.write_text('show\ntwice(21)\n', encoding="utf-8")
-        helper.write_text('fn twice(v: i64) -> i64 { v * 2 }\n', encoding="utf-8")
+        source.write_text('show\ntwice(21)\n', encoding="utf-8", newline="\n")
+        helper.write_text('fn twice(v: i64) -> i64 { v * 2 }\n', encoding="utf-8", newline="\n")
         rules.write_bytes(b"normal")
         transform, wrong = [Path(shutil.copyfile(file, root / Path(file).name))
                             for file in (library, wrong_library)]
@@ -63,7 +63,7 @@ def check(driver, compiler, library, wrong_library):
         assert build.returncode == 0 and diagnostics == [], (build, diagnostics)
         program = output / ("program.exe" if os.name == "nt" else "program")
         assert build.stderr.splitlines()[-1] == b"built " + os.fsencode(program), build
-        assert subprocess.check_output([program], timeout=20) == b"42\n"
+        assert subprocess.check_output([program], timeout=20).replace(b"\r\n", b"\n") == b"42\n"
         receipt = json.loads((output / "source-build.json").read_text())
         assert receipt["cordis"] == original_graph and receipt["entry"] == "main.k", receipt
         assert receipt["program_sha256"] == sha256(program.read_bytes()).hexdigest()
@@ -90,9 +90,9 @@ def check(driver, compiler, library, wrong_library):
         with ThreadPoolExecutor(max_workers=2) as threads:
             pair = [threads.submit(invoke, "build", "-o", contest) for _ in range(2)]
             assert sorted(call.result()[0].returncode for call in pair) == [0, 1]
-        assert subprocess.check_output([contest / program.name], timeout=20) == b"42\n"
+        assert subprocess.check_output([contest / program.name], timeout=20).replace(b"\r\n", b"\n") == b"42\n"
 
-        source.write_text('show\n"你好" + unknown_value\n', encoding="utf-8")
+        source.write_text('show\n"你好" + unknown_value\n', encoding="utf-8", newline="\n")
         invalid = root / "no-invalid-bundle"
         failed, diagnostics = invoke("build", "-o", invalid)
         assert failed.returncode and not invalid.exists(), failed
@@ -100,7 +100,7 @@ def check(driver, compiler, library, wrong_library):
         expected_col = len('"你好" + '.encode("utf-8")) + 1
         assert (issue["file"], issue["line"], issue["col"]) == (str(source), 2, expected_col), issue
 
-        source.write_text('show\ntwice(21)\n', encoding="utf-8")
+        source.write_text('show\ntwice(21)\n', encoding="utf-8", newline="\n")
         helper.write_bytes(b'fn twice(v: i64) -> i64 { bad_helper }\n')
         failed, diagnostics = invoke("check")
         assert failed.returncode and any(d.get("file") == str(helper) and "bad_helper" in d["message"]

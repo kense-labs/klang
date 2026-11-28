@@ -55,6 +55,63 @@ inline ReadResult Read(Socket fd, void *storage, int capacity) {
     return result;
 }
 
+struct CancelableRead {
+#ifdef _WIN32
+    WSAEVENT cancel_event = WSACreateEvent();
+    WSAEVENT net_event = WSACreateEvent();
+
+    CancelableRead() = default;
+    ~CancelableRead() {
+        if (cancel_event != WSA_INVALID_EVENT) WSACloseEvent(cancel_event);
+        if (net_event != WSA_INVALID_EVENT) WSACloseEvent(net_event);
+    }
+    CancelableRead(const CancelableRead &) = delete;
+    CancelableRead &operator=(const CancelableRead &) = delete;
+
+    void Interrupt(Socket fd) {
+        if (cancel_event != WSA_INVALID_EVENT) WSASetEvent(cancel_event);
+        InterruptReceive(fd);
+    }
+
+    ReadResult Read(Socket fd, void *storage, int capacity) {
+        if (cancel_event == WSA_INVALID_EVENT || net_event == WSA_INVALID_EVENT) {
+            return klang::cordis::tcp::Read(fd, storage, capacity);
+        }
+        if (WSAEventSelect(fd, net_event, FD_READ | FD_CLOSE) == SOCKET_ERROR) {
+            return { -1, SocketError() };
+        }
+        bool saw_close = false;
+        int close_error = 0;
+        for (;;) {
+            if (WSAWaitForMultipleEvents(1, &cancel_event, FALSE, 0, FALSE) == WSA_WAIT_EVENT_0) {
+                return { -1, WSAECONNABORTED };
+            }
+            int count = (int)recv(fd, static_cast<char *>(storage), capacity, 0);
+            if (count >= 0) return { count, 0 };
+            int err = SocketError();
+            if (err == interrupted_error) continue;
+            if (err != WSAEWOULDBLOCK) return { -1, err };
+            if (saw_close) return close_error ? ReadResult { -1, close_error } : ReadResult { 0, 0 };
+
+            WSAEVENT events[2] = { cancel_event, net_event };
+            DWORD wait = WSAWaitForMultipleEvents(2, events, FALSE, WSA_INFINITE, FALSE);
+            if (wait == WSA_WAIT_EVENT_0) return { -1, WSAECONNABORTED };
+            if (wait != WSA_WAIT_EVENT_0 + 1) return { -1, SocketError() };
+            WSANETWORKEVENTS ne {};
+            if (WSAEnumNetworkEvents(fd, net_event, &ne) == 0 && (ne.lNetworkEvents & FD_CLOSE)) {
+                saw_close = true;
+                close_error = ne.iErrorCode[FD_CLOSE_BIT];
+            }
+        }
+    }
+#else
+    void Interrupt(Socket fd) { InterruptReceive(fd); }
+    ReadResult Read(Socket fd, void *storage, int capacity) {
+        return klang::cordis::tcp::Read(fd, storage, capacity);
+    }
+#endif
+};
+
 inline int32_t Start(void **state) {
     *state = nullptr;
 #ifdef _WIN32
