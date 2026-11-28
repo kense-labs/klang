@@ -157,6 +157,7 @@ struct ExpansionBinder {
             } else {
                 Inits(sl->inits);
             }
+            Walk(sl->spread);
             return;
         }
         if (auto vd = Is<VarDecl>(n)) Type(vd->type);

@@ -455,6 +455,7 @@ enum PatKind { P_WILDCARD, P_LIST };
 struct PatItem {
     Node *lo = nullptr;
     Node *hi = nullptr;
+    bool dot = false;           // `.Variant` leading-dot pattern spelling.
     // A variants<E> binding's variant: E, which the match must be over (a
     // variant of another ADT with the same name is not this one).
     TypeExpr *variantowner = nullptr;
@@ -1046,8 +1047,10 @@ NODE(ArrayLit)
 NODE_END
 
 NODE(StructLit)
-    TypeExpr *type;             // Named type or variant type.
+    TypeExpr *type;             // Named type or variant type (null when implicit_variant is set).
+    string_view implicit_variant; // `.Variant { ... }`: enum type inferred from context.
     vector<FieldInit> inits;
+    Node *spread = nullptr;     // `..base`: copy omitted fixed-size fields from `base`.
     bool defaultall = false;    // A trailing `..`, or synthesized by default<T>(): a field
                                 // not given takes its declared default, else its type's.
     // Made by the checker for a default value (TypeCheck::DefaultValue,
@@ -1104,6 +1107,7 @@ NODE(Binary)
     // is provably nonnegative and a divisor provably positive, so codegen
     // computes it unsigned, with no zero or overflow check to make.
     bool nonneg = false;
+    bool coalesce_deref = false; // `a ?? b` dereferences `a` to value `T` when non-null.
     Binary(Line l, TType _op, Node *_l, Node *_r) : Node(l, NKind), op(_op), left(_l), right(_r) {}
 NODE_END
 
@@ -1127,6 +1131,8 @@ NODE(Dot)
     // an empty name: a completion asks for its object's type, which the
     // checker records before it stops the body here (Abandoned).
     bool incomplete = false;
+    bool optchain = false;      // `a?.field` / `a?.method(...)`: short-circuiting optional access.
+    bool optchain_temp = false; // Property/varint `?.` materializes a statement temp for `T?`.
     Dot(Line l, Node *_obj, string_view _name, string_view _ns = {})
         : Node(l, NKind), obj(_obj), name(_name), ns(_ns) {}
     Val CheckValueMember(TypeCheck &tc, Val receiver);
@@ -1182,11 +1188,14 @@ NODE(Call)
     size_t scope_slot = 0;
     vector<TypeExpr *> tyargs;  // Explicit <T> list, normally empty (inferred).
     vector<Node *> args;
+    vector<string_view> argnames; // Optional argument labels (`name: expr`), parallel to written args.
+    vector<Node *> orig_args;     // Original written args when reordered for named arguments.
     FunVal *trailing = nullptr; // Trailing-block function value, if any.
     // A default<T>() the checker made (TypeCheck::DefaultCall), for a type
     // written elsewhere, whose sizes were checked there
     // (TypeCheck::ConstNamesIn).
     bool implicit = false;
+    bool optchain_temp = false; // `a?.method()` returning fixed value `R` yields `const R?` via temp.
     // Filled by typecheck: exactly one resolution among these.
     FnSpec *spec = nullptr;             // A direct call to one specialization.
     vector<FnSpec *> dispatch;          // Case-function tag dispatch, per variant.
@@ -1211,6 +1220,7 @@ NODE(Call)
     // them, and checking the call again starts from it as written.
     int firstdefault = 0;
     int ndefaults = 0;
+    vector<bool> default_mask;  // Per-arg default flags when named args leave middle gaps.
     // range_index/free_slice/realloc_slice: the slice is not provably the receiver's,
     // so codegen checks at run time that it lies inside the pool (§5.4).
     bool poolcheck = false;
@@ -1262,6 +1272,7 @@ NODE(Call)
     }
     // Whether args[i] is one of those defaults.
     bool IsDefaultArg(size_t i) const {
+        if (!default_mask.empty()) return i < default_mask.size() && default_mask[i];
         return (int)i >= firstdefault && (int)i < firstdefault + ndefaults;
     }
 NODE_END
@@ -1528,6 +1539,7 @@ NODE_END
 NODE(Defer)
     BCE_WALK
     Block *body;
+    bool erronly = false;        // `errdefer`: runs only on failure / unwind exits.
     bool task_transfer = false;  // Checked here, executed by the saved task state.
     bool task_external_effect = false;  // Unsafe on a cancellation edge.
     Defer(Line l, Block *_body) : Node(l, NKind), body(_body) {}
@@ -1556,6 +1568,8 @@ NODE(VarDecl)
     string_view ns;             // A global's namespace ("" = global; docs/design/namespaces.md).
     string_view doc;            // The comment lines above it (Lexer::doc).
     vector<string_view> names;  // let a, b = f();
+    vector<string_view> destruct_fields; // `let { field: name } = s;`
+    vector<int> destruct_indices;        // Filled by typecheck: target field index per binding.
     // The results of `a, b = f();`, which the assignments after it in its
     // block take (Parser::ParseMultiAssign).
     bool results = false;
@@ -1739,7 +1753,7 @@ inline span<TypeExpr *const> CallableSignature(const TypeExpr *t) {
 }
 
 inline SFunction *StructLit::Closure() const {
-    return !implicit && type->kind == TY_STRUCT ? type->struc->st->closure : nullptr;
+    return !implicit && type && type->kind == TY_STRUCT ? type->struc->st->closure : nullptr;
 }
 
 struct SVariant {

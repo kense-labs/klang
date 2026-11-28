@@ -391,7 +391,7 @@ class TaskLiveness {
                 ImplicitReads(a, reads);
                 return Entry(a->child, Transfer(after, std::move(reads)));
             }
-            if (auto d = Is<Dot>(n)) return Entry(d->obj, after);
+            if (auto d = Is<Dot>(n)) return d->obj ? Entry(d->obj, after) : after;
             tc.Error(n, "await is not supported in this expression position");
         }
         // Conservatively retain the inputs of ordinary expressions.

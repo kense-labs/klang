@@ -1117,7 +1117,7 @@ inline void CodeGen::RestoreStack(const StackSave &save) {
     else L(Top(save.stack), " = ", save.base, ";");
 }
 
-inline void CodeGen::EmitRestores(const CScope &s, bool suspending) {
+inline void CodeGen::EmitRestores(const CScope &s, bool suspending, bool on_error) {
     if (s.task_controller) EmitTaskScopeClose(s.task_controller);
     if (s.defers.empty()) {
         for (auto i = (int)s.saves.size() - 1; i >= 0; i--)
@@ -1131,9 +1131,11 @@ inline void CodeGen::EmitRestores(const CScope &s, bool suspending) {
     auto defers = s.defers;
     auto di = (int)defers.size() - 1;
     for (auto k = (int)saves.size(); k >= 0; k--) {
-        for (; di >= 0 && (int)defers[di].first == k; di--)
-            if (!suspending || !defers[di].second->task_transfer)
-                EmitDeferBody(defers[di].second);
+        for (; di >= 0 && (int)defers[di].first == k; di--) {
+            auto d = defers[di].second;
+            if ((!suspending || !d->task_transfer) && (!d->erronly || on_error))
+                EmitDeferBody(d);
+        }
         if (k > 0) RestoreStack(saves[k - 1]);
     }
     assert(di < 0);
@@ -1180,8 +1182,9 @@ inline void CodeGen::PopSc() {
 }
 
 // Restores for exiting down to (and including) scope index `to`.
-inline void CodeGen::EmitExitRestores(int to, bool suspending) {
-    for (auto i = (int)cscopes.size() - 1; i >= to; i--) EmitRestores(cscopes[i], suspending);
+inline void CodeGen::EmitExitRestores(int to, bool suspending, bool on_error) {
+    for (auto i = (int)cscopes.size() - 1; i >= to; i--)
+        EmitRestores(cscopes[i], suspending, on_error);
 }
 
 // Allocates a data stack index; `forlocal` skips the statement scopes

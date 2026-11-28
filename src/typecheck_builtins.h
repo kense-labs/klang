@@ -31,6 +31,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         });
     }
     if (c->trailing) Error(c, cat(d.name, " takes no function value"));
+    if (!c->argnames.empty()) Error(c, cat(d.name, " does not support named arguments"));
     if (!(d.flags & BF_TYARGS) && !c->tyargs.empty())
         Error(c, cat(d.name, " takes no type arguments"));
     if ((int)args.size() < d.minargs || (int)args.size() > d.maxargs)

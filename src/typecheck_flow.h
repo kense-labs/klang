@@ -1744,6 +1744,7 @@ inline Val TypeCheck::CheckMatch(MatchExpr *m, TypeExpr *expected, bool wantvalu
                                                " has no payload to bind"));
             arm.ranges.clear();
             for (auto &pi : arm.pat.items) {
+                if (pi.dot) Error(pi.lo, "leading '.' pattern is only valid for enum matches");
                 auto ul = false, uh = false;
                 ArmRange r;
                 r.lo = PatternValue(pi.lo, ul);
@@ -2364,8 +2365,9 @@ inline void TypeCheck::CheckContinue(Node *n) {
 // (CheckDefers).
 inline void TypeCheck::CheckDefer(Defer *d) {
     auto &real = CurRealFrame();
+    auto kw = d->erronly ? "errdefer" : "defer";
     if (frames.back().isdefault || !real.sf || !real.spec)
-        Error(d, "defer outside of a function: a global initializer has no scope exit (§6.6)");
+        Error(d, cat(kw, " outside of a function: a global initializer has no scope exit (§6.6)"));
     real.spec->hasdefer = true;
     auto spec = real.spec;
     auto growbase = cur.growlog.size();
@@ -2522,6 +2524,7 @@ inline void TypeCheck::CheckDefers() {
         function<void(Node *)> walk = [&](Node *n) {
             if (!n) return;
             if (auto d = Is<Defer>(n)) {
+                auto kw = d->erronly ? "errdefer" : "defer";
                 CheckItem([&] {
                     vector<FnSpec *> ks;
                     collect(d->body, ks);
@@ -2532,7 +2535,7 @@ inline void TypeCheck::CheckDefers() {
                         string chain;
                         for (auto s = k; rfvia[s] != s; s = rfvia[s])
                             Append(chain, " calls ", rfvia[s]->sf->qname, ", which");
-                        Error(d, cat("defer body calls ", k->sf->qname, ", which", chain,
+                        Error(d, cat(kw, " body calls ", k->sf->qname, ", which", chain,
                                      " uses a long-distance return (a `return ... from` site, a "
                                      "frame one passes through, or a catch, §7.9): a defer body "
                                      "runs while such a return may be in flight (§6.6)"));
@@ -2547,11 +2550,11 @@ inline void TypeCheck::CheckDefers() {
                     };
                     if (auto it = defermentions.find(d); it != defermentions.end())
                         for (auto v : it->second)
-                            if (isnamed(v)) Error(d, cat("defer body names ", why(v)));
+                            if (isnamed(v)) Error(d, cat(kw, " body names ", why(v)));
                     for (auto k : ks)
                         for (auto &r : k->envreads)
                             if (isnamed(r.var))
-                                Error(d, cat("defer body calls ", k->sf->qname, ", which names ",
+                                Error(d, cat(kw, " body calls ", k->sf->qname, ", which names ",
                                              why(r.var)));
                 });
             }
@@ -2651,6 +2654,105 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
             Error(vd, cat("global ", vd->names[0], " needs an initializer, since ",
                           TypeStr(ann), " has no default value: ", why));
         vd->inits.push_back(DefaultValue(ann, vd->line));
+    }
+    if (!vd->destruct_fields.empty()) {
+        if (ann) Error(vd, "type annotations are not supported on struct destructuring");
+        if (vd->inits.size() != 1) Error(vd, "struct destructuring requires a single initializer");
+        for (size_t i = 0; i < vd->names.size(); i++)
+            for (size_t j = i + 1; j < vd->names.size(); j++)
+                if (vd->names[i] == vd->names[j])
+                    Error(vd, cat("duplicate binding name in destructuring: ", vd->names[i]));
+        Val sv;
+        {
+            DestScope ds(*this, Dest {});
+            SlotScope ss(*this, false);
+            auto refinit = Is<Unary>(vd->inits[0]);
+            if (refinit && refinit->synth) vd->inits[0] = refinit->child;
+            sv = CheckV(vd->inits[0], nullptr);
+        }
+        vd->inits[0]->exprtype = sv.type;
+        auto has_storage = sv.lvalue || sv.type->kind == TY_REF;
+        auto st = sv.type;
+        auto deref_writable = sv.writable;
+        if (st->kind == TY_REF) {
+            if (st->ref->optional) OptionalDerefError(vd->inits[0], vd->inits[0]);
+            deref_writable = !st->cq;
+            st = st->ref->sub;
+            sv.ClearReads();
+            sv.reached = LoadType(st);
+        }
+        if (st->kind != TY_STRUCT)
+            Error(vd, cat("struct destructuring requires a struct value, got ", TypeStr(sv.type)));
+        if (st->struc->st->isroot)
+            Error(vd, "root owner structs cannot be destructured");
+        if (st->struc->st->closure || st->struc->st->callable_arity >= 0)
+            Error(vd, "closure and callable structs cannot be destructured");
+        auto inst = GetStructInst(st);
+        const auto &fields = st->struc->st->fields;
+        vd->destruct_indices.resize(vd->names.size(), -1);
+        for (size_t i = 0; i < vd->names.size(); i++) {
+            auto d = MakeDef(i);
+            auto fname = vd->destruct_fields[i];
+            auto fidx = -1;
+            for (int k = 0; k < (int)fields.size(); k++)
+                if (!fields[k].ispad && fields[k].name == fname) { fidx = k; break; }
+            if (fidx < 0) Error(vd, cat(st->struc->st->name, " has no field ", fname));
+            vd->destruct_indices[i] = fidx;
+            auto ft = inst->ftypes[fidx];
+            auto field_writable = deref_writable && !fields[fidx].isconst && !ft->cq;
+            ReadBack contents;
+            auto temp_contents = TempContents(sv, contents);
+            if (temp_contents) NoRelRefTempRead(vd->inits[0], st, ft);
+            d->assigned = d->maybeassigned = true;
+            Val fv;
+            fv.writable = field_writable;
+            if (ft->kind == TY_INT && ft->intstorage == IS_VARINT)
+                fv.type = ast.inttypes[IS_I64];
+            else
+                fv.type = ft;
+            if (vd->byref) {
+                if (!has_storage)
+                    Error(vd->inits[0], ".= destructuring requires storage or a reference");
+                if (IsVarintT(ft))
+                    Error(vd, cat("cannot bind varint field ", fname, " by reference"));
+                auto rt = ast.RefTo(ft, vd->line);
+                rt->cq = !field_writable;
+                if (temp_contents && !IsRefOrSlice(ft)) NoRelRefTempRead(vd->inits[0], st, rt);
+                if (IsRefOrSlice(sv.type)) fv.SetProv(sv);
+                else if (sv.lvalue) fv.SetProv(sv.slot);
+                CheckBindingRoot(d, fv, vd->inits[0]);
+                Finish(d, rt, &fv, vd->inits[0]);
+            } else if (ClassOf(ft) != SC_FIXED) {
+                if (vd->isvar)
+                    Error(vd, cat("var destructuring cannot bind non-fixed field ", fname, "; use let"));
+                if (!has_storage)
+                    Error(vd->inits[0], cat("destructuring non-fixed field ", fname,
+                                            " of a temporary requires a variable holding the struct"));
+                auto rt = ast.RefTo(ft, vd->line);
+                rt->cq = !field_writable;
+                fv.type = rt;
+                if (sv.lvalue && !IsRefOrSlice(sv.type)) fv.SetProv(sv.slot);
+                else fv.SetProv(sv);
+                CheckBindingRoot(d, fv, vd->inits[0]);
+                Finish(d, rt, &fv, vd->inits[0]);
+            } else {
+                if (HasRelRefT(fv.type)) NoRelRefCopy(vd->inits[0], fv.type, 0, vd, &fv);
+                if (IsRefOrSlice(fv.type) || HoldsPlainRef(fv.type)) {
+                    fv.holderset = HoldsPlainRef(fv.type);
+                    if (temp_contents) {
+                        fv.TakeAlts(contents.roots);
+                        fv.contents = contents.roots;
+                    } else if (sv.lvalue || sv.type->kind == TY_REF) {
+                        fv.TakeAlts(sv.AsRoots());
+                        fv.contents = HeldAt(sv);
+                        fv.holderfrom = HolderSource(sv);
+                    }
+                    CheckBindingRoot(d, fv, vd->inits[0]);
+                }
+                Finish(d, fv.type, &fv, vd->inits[0]);
+            }
+        }
+        return;
     }
     if (vd->inits.empty()) {
         if (!ann) Error(vd, "a declaration without an initializer needs a type");

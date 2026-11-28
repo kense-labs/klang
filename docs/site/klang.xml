@@ -49,6 +49,7 @@
         <DetectChar char="'" attribute="Char" context="Char"/>
         <RegExpr String="\broot\b(?=\s+struct\b)" attribute="Keyword"/>
         <RegExpr String="\busing\b(?=\s+(?:let|var)\b|\s*\()" attribute="Keyword"/>
+        <RegExpr String="\berrdefer\b(?=\s*(?:\{|[A-Za-z_:@&amp;~!\[]))" attribute="Keyword"/>
         <keyword String="keywords" attribute="Keyword"/>
         <keyword String="types" attribute="DataType"/>
         <keyword String="constants" attribute="Constant"/>

@@ -319,9 +319,29 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
     sinst = nullptr;
     einst = nullptr;
     variant = nullptr;
-    if (!implicit) tc.ConstNamesIn(type);
-    auto t = tc.Subst(type);
+    TypeExpr *t = nullptr;
+    if (!implicit_variant.empty()) {
+        auto et = expected ? (IsPlainRef(expected) ? expected->ref->sub : expected) : nullptr;
+        if (!et || et->kind != TY_ENUM)
+            tc.Error(this, cat("cannot infer enum type for .", implicit_variant,
+                               " { ... }; add a type annotation or qualify it (EnumName.",
+                               implicit_variant, " { ... })"));
+        auto ei = tc.GetEnumInst(et);
+        auto var = ei->en->FindVariant(implicit_variant);
+        if (!var && ei->en->broken) throw Abandoned {};
+        if (!var)
+            tc.Error(this, cat("enum ", ei->en->name, " has no variant named ", implicit_variant));
+        if (!var->has_payload)
+            tc.Error(this, cat("variant ", tc.TypeStr(et), ".", implicit_variant,
+                               " has no payload; write .", implicit_variant));
+        t = tc.ast.VariantOf(et, implicit_variant, var, line);
+    } else {
+        if (!implicit) tc.ConstNamesIn(type);
+        t = tc.Subst(type);
+    }
     if (t->kind == TY_VARIANT) {
+        if (spread)
+            tc.Error(spread, "struct update (..base) is only valid for structs, not enum variants");
         if (t->var->adt->kind != TY_ENUM)
             tc.Error(this, cat("variant literal of non-ADT type ", tc.TypeStr(t->var->adt)));
         auto ei = tc.GetEnumInst(t->var->adt);
@@ -345,6 +365,16 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
         auto st = t->struc->st;
         if (st->callable_arity >= 0)
             tc.Error(this, "use borrow_callable or own_callable to construct a runtime callable");
+        if (spread && t->struc->args.empty() && !st->generics.empty()) {
+            auto bv = tc.CheckV(spread, nullptr);
+            auto bt = bv.type;
+            if (bt->kind == TY_REF) {
+                if (bt->ref->optional) tc.OptionalDerefError(spread, spread);
+                bt = bt->ref->sub;
+            }
+            if (bt->kind == TY_STRUCT && bt->struc->st == st && !bt->struc->args.empty())
+                t = tc.ast.StructOf(st, bt->struc->args, line);
+        }
         if (t->struc->args.empty() && !st->generics.empty()) {
             // Infer the struct's generics from the field initializers as
             // written, in the order written: the first to bind a parameter
@@ -404,13 +434,33 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
         auto inst = tc.GetStructInst(t);
         sinst = inst;
         if (st->isroot) {
+            if (spread) tc.Error(spread, "struct update (..base) is not supported for root structs");
             if (tc.rootinit != this || !tc.rootowner)
                 tc.Error(this, "a root owner must be constructed directly at its declaration");
             tc.rootowner->type = t;
             for (size_t i = 0; i < inst->ftypes.size(); i++)
                 if (inst->ftypes[i]) tc.RootComponent(tc.rootowner, t, (int)i);
         }
+        Val spreadval;
+        if (spread) {
+            auto bv = tc.CheckV(spread, t);
+            spread->exprtype = bv.type;
+            auto bt = bv.type;
+            if (bt->kind == TY_REF) {
+                if (bt->ref->optional) tc.OptionalDerefError(spread, spread);
+                bt = bt->ref->sub;
+            }
+            if (!tc.TopConstEq(bt, t))
+                tc.Error(spread, cat("struct update base must have type ", tc.TypeStr(t),
+                                     ", got ", tc.TypeStr(bt)));
+            if (tc.HasRelRefT(t))
+                tc.Error(spread, "struct update (..base) cannot copy self-relative references");
+            bv.type = bt;
+            spreadval = bv;
+        }
         auto deep = tc.CheckInits(this, st->fields, inst->ftypes, st->name, t);
+        if (spread && tc.HoldsPlainRef(t))
+            tc.NoteLitElem(deep, spread, spreadval, t, false);
         Val v;
         v.type = t;
         v.Set(tc.TempRoot(), false);
@@ -447,20 +497,82 @@ inline Val Unary::Check(TypeCheck &tc, TypeExpr *) {
 
 // Keep operator-specific temporaries in helpers: this frame stays on the
 // native stack while an operand checks a whole chain of callees.
-inline Val Binary::Check(TypeCheck &tc, TypeExpr *) {
+inline Val Binary::Check(TypeCheck &tc, TypeExpr *expected) {
     litfloat = false;
     flexint = false;
     tc.ForgetCastAlt(this);
     if (op == T_DOTEQ || op == T_DOTNEQ) return tc.CheckRefIdentity(this);
     if (op == T_ANDAND || op == T_OROR) return tc.CheckLogical(this);
+    if (op == T_QQUESTION) return tc.CheckCoalesce(this, expected);
+    if ((op == T_EQ || op == T_NEQ) &&
+        (tc.IsImplicitEnum(left) || tc.IsImplicitEnum(right))) {
+        if (tc.IsImplicitEnum(left) && tc.IsImplicitEnum(right))
+            tc.Error(this, "cannot infer enum type when comparing two implicit variants; qualify one side");
+        Val lv, rv;
+        if (tc.IsImplicitEnum(right)) {
+            lv = tc.Operand(left);
+            auto lt = tc.LoadType(lv.type);
+            rv = tc.Operand(right, lt->kind == TY_ENUM ? lt : nullptr);
+        } else {
+            rv = tc.Operand(right);
+            auto rt = tc.LoadType(rv.type);
+            lv = tc.Operand(left, rt->kind == TY_ENUM ? rt : nullptr);
+        }
+        return tc.CheckBinaryResult(this, lv, rv);
+    }
     auto lv = tc.Operand(left);
     auto rv = tc.Operand(right);
     return tc.CheckBinaryResult(this, lv, rv);
 }
 
-inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
+inline Val Dot::Check(TypeCheck &tc, TypeExpr *expected) {
     TypeCheck::DestScope ds(tc, TypeCheck::Dest {});
     if (incomplete) tc.IncompleteDot(this);
+    optchain_temp = false;
+    if (optchain) {
+        auto ov = tc.CheckV(obj, nullptr);
+        obj->exprtype = ov.type;
+        auto oid = Is<Ident>(obj);
+        auto narrowed_opt = oid && oid->vdef && IsOptional(oid->vdef->type);
+        if (!IsOptional(ov.type) && !narrowed_opt)
+            tc.Error(this, cat("?. requires an optional receiver (T?), got ", tc.TypeStr(ov.type)));
+        auto sub = IsOptional(ov.type) ? ov.type->ref->sub : oid->vdef->type->ref->sub;
+        auto ocq = IsOptional(ov.type) ? ov.type->cq : oid->vdef->type->cq;
+        Val non_opt = ov;
+        non_opt.type = tc.ast.RefTo(sub, line, false);
+        non_opt.type->cq = ocq;
+        if (narrowed_opt) non_opt.SetProv(tc.RefProvOf(oid->vdef));
+        auto rv = CheckValueMember(tc, std::move(non_opt));
+        if (IsOptional(rv.type)) return rv;
+        if (rv.type->kind == TY_REF) {
+            auto opt_t = tc.ast.RefTo(rv.type->ref->sub, line, true);
+            opt_t->cq = rv.type->cq;
+            rv.type = opt_t;
+            return rv;
+        }
+        if (member >= 0 || (fieldidx >= 0 && sub->kind == TY_STRUCT &&
+                            IsVarintT(tc.GetStructInst(sub)->ftypes[fieldidx]))) {
+            optchain_temp = true;
+            Val out;
+            out.type = tc.ast.RefTo(rv.type, line, true);
+            out.type->cq = true;
+            out.Set(tc.TempRoot(), false);
+            return out;
+        }
+        Val out;
+        out.type = tc.ast.RefTo(rv.type, line, true);
+        out.type->cq = ocq || !rv.writable;
+        out.SetProv(IsOptional(ov.type) ? ov : tc.RefProvOf(oid->vdef));
+        return out;
+    }
+    // `.Variant`: leading-dot enum constant inferred from `expected`.
+    if (!obj && !enumtype) {
+        auto et = expected ? (IsPlainRef(expected) ? expected->ref->sub : expected) : nullptr;
+        if (!et || et->kind != TY_ENUM)
+            tc.Error(this, cat("cannot infer enum type for .", name,
+                               "; add a type annotation or qualify it (EnumName.", name, ")"));
+        return tc.CheckVariantConst(this, et->enu->en, et);
+    }
     // EnumName.Variant, or EnumName<T>.Variant of a generic enum: a
     // payload-less variant constant (§3.5).
     if (enumtype) {

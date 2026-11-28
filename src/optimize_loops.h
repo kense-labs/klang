@@ -166,12 +166,13 @@ struct LoopShaper {
         if (Is<IntLit>(e) || Is<FltLit>(e) || Is<BoolLit>(e)) return true;
         if (auto id = Is<Ident>(e)) return id->vdef && id->vdef != s;
         if (auto b = Is<Binary>(e))
-            return PureTerm(b->left, s, ibs) && PureTerm(b->right, s, ibs);
+            return b->op != T_QQUESTION && PureTerm(b->left, s, ibs) && PureTerm(b->right, s, ibs);
         if (auto u = Is<Unary>(e))
             return u->op != T_BITAND && PureTerm(u->child, s, ibs);
         if (auto c = Is<AsCast>(e)) return PureTerm(c->child, s, ibs);
         if (auto ix = Is<Index>(e)) return PureTerm(ix->obj, s, ibs) && PureTerm(ix->idx, s, ibs);
         if (auto d = Is<Dot>(e)) {
+            if (d->optchain) return false;
             if (d->variantconst) return true;
             return (d->IsField() || d->member == B_LEN || d->member == B_CAP) &&
                    PureTerm(d->obj, s, ibs);

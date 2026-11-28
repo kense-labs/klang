@@ -130,7 +130,9 @@ inline Node *ArrayLit::Clone1(Ast &ast) const {
 }
 
 inline Node *StructLit::Clone1(Ast &ast) const {
-    auto sl = ast.New<StructLit>(line, ast.CloneExpansionType(type));
+    auto sl = ast.New<StructLit>(line, type ? ast.CloneExpansionType(type) : nullptr);
+    sl->implicit_variant = implicit_variant;
+    sl->spread = CloneOrNull(ast, spread);
     sl->defaultall = defaultall;
     sl->implicit = implicit;
     sl->task_carry_error = task_carry_error;
@@ -149,7 +151,7 @@ inline Node *Binary::Clone1(Ast &ast) const {
 }
 
 inline Node *Dot::Clone1(Ast &ast) const {
-    auto d = ast.New<Dot>(line, obj->Clone(ast), name, ns);
+    auto d = ast.New<Dot>(line, CloneOrNull(ast, obj), name, ns);
     if (enumtype) d->enumtype = ast.CloneExpansionType(enumtype);
     else if (auto id = Is<Ident>(obj); id && ast.expansionclone) {
         auto arg = ast.expansionclone->Find(id->expansionbinding);
@@ -157,6 +159,7 @@ inline Node *Dot::Clone1(Ast &ast) const {
     }
     d->accessorowner = accessorowner;
     d->incomplete = incomplete;
+    d->optchain = optchain;
     return d;
 }
 
@@ -168,9 +171,15 @@ inline Node *Call::Clone1(Ast &ast) const {
     c->task_await = task_await;
     for (auto t : tyargs) c->tyargs.push_back(ast.CloneExpansionType(t));
     c->implicit = implicit;
-    if (!decorator_forward)
-        for (size_t i = 0; i < args.size(); i++)
-            if (!IsDefaultArg(i)) c->args.push_back(args[i]->Clone(ast));
+    c->argnames = argnames;
+    if (!decorator_forward) {
+        if (!orig_args.empty()) {
+            for (auto a : orig_args) c->args.push_back(a->Clone(ast));
+        } else {
+            for (size_t i = 0; i < args.size(); i++)
+                if (!IsDefaultArg(i)) c->args.push_back(args[i]->Clone(ast));
+        }
+    }
     c->trailing = (FunVal *)CloneOrNull(ast, (Node *)trailing);
     return c;
 }
@@ -285,6 +294,7 @@ inline Node *Break::Clone1(Ast &ast) const {
 inline Node *Continue::Clone1(Ast &ast) const { return ast.New<Continue>(line); }
 inline Node *Defer::Clone1(Ast &ast) const {
     auto d = ast.New<Defer>(line, (Block *)body->Clone(ast));
+    d->erronly = erronly;
     d->task_transfer = task_transfer;
     return d;
 }
@@ -313,6 +323,7 @@ inline Node *VarDecl::Clone1(Ast &ast) const {
     vd->byref = byref;
     vd->results = results;
     vd->names = names;
+    vd->destruct_fields = destruct_fields;
     vd->type = ast.CloneExpansionType(type);
     CloneNodes(ast, inits, vd->inits);
     return vd;
@@ -524,6 +535,7 @@ inline void ArrayLit::Children(const function<void(Node *)> &f) const {
 
 inline void StructLit::Children(const function<void(Node *)> &f) const {
     for (auto &fi : inits) f(fi.val);
+    CH(spread);
 }
 
 inline void Unary::Children(const function<void(Node *)> &f) const { f(child); }
@@ -533,7 +545,7 @@ inline void Binary::Children(const function<void(Node *)> &f) const {
     f(right);
 }
 
-inline void Dot::Children(const function<void(Node *)> &f) const { f(obj); }
+inline void Dot::Children(const function<void(Node *)> &f) const { CH(obj); }
 
 inline void Call::Children(const function<void(Node *)> &f) const {
     f(callee);

@@ -168,7 +168,8 @@ struct Parser {
                 return !declaration;
             default:
                 return (declaration && AtDecorator()) || AtAsync() || AtInline() ||
-                       AtCheckfree() || AtDeprecated() || (!declaration && AtUsing());
+                       AtCheckfree() || AtDeprecated() ||
+                       (!declaration && (AtUsing() || AtErrDefer()));
         }
     }
 
@@ -384,6 +385,23 @@ struct Parser {
             return depth == 0 && copy.tok == T_LCURLY;
         } catch (CompileError &) {
             return false;
+        }
+    }
+
+    bool AtErrDefer() {
+        if (lex.tok != T_IDENT || lex.attr != "errdefer") return false;
+        switch (lex.PeekTok()) {
+            case T_LCURLY: case T_IDENT: case T_COLONCOLON: case T_SELF:
+            case T_IF: case T_MATCH: case T_WHILE: case T_LOOP: case T_FOR:
+            case T_RETURN: case T_BREAK: case T_CONTINUE: case T_DEFER:
+            case T_GUARD: case T_LET: case T_VAR: case T_CONST: case T_REUSABLE:
+            case T_FN: case T_RECURSIVE: case T_THREADFN: case T_EXTERN:
+            case T_EXPORT: case T_SIMD: case T_NOT: case T_BITNOT: case T_BITAND:
+            case T_LBRACKET: case T_INTLIT: case T_FLTLIT: case T_STRLIT:
+            case T_TRUE: case T_FALSE: case T_NULLLIT:
+                return true;
+            default:
+                return false;
         }
     }
 
@@ -1211,6 +1229,28 @@ struct Parser {
         vd->reusable = reusable;
         vd->isglobal = isglobal;
         vd->doc = doc;
+        if (lex.tok == T_LCURLY) {
+            if (isglobal) Error("struct destructuring is not allowed at global scope");
+            if (reusable) Error("reusable cannot be combined with struct destructuring");
+            Role(R_LIST);
+            lex.Next();
+            auto sub = Sub();
+            while (lex.tok != T_RCURLY) {
+                auto fname = ExpectIdent("struct destructuring");
+                auto lname = IsNext(T_COLON) ? ExpectIdent("struct destructuring binding") : fname;
+                vd->destruct_fields.push_back(fname);
+                vd->names.push_back(lname);
+                if (!IsNext(T_COMMA)) break;
+            }
+            Expect(T_RCURLY, "struct destructuring");
+            if (vd->names.empty()) Error("struct destructuring must bind at least one field");
+            vd->ns = curns;
+            if (lex.tok == T_COLON) Error("type annotations are not supported on struct destructuring");
+            if (IsNext(T_DOTASSIGN)) vd->byref = true;
+            else Expect(T_ASSIGN, "struct destructuring");
+            vd->inits.push_back(ParseExpr());
+            return Finish(vd);
+        }
         for (;;) {
             vd->names.push_back(isglobal ? ParseDeclName("global declaration")
                                          : ExpectIdent("variable declaration"));
@@ -1337,6 +1377,8 @@ struct Parser {
                     }
                     continue;
                 }
+                case T_QQUESTION:
+                    Error("type is already optional");
                 case T_DOTDOT: {
                     Role(R_TYPE_POSTFIX);
                     lex.Next();
@@ -1405,6 +1447,7 @@ struct Parser {
                 // It takes no postfix: `u32 in nodes[>..]` would read as an
                 // index into `nodes[>..]`.
                 if (lex.tok == T_LBRACKET || lex.tok == T_BITAND || lex.tok == T_QUESTION ||
+                    lex.tok == T_QQUESTION || lex.tok == T_QDOT ||
                     lex.tok == T_DOTDOT || lex.tok == T_DOT)
                     Error(cat("an index type takes no postfix: parenthesize it, as in (",
                               IntStorageName(it->intstorage), upto ? " upto " : " in ",
@@ -1730,6 +1773,13 @@ struct Parser {
 
     PatItem ParsePatternItem() {
         PatItem r;
+        if (IsNext(T_DOT)) {
+            r.dot = true;
+            auto operandline = CurLine();
+            auto name = ExpectIdent("variant pattern");
+            r.lo = Finish(New<Ident>(operandline, name, curns));
+            return r;
+        }
         r.lo = ParsePatternBound();
         if (IsNext(T_DOTDOT)) r.hi = ParsePatternBound();
         return r;
@@ -1761,16 +1811,17 @@ struct Parser {
     // C), so `x & mask != 0` tests the masked bits (Appendix D).
     int BinPrec(TType t) {
         switch (t) {
-            case T_MUL: case T_DIV: case T_MOD:                return 10;
-            case T_PLUS: case T_MINUS:                         return 9;
-            case T_SHL: case T_SHR:                            return 8;
-            case T_BITAND:                                     return 7;
-            case T_XOR:                                        return 6;
-            case T_BITOR:                                      return 5;
-            case T_LT: case T_GT: case T_LTEQ: case T_GTEQ:    return 4;
-            case T_EQ: case T_NEQ: case T_DOTEQ: case T_DOTNEQ: return 3;
-            case T_ANDAND:                                     return 2;
-            case T_OROR:                                       return 1;
+            case T_MUL: case T_DIV: case T_MOD:                return 11;
+            case T_PLUS: case T_MINUS:                         return 10;
+            case T_SHL: case T_SHR:                            return 9;
+            case T_BITAND:                                     return 8;
+            case T_XOR:                                        return 7;
+            case T_BITOR:                                      return 6;
+            case T_LT: case T_GT: case T_LTEQ: case T_GTEQ:    return 5;
+            case T_EQ: case T_NEQ: case T_DOTEQ: case T_DOTNEQ: return 4;
+            case T_ANDAND:                                     return 3;
+            case T_OROR:                                       return 2;
+            case T_QQUESTION:                                  return 1;
             default:                                           return 0;
         }
     }
@@ -1841,9 +1892,10 @@ struct Parser {
                 case T_LBRACKET:
                     e = ParseIndexOrSlice(e, line);
                     continue;
-                case T_DOT: {
+                case T_DOT: case T_QDOT: {
+                    auto opt = lex.tok == T_QDOT;
                     lex.Next();
-                    if (lex.tok != T_IDENT && !tentative) {
+                    if (!opt && lex.tok != T_IDENT && !tentative) {
                         // A `.` with no name after it, as an editor asking
                         // for completion has one: reported, and kept as a
                         // Dot with an empty name, which the checker checks
@@ -1859,7 +1911,7 @@ struct Parser {
                         if (curfn) curfn->broken = true;
                         return d;
                     }
-                    auto name = ExpectIdent("field access");
+                    auto name = ExpectIdent(opt ? "optional chaining" : "field access");
                     if (lex.tok == T_LT) {
                         // x.f<T>(...): a UFCS call with type arguments, by
                         // the same rule as f<T>(...); else a comparison.
@@ -1873,6 +1925,7 @@ struct Parser {
                                 Role(R_LIST);
                                 lex.Next();
                                 auto d = Finish(New<Dot>(line, e, name, curns), nameend);
+                                d->optchain = opt;
                                 e = ParseCallRest(d, std::move(tyargs), d->line);
                                 continue;
                             }
@@ -1883,11 +1936,13 @@ struct Parser {
                     }
                     // `Ident.Ident {` is a variant literal; anything else a Dot
                     // (fields, UFCS, payload-less variant constants).
-                    if (lex.tok == T_LCURLY && !no_struct_lit && Is<Ident>(e)) {
+                    if (!opt && lex.tok == T_LCURLY && !no_struct_lit && Is<Ident>(e)) {
                         auto base = NewUnresolvedType(Is<Ident>(e)->name, e->line);
                         e = ParseStructLitBody(ast.VariantOf(base, name, nullptr, line), line);
                     } else {
-                        e = Finish(New<Dot>(line, e, name, curns));
+                        auto d = Finish(New<Dot>(line, e, name, curns));
+                        d->optchain = opt;
+                        e = d;
                     }
                     continue;
                 }
@@ -1911,6 +1966,17 @@ struct Parser {
         {
             auto sub = Sub();
             while (lex.tok != T_RPAREN) {
+                if (lex.tok == T_IDENT && lex.PeekTok() == T_COLON) {
+                    auto aname = lex.attr;
+                    for (auto prev : c->argnames)
+                        if (prev == aname) Error(cat("duplicate argument name: ", aname));
+                    if (c->argnames.size() < c->args.size()) c->argnames.resize(c->args.size());
+                    c->argnames.push_back(aname);
+                    lex.Next();  // ident
+                    lex.Next();  // ':'
+                } else if (!c->argnames.empty()) {
+                    Error("positional argument cannot follow a named argument");
+                }
                 c->args.push_back(ParseExpr());
                 if (!IsNext(T_COMMA)) break;
             }
@@ -2092,6 +2158,16 @@ struct Parser {
                 return e;
             }
             case T_LBRACKET: return ParseArrayLit(line);
+            case T_DOT: {
+                lex.Next();
+                auto vname = ExpectIdent("implicit enum variant");
+                if (lex.tok == T_LCURLY && !no_struct_lit) {
+                    auto sl = ParseStructLitBody(nullptr, line);
+                    sl->implicit_variant = vname;
+                    return sl;
+                }
+                return Finish(New<Dot>(line, nullptr, vname, curns));
+            }
             case T_IDENT: case T_COLONCOLON: {
                 if (constcond && lex.tok == T_IDENT && lex.PeekTok() == T_LT &&
                     (lex.attr == "has_default" || lex.attr == "same"))
@@ -2343,15 +2419,22 @@ struct Parser {
         return Finish(ci);
     }
 
-    void ParseInitList(vector<FieldInit> &inits, bool &defaultall, bool fragment = false) {
+    void ParseInitList(vector<FieldInit> &inits, bool &defaultall, bool fragment = false,
+                       Node **spread = nullptr) {
         if (lex.tok == T_LCURLY) Role(R_LIST);
         Expect(T_LCURLY, "constructor initializers");
         auto sub = Sub();
         while (lex.tok != T_RCURLY) {
-            // A trailing `..` fills in every field not given (§4.2).
+            // A trailing `..` fills in every field not given (§4.2), or `..base`
+            // copies omitted fields from an existing struct value.
             if (IsNext(T_DOTDOT)) {
                 if (fragment) Error("trailing .. belongs to the whole constructor, not a const for fragment");
-                defaultall = true;
+                if (spread && lex.tok != T_RCURLY && lex.tok != T_COMMA) {
+                    *spread = ParseExpr();
+                    IsNext(T_COMMA);
+                } else {
+                    defaultall = true;
+                }
                 break;
             }
             FieldInit fi;
@@ -2377,7 +2460,7 @@ struct Parser {
 
     StructLit *ParseStructLitBody(TypeExpr *type, Line line) {
         auto sl = New<StructLit>(line, type);
-        ParseInitList(sl->inits, sl->defaultall);
+        ParseInitList(sl->inits, sl->defaultall, false, &sl->spread);
         Finish(sl);
         auto named = 0;
         for (auto &fi : sl->inits) {
@@ -2387,6 +2470,8 @@ struct Parser {
         }
         if (named && named != (int)sl->inits.size())
             Error("struct literal mixes named and positional initializers");
+        if (sl->spread && !sl->inits.empty() && !named)
+            Error("struct update (..base) requires named field initializers");
         return sl;
     }
 
@@ -2496,6 +2581,7 @@ struct Parser {
     bool ParseStatement(Block *b) {
         if (AtAsync() || AtInline() || AtCheckfree() || AtDeprecated()) goto nestedfndecl;
         if (AtUsing()) return ParseUsing(b);
+        if (AtErrDefer()) { b->stmts.push_back(ParseDefer(true)); return true; }
         switch (lex.tok) {
             case T_LET: case T_VAR: case T_CONST: case T_REUSABLE: {
                 if (lex.tok == T_CONST && lex.PeekTok() == T_FOR) {
@@ -2584,22 +2670,23 @@ struct Parser {
     // statement s, which is one of the expression statements: a declaration
     // would be out of scope as soon as it ran, and a guard guards the rest
     // of a block, which the body has none of.
-    Node *ParseDefer() {
+    Node *ParseDefer(bool erronly = false) {
         auto line = CurLine();
+        auto kw = erronly ? "errdefer" : "defer";
         lex.Next();
         Block *body;
         if (lex.tok == T_LCURLY) {
-            body = ParseBlockExpr("defer body");
+            body = ParseBlockExpr(erronly ? "errdefer body" : "defer body");
             IsNext(T_SEMI);  // A redundant ';' after the block.
         } else {
             switch (lex.tok) {
                 case T_LET: case T_VAR: case T_CONST: case T_REUSABLE: case T_GUARD: case T_DEFER:
                 case T_FN: case T_RECURSIVE: case T_THREADFN: case T_EXTERN: case T_EXPORT:
                 case T_SIMD:
-                    Error(cat("defer takes a statement or a block, not `", TokStr(), "`"));
+                    Error(cat(kw, " takes a statement or a block, not `", TokStr(), "`"));
                 default:
-                    if (AtDeprecated() || AtUsing())
-                        Error(cat("defer takes a statement or a block, not `", TokStr(), "`"));
+                    if (AtDeprecated() || AtUsing() || AtErrDefer())
+                        Error(cat(kw, " takes a statement or a block, not `", TokStr(), "`"));
                     break;
             }
             body = New<Block>(line);
@@ -2607,7 +2694,9 @@ struct Parser {
             ParseExprStatement(body, false);
             Finish(body);
         }
-        return Finish(New<Defer>(line, body));
+        auto d = New<Defer>(line, body);
+        d->erronly = erronly;
+        return Finish(d);
     }
 
     Node *MakeDisposeDefer(Line line, string_view name) {

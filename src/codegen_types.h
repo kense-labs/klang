@@ -1216,7 +1216,7 @@ inline bool CodeGen::ZeroDefaultValue(Node *n, TypeExpr *t) {
     if (auto c = Is<Call>(n))
         return c->builtin == B_DEFAULT && c->rettypes.size() == 1 && TEq(c->rettypes[0], t);
     auto sl = Is<StructLit>(n);
-    if (!sl || t->kind != TY_STRUCT || !TEq(sl->exprtype, t)) return false;
+    if (!sl || sl->spread || t->kind != TY_STRUCT || !TEq(sl->exprtype, t)) return false;
     auto si = SI(t);
     for (size_t i = 0; i < si->st->fields.size(); i++)
         if (!si->st->fields[i].ispad && !ZeroDefaultValue(sl->InitFor((int)i), si->ftypes[i]))

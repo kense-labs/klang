@@ -62,6 +62,7 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
     }
     if (auto d = Is<Dot>(n)) {
         if (d->incomplete) IncompleteDot(d);
+        if (d->optchain) Error(d, "optional chaining (?.) cannot be assigned to");
         auto lv = LValueBase(d->obj);
         auto base = lv.type;
         DerefLValue(lv, d->obj);
@@ -1043,9 +1044,9 @@ inline Val TypeCheck::CheckValueAt(Node *&n, TypeExpr *expected, Dest d, bool ca
 }
 
 // An operand of an operator: always the pointee.
-inline Val TypeCheck::Operand(Node *n) {
+inline Val TypeCheck::Operand(Node *n, TypeExpr *expected) {
     DestScope ds(*this, Dest {});
-    auto v = DecayRef(CheckV(n, nullptr));
+    auto v = DecayRef(CheckV(n, expected));
     n->exprtype = v.type;
     // An operator computes with the number an index type holds (§3.11), so
     // nothing it computes is one. The operand keeps its type for the
@@ -1880,6 +1881,121 @@ inline Val TypeCheck::CheckLogical(Binary *b) {
     Val v;
     v.type = ast.booltype;
     return v;
+}
+
+inline Val TypeCheck::CheckCoalesce(Binary *b, TypeExpr *expected) {
+    Val lv;
+    {
+        DestScope ds(*this, Dest {});
+        lv = CheckV(b->left, nullptr);
+    }
+    b->left->exprtype = lv.type;
+    auto lid = Is<Ident>(b->left);
+    auto narrowed_opt = lid && lid->vdef && IsOptional(lid->vdef->type);
+    TypeExpr *sub = nullptr;
+    bool lcq = false;
+    Roots lroots;
+    if (lv.isnull) {
+        // `null ?? rhs` takes pointee type from RHS or context.
+    } else if (IsOptional(lv.type)) {
+        sub = lv.type->ref->sub;
+        lcq = lv.type->cq;
+        lroots = lv.AsRoots();
+    } else if (narrowed_opt) {
+        sub = lid->vdef->type->ref->sub;
+        lcq = lid->vdef->type->cq;
+        lroots = RefProvOf(lid->vdef).AsRoots();
+    } else {
+        Error(b->left, cat("left operand of ?? must be an optional (T?), got ", TypeStr(lv.type)));
+    }
+    auto snap = SaveFlow();
+    if (lid && lid->vdef && IsOptional(lid->vdef->type))
+        lid->vdef->narrowed = nullptr;
+    auto mid = SaveFlow();
+    Val rv;
+    {
+        DestScope ds(*this, Dest {});
+        TypeExpr *rexp = expected ? expected : sub;
+        rv = CheckV(b->right, rexp);
+    }
+    b->rightkills.clear();
+    vector<VarDef *> mayassign;
+    for (auto &e : mid.locals) {
+        if (!InScope(e.var, e.index)) continue;
+        auto v = e.var;
+        if (e.state.narrowed && !v->narrowed) b->rightkills.push_back(v);
+        if (v->maybeassigned) mayassign.push_back(v);
+    }
+    for (auto [gv, gn] : mid.globals)
+        if (gn && !gv->narrowed) b->rightkills.push_back(gv);
+    auto rightkills = cur.kills;
+    RestoreFlow(snap);
+    erase_if(cur.kills, [&](const Kill &k) {
+        return none_of(rightkills.begin(), rightkills.end(), [&](const Kill &l) {
+            return l.container == k.container && l.base == k.base && l.path == k.path;
+        });
+    });
+    for (auto kv : b->rightkills) kv->narrowed = nullptr;
+    for (auto v : mayassign) v->maybeassigned = true;
+
+    if (lv.isnull) {
+        if (rv.isnull) Error(b, "cannot infer type of null ?? null");
+        auto rt = rv.type->kind == TY_REF ? rv.type->ref->sub : LoadType(rv.type);
+        b->left->exprtype = ast.RefTo(rt, b->left->line, true);
+        sub = rt;
+        lcq = rv.type->kind == TY_REF ? rv.type->cq : false;
+    }
+    if (ClassOf(sub) != SC_FIXED && rv.lvalue && rv.type->kind != TY_REF &&
+        TopConstEq(rv.type, sub)) {
+        b->right = AutoRef(b->right, rv);
+    }
+    if (rv.isnull || IsOptional(rv.type)) {
+        if (!rv.isnull && !TopConstEq(rv.type->ref->sub, sub))
+            Error(b->right, cat("right operand of ?? has incompatible type ", TypeStr(rv.type),
+                                " (expected ", TypeStr(sub), "?)"));
+        b->right->exprtype = rv.isnull ? ast.RefTo(sub, b->right->line, true) : rv.type;
+        b->coalesce_deref = false;
+        Val out;
+        out.type = ast.RefTo(sub, b->line, true);
+        out.type->cq = lcq || (!rv.isnull && rv.type->cq);
+        if (!rv.isnull) lroots.Add(rv.AsRoots());
+        out.TakeAlts(lroots);
+        return out;
+    }
+    if (rv.type->kind == TY_REF && TopConstEq(rv.type->ref->sub, sub)) {
+        b->right->exprtype = rv.type;
+        b->coalesce_deref = false;
+        Val out;
+        out.type = ast.RefTo(sub, b->line, false);
+        out.type->cq = lcq || rv.type->cq;
+        lroots.Add(rv.AsRoots());
+        out.TakeAlts(lroots);
+        return out;
+    }
+    if (ClassOf(sub) != SC_FIXED)
+        Error(b->right, cat("right operand of ?? for non-fixed optional ", TypeStr(sub),
+                            "? must be a reference or optional of ", TypeStr(sub)));
+    auto slot_t = LoadType(sub);
+    rv = DecayRef(rv);
+    {
+        DestScope ds(*this, Dest {});
+        SlotScope ss(*this, true);
+        MustFit(rv, b->right, slot_t);
+    }
+    b->coalesce_deref = true;
+    b->right->exprtype = rv.type;
+    Val out;
+    out.type = slot_t;
+    if (out.type->kind == TY_SLICE) {
+        Roots r = rv.AsRoots();
+        r.Add(lroots);
+        out.TakeAlts(r);
+    } else if (HoldsPlainRef(out.type)) {
+        out.holderset = true;
+        out.contents = ContentsOf(rv);
+        out.contents.Add(lroots);
+    }
+    return out;
 }
 
 inline Val TypeCheck::CheckBinaryResult(Binary *b, Val &lv, Val &rv) {
@@ -2934,7 +3050,8 @@ inline TypeExpr *TypeCheck::ElementwiseScalarType(TypeExpr *t) {
 inline Val TypeCheck::CheckVariantConst(Dot *d, SEnum *en, TypeExpr *written) {
     if (!written && !en->generics.empty())
         Error(d, cat("generic enum ", en->name, " needs type arguments to name a variant"));
-    auto t = ast.EnumOf(en, written ? written->enu->args : vector<TypeExpr *> {}, false, d->line);
+    auto t = ast.EnumOf(en, written ? written->enu->args : vector<TypeExpr *> {},
+                        written && written->enu->varmode, d->line);
     auto inst = GetEnumInst(t);
     auto found = en->FindVariant(d->name);
     if (!found && en->broken) throw Abandoned {};
@@ -3119,6 +3236,16 @@ inline TypeCheck::LitDeep TypeCheck::CheckInits(StructLit *sl, vector<Field> &fi
         auto fi = ordered[i];
         fi.name = fields[i].name;
         if (!fi.val) {
+            if (sl->spread) {
+                if (ClassOf(ftypes[i]) != SC_FIXED)
+                    Error(sl->spread, cat("struct update cannot copy non-fixed field ",
+                                          fields[i].name, " of ", what, "; supply it explicitly"));
+                if (IsRelRef(ftypes[i]) && ClassOf(selft) != SC_FIXED)
+                    Error(sl->spread, cat("struct update on non-fixed ", what,
+                                          " cannot copy omitted relative-reference field ",
+                                          fields[i].name));
+                continue;
+            }
             if (fields[i].defaultval) {
                 fi.val = fields[i].defaultval->Clone(ast);
                 fi.fromdefault = true;

@@ -848,14 +848,16 @@ struct CodeGen {
     vector<string> BraceFields(const string &ct);
     static vector<string> SplitBraceInit(const string &init);
     void PushSc(int kind);
-    void EmitRestores(const CScope &s, bool suspending = false);
+    void EmitRestores(const CScope &s, bool suspending = false, bool on_error = false);
     void RestoreStack(const StackSave &save);
     void PopSc();
-    void EmitExitRestores(int to, bool suspending = false);
-    bool HasExitRestores(int to = 0) const {
+    void EmitExitRestores(int to, bool suspending = false, bool on_error = false);
+    bool HasExitRestores(int to = 0, bool on_error = false) const {
         for (int i = (int)cscopes.size() - 1; i >= to; i--) {
             const auto &s = cscopes[i];
-            if (s.task_controller || !s.defers.empty() || !s.saves.empty()) return true;
+            if (s.task_controller || !s.saves.empty()) return true;
+            for (auto &[_, d] : s.defers)
+                if (!d->erronly || on_error) return true;
         }
         return false;
     }
@@ -1104,6 +1106,8 @@ struct CodeGen {
         auto x = n->CgX(*this);
         return Spills(n) && !IsCName(x) ? Snapshot(n->exprtype, x) : x;
     }
+    string OptPtr(const string &x, TypeExpr *t);
+    string GenOptRef(Node *n, TypeExpr *&reftype);
     // C compilers bound how deep an expression nests: clang to 256 brackets
     // (-fbracket-depth), the blocks around it included, and MSVC and TinyCC
     // by their parsers' stacks. So a scalar value whose expression nests
@@ -1270,9 +1274,11 @@ struct CodeGen {
                      TypeExpr *as = nullptr);
     static bool HasSelfInit(StructLit *sl);
     void GenStructLit(StructLit *sl, const string &stk, const string &lenlv = "");
-    void GenFrameObjLit(StructLit *sl, StructInst *si, const string &stk, const string &obj);
+    void GenFrameObjLit(StructLit *sl, StructInst *si, const string &stk, const string &obj,
+                        const Loc *spreadloc = nullptr);
     void GenFieldInits(StructLit *sl, const vector<Field> &fields, const vector<TypeExpr *> &ftypes,
-                       const string &stk, const string &lenlv = "", const string &selfbase = "");
+                       const string &stk, const string &lenlv = "", const string &selfbase = "",
+                       const Loc *spreadloc = nullptr);
 
     // ------------------------------------------------------------------
     // Statements and control flow. GenAny routes a node's value to a Dst;
@@ -1401,7 +1407,7 @@ struct CodeGen {
     // body, and long-distance (§7.9).
 
     vector<string> GenForward(Call *c, const vector<TypeExpr *> &rets, const vector<Dst> &chans);
-    void GenNormalReturn(const vector<Node *> &vals);
+    void GenNormalReturn(const vector<Node *> &vals, bool on_error = false);
 
     // The bytes a length prefix of this storage reserves ahead of the
     // elements. A varint takes the one byte that covers counts under 128.
@@ -1410,7 +1416,8 @@ struct CodeGen {
     void EmitPrefixPatch(const string &pref, IntStorage ls, const string &stk, const string &count,
                          const string &elems);
     void EmitNrvoFinish(const NrvoDest &nd);
-    void Epilogue(const string &retv, bool suspending = false, bool flush = true);
+    void Epilogue(const string &retv, bool suspending = false, bool flush = true,
+                  bool on_error = false);
     void GenTaskReturn(Return *r);
     void PropagateReturn(const string &rfval);
     void GenFromReturn(Return *r);

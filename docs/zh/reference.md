@@ -874,7 +874,26 @@ Unit { 1, 100, 1.5, 2.5, "scout" } 50 Unit { 3, 100, 0.0, 0.0, "" } 100
 
 仅指定类型的全局 `var` 变量将以该类型的默认值作为初始值。当局部变量的类型不是定长大小时，必须在声明时初始化，因为值的存储布局是在构造时确定的。定长大小的局部变量可以先声明，只要在读取前于每条执行路径上完成赋值即可（[第 2 节](#2-declarations-variables-and-scope)）。
 
-只有当编译器能够确认按声明顺序重新排列不会改变任何行为时，具名初始化器才可以不按声明顺序书写：读取操作以及不会触发异常（trap）的算术运算是允许的；带副作用的调用、索引和循环则不允许。构造总是按声明顺序直接在每个字段内进行。如果副作用必须以其他顺序发生，请在字面量之前先执行它们。规范 §4.2。
+只有当编译器能够确认按声明顺序重新排列不会改变任何行为时，具名初始化器才可以不按声明顺序书写：读取操作以及不会触发异常（trap）的算术运算是允许的；带副作用的调用、索引和循环则不允许。构造总是按声明顺序直接在每个字段内进行。如果副作用必须以其他顺序发生，请在字面量之前先执行它们。
+
+结构体字面量还支持在末尾使用 `..base` 从同类型的已有值复制其余省略字段。通过 `..base` 复制的每个省略字段必须是定长类型（非定长字段必须显式写出），且 `base` 不能持有自相对引用。此外，可以直接在 `let`/`var`/`const` 或 `.=` 声明中解构结构体字段（`let { field, other: alias } = value;`）：
+
+```klang
+struct Config { host: const u8[:], port: i64, tls: bool = false }
+fn main() {
+    let base = Config { host: "localhost", port: 8080 };
+    let prod = Config { port: 443, tls: true, ..base };
+    let { host, port, tls } = prod;
+    let { host: h } .= base;
+    print(host, ":", port, " tls=", tls, " ", h);
+}
+```
+
+```
+localhost:443 tls=true localhost
+```
+
+规范 §4.2。
 
 <a id="field-defaults"></a>
 ### 字段默认值
@@ -1163,6 +1182,26 @@ fn main() {
 20 rock
 ```
 
+当表达式的期望枚举类型可由上下文确定时——例如带类型标注的 `let`/`var`/`const` 声明、赋值、`return`、结构体字段、数组字面量元素、函数调用参数、`==`/`!=` 比较或 `match` 分支——可以直接使用前导点缩写 `.Variant` 或 `.Variant { ... }`，无需重复书写 `EnumName`：
+
+```klang
+enum Status { Ok, Err { code: i64 } }
+fn code_of(s: Status) -> i64 {
+    match s {
+        .Ok => 0,
+        .Err e => e.code,
+    }
+}
+fn main() {
+    var st: Status = .Err { code: 404 };
+    if st != .Ok { print(code_of(st), " ", code_of(.Ok)); }
+}
+```
+
+```
+404 0
+```
+
 规范 §8.1。
 
 <a id="case-functions"></a>
@@ -1352,7 +1391,27 @@ true
 6
 ```
 
-可选类型可用 `.=` 重新绑定到一个引用（从而使其收窄），或重新绑定到 `null`（不收窄）。收窄后的可选值可以像普通引用一样通过它写入；不存在*不经*收窄就通过它写入的方式。`assert(o)` 会为该代码块剩余部分收窄 `o`。规范 §3.8。
+可选类型可用 `.=` 重新绑定到一个引用（从而使其收窄），或重新绑定到 `null`（不收窄）。收窄后的可选值可以像普通引用一样通过它写入；不存在*不经*收窄就通过它写入的方式。`assert(o)` 会为该代码块剩余部分收窄 `o`。
+
+在读取端，可选链 `x?.field` 与 `x?.method(args)` 仅在 `x` 非空时解包并继续访问成员：返回值为普通值或引用的访问会提升为可选引用 `R?`（原本已为 `T?` 时保持），`void` 方法则在 `x` 为 `null` 时跳过执行。空合并运算符 `a ?? b` 对 `a` 只求值一次，非空时返回解包后的值，否则短路求值并返回 `b`：
+
+```klang
+struct Item { val: i64, next: Item? = null }
+fn twice(it: Item&) -> i64 { it.val * 2 }
+fn main() {
+    let tail = Item { val: 21 };
+    let head = Item { val: 10, next: tail };
+    let missing: Item? = null;
+    let p: Item? = head;
+    print(p?.next?.val ?? -1, " ", missing?.twice() ?? 0);
+}
+```
+
+```
+21 0
+```
+
+规范 §3.8。
 
 <a id="what-references-may-point-to"></a>
 ### 引用可以指向什么
@@ -2062,6 +2121,39 @@ block done
 
 `defer` 只能出现在函数中：全局初始化器没有作用域退出。当根本没有发生正常退出时，不会运行任何 `defer`：`abort`、失败的 `assert` 或边界检查、`exit`，以及受控 Worker 的中止都会直接结束代码而不运行任何 `defer`，此时将由进程或 Worker 的结束来回收主体原本要释放的资源。规范 §6.6。
 
+<a id="errdefer"></a>
+### `errdefer`
+
+`errdefer` 是上下文关键字，语法形式与体内限制均与 `defer` 相同，区别在于它仅当所属作用域沿错误展开路径退出（`return … from` 或 `exception::throw`）时才会执行，而在正常贯穿、普通 `return`、`break` 与 `continue` 时跳过。在同一作用域内，`errdefer` 与 `defer` 统一遵循后进先出（LIFO）顺序执行；`errdefer` 体内消费 `own` 句柄也不会阻止正常返回路径继续持有或返回该句柄：
+
+```klang
+import exception;
+
+fn step(fail: bool) -> i64 {
+    errdefer print("rollback");
+    defer print("close");
+    if fail { exception::throw(1); }
+    return 42;
+}
+
+fn main() {
+    var v: i64 = 0;
+    fn ok_call() { v = step(false); }
+    exception::try<i64>(ok_call) { _ => print("caught"); };
+    print("ok=", v);
+    fn bad_call() { step(true); }
+    exception::try<i64>(bad_call) { _ => print("caught"); };
+}
+```
+
+```
+close
+ok=42
+close
+rollback
+caught
+```
+
 <a id="using"></a>
 ### `using`
 
@@ -2355,6 +2447,21 @@ fn main() {
 
 ```
 2 15 100 -5 5 42 3.0
+```
+
+函数调用实参支持在位置参数前缀之后使用具名参数（`name: expr`）。具名参数可以重排参数顺序并跳过中间带默认值的参数；所有无默认值的参数仍须提供实参，且位置参数不能出现在具名参数之后：
+
+```klang
+fn window(w: i64, h: i64 = 720, scale: i64 = 1, border: i64 = 0) -> i64 {
+    w * scale + h + border
+}
+fn main() {
+    print(window(1280, border: 8), " ", window(scale: 2, w: 640));
+}
+```
+
+```
+2008 2000
 ```
 
 <a id="results"></a>
@@ -3358,6 +3465,7 @@ varint i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`。
 
 **上下文关键字**（在其它任何地方均为普通标识符）：`from`
 （位于 `return` 值之后）、`upto`（位于类型中的无符号整数类型之后）、
+`errdefer`（仅在错误展开时执行的清理语句或代码块）、
 `inline` 与 `checkfree`（位于 `fn`、`recursive`、`simd` 或 `thread_fn` 之前）、
 `deprecated`（位于其他函数限定符之前，可选地后接一个字符串）、
 `fields`、`variants` 与 `types`（位于 `const for` 头部中）、
@@ -3367,7 +3475,7 @@ varint i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`。
 
 | 优先级 | 运算符 |
 |---|---|
-| 后缀 | `f(…)`, `a[i]`, `a[x..y]`, `.field`, `x as T`, `x as! T` |
+| 后缀 | `f(…)`, `a[i]`, `a[x..y]`, `.field`, `?.field`, `x as T`, `x as! T` |
 | 一元 | `-`, `!`, `~`, `&` |
 | 乘除 | `*`, `/`, `%` |
 | 加减 | `+`, `-` |
@@ -3379,6 +3487,7 @@ varint i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`。
 | 相等性 | `==`, `!=`, `.==`, `.!=` |
 | 逻辑与 | `&&` |
 | 逻辑或 | `\|\|` |
+| 空合并 | `??` |
 
 赋值语句：`=`、`.=`，以及所有二元运算符的复合赋值形式
 （`+=`、`<<=`、`&=` 等）；作用于整数左值的 `++` 与 `--`。范围表达式

@@ -870,7 +870,7 @@ inline bool CodeGen::StableDest(Node *n) {
     };
     for (;;) {
         if (auto d = Is<Dot>(n)) {
-            if (!d->IsField() || !fixed(d->obj->exprtype)) return false;
+            if (!d->IsField() || !d->obj || !fixed(d->obj->exprtype)) return false;
             n = d->obj;
         } else if (auto ix = Is<Index>(n)) {
             auto at = fixed(ix->obj->exprtype);
@@ -1250,6 +1250,27 @@ inline string CodeGen::GenXD(Node *n, TypeExpr *want) {
     return GenX(n);
 }
 
+inline string CodeGen::OptPtr(const string &x, TypeExpr *t) {
+    return t->kind == TY_REF && IsResz(t->ref->sub) ? cat(x, ".hdr") : x;
+}
+
+inline string CodeGen::GenOptRef(Node *n, TypeExpr *&reftype) {
+    string val;
+    if (auto id = Is<Ident>(n); id && id->vdef && IsOptional(id->vdef->type)) {
+        reftype = id->vdef->type;
+        val = LoadLoc(VarLoc(id->vdef), reftype, n->line);
+    } else {
+        reftype = n->exprtype;
+        val = GenX(n);
+    }
+    if (reftype && reftype->kind == TY_REF && reftype->ref->lenstorage >= 0) {
+        auto plain = ast.RefTo(reftype->ref->sub, n->line, true);
+        plain->cq = reftype->cq;
+        reftype = plain;
+    }
+    return val;
+}
+
 inline string CodeGen::GenTruth(Node *n) {
     auto x = GenX(n);
     auto t = n->exprtype;
@@ -1455,6 +1476,7 @@ inline bool CodeGen::Speculatable(Node *n, bool idxok, bool truth, int &budget) 
         auto lt = b->left->exprtype ? OperandT(b->left->exprtype) : nullptr;
         auto rt = b->right->exprtype ? OperandT(b->right->exprtype) : nullptr;
         switch (b->op) {
+            case T_QQUESTION: return false;
             case T_ANDAND: case T_OROR: return both(true);
             case T_EQ: case T_NEQ:
                 if (Is<NullLit>(b->left) || Is<NullLit>(b->right)) {
@@ -1476,9 +1498,10 @@ inline bool CodeGen::Speculatable(Node *n, bool idxok, bool truth, int &budget) 
         }
     }
     if (auto d = Is<Dot>(n)) {
+        if (d->optchain) return false;
         if (d->member == B_LEN || d->member == B_CAP)
             return SpeculatablePlace(d->obj, idxok, budget);
-        if (!d->IsField() || !scalar(t ? OperandT(t) : nullptr)) return false;
+        if (!d->IsField() || !d->obj || !scalar(t ? OperandT(t) : nullptr)) return false;
         auto ot = d->obj->exprtype ? OperandT(d->obj->exprtype) : nullptr;
         if (!ot || ot->kind != TY_STRUCT || !IsFix(ot) || !scalar(SI(ot)->ftypes[d->fieldidx]))
             return false;
@@ -1532,7 +1555,7 @@ inline bool CodeGen::SpeculatablePlace(Node *n, bool idxok, int &budget) {
         return vt && (vt->kind != TY_REF || IsPlainRef(vt));
     }
     if (auto d = Is<Dot>(n)) {
-        if (!d->IsField()) return false;
+        if (!d->IsField() || !d->obj) return false;
         auto ot = d->obj->exprtype ? OperandT(d->obj->exprtype) : nullptr;
         if (!ot || ot->kind != TY_STRUCT || !IsFix(ot) ||
             SI(ot)->ftypes[d->fieldidx]->kind == TY_REF)

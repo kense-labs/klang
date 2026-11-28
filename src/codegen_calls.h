@@ -1035,7 +1035,7 @@ inline void CodeGen::EmitRfCheck(FnSpec *callee) {
             if ((int)i == curinfo->cret) retv = lret;
             else L("*k_r", i, " = ", lret, ";");
         }
-        Epilogue(retv);
+        Epilogue(retv, false, true, true);
         ind--;
         L("} else {");
         ind++;

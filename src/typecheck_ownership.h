@@ -114,6 +114,8 @@ class ResourceFlow {
 
     void Declaration(VarDecl *vd) {
         auto moves = any_of(vd->defs.begin(), vd->defs.end(), [&](VarDef *v) { return Owns(v->type); });
+        if (!vd->destruct_fields.empty() && moves)
+            tc.Error(vd, "destructuring owned resources is not supported");
         if (!moves) {
             for (auto init : vd->inits) Visit(init);
             return;
@@ -148,6 +150,14 @@ class ResourceFlow {
         defer_reads.pop_back();
         auto after = std::move(flow);
         flow = std::move(saved);
+        if (d->erronly) {
+            for (auto &[v, before] : flow.owners) {
+                auto released = after.live && !before.moved && after.owners.at(v).moved;
+                if (reads.count(v) && !released)
+                    tc.Error(d, cat("errdefer borrows ", v->name, " without taking responsibility for its release"));
+            }
+            return;
+        }
         if (after.live) flow.consumed_tasks.insert(after.consumed_tasks.begin(), after.consumed_tasks.end());
         for (auto &[v, before] : flow.owners) {
             auto released = after.live && !before.moved && after.owners.at(v).moved;

@@ -387,15 +387,22 @@ inline void StructLit::Dump(string &s, int ind) const {
         fn->closure_body->Dump(s, ind);
         return;
     }
-    type->Dump(s);
+    if (!implicit_variant.empty()) Append(s, ".", implicit_variant);
+    else type->Dump(s);
     s += " { ";
     for (size_t i = 0; i < inits.size(); i++) {
         if (i) s += ", ";
         if (!inits[i].name.empty()) Append(s, inits[i].name, ": ");
         inits[i].val->Dump(s, ind);
     }
-    if (defaultall) s += inits.empty() ? ".." : ", ..";
-    s += inits.empty() && !defaultall ? "}" : " }";
+    if (spread) {
+        if (!inits.empty()) s += ", ";
+        s += "..";
+        spread->Dump(s, ind);
+    } else if (defaultall) {
+        s += inits.empty() ? ".." : ", ..";
+    }
+    s += inits.empty() && !defaultall && !spread ? "}" : " }";
 }
 
 inline void DumpArms(string &s, const vector<MatchArm> &arms, int ind);
@@ -497,8 +504,8 @@ inline void Binary::Dump(string &s, int ind) const {
 
 inline void Dot::Dump(string &s, int ind) const {
     if (enumtype) enumtype->Dump(s);
-    else DumpOperand(s, obj, ind, true);
-    Append(s, ".", name);
+    else if (obj) DumpOperand(s, obj, ind, true);
+    Append(s, optchain ? "?." : ".", name);
 }
 
 inline void Call::Dump(string &s, int ind) const {
@@ -530,12 +537,16 @@ inline void Call::Dump(string &s, int ind) const {
     }
     s += "(";
     auto first = true;
-    for (size_t i = 0; i < args.size(); i++) {
+    const auto &dump_list = (dumpwritten && !orig_args.empty()) ? orig_args : args;
+    for (size_t i = 0; i < dump_list.size(); i++) {
         if (dumpwritten && decorator_forward) break;
-        if (dumpwritten && IsDefaultArg(i)) continue;
+        if (&dump_list == &args && dumpwritten && IsDefaultArg(i)) continue;
         if (!first) s += ", ";
         first = false;
-        args[i]->Dump(s, ind);
+        if ((&dump_list == &orig_args || orig_args.empty()) &&
+            i < argnames.size() && !argnames[i].empty())
+            Append(s, argnames[i], ": ");
+        dump_list[i]->Dump(s, ind);
     }
     s += ")";
     if (trailing) {
@@ -613,6 +624,7 @@ inline void DumpArms(string &s, const vector<MatchArm> &arms, int ind) {
         if (arm.pat.kind == P_WILDCARD) s += "_";
         for (auto &pi : arm.pat.items) {
             if (&pi != &arm.pat.items[0]) s += ", ";
+            if (pi.dot) s += ".";
             pi.lo->Dump(s, ind);
             if (pi.hi) {
                 s += "..";
@@ -720,7 +732,7 @@ inline void Continue::Dump(string &s, int) const { s += "continue"; }
 // stays the block form), the block form otherwise; both parse back to the
 // same body.
 inline void Defer::Dump(string &s, int ind) const {
-    s += "defer ";
+    s += erronly ? "errdefer " : "defer ";
     if (body->stmts.size() == 1 && !body->tail && !Is<Block>(body->stmts[0])) {
         body->stmts[0]->Dump(s, ind);
         return;
@@ -754,9 +766,19 @@ inline void VarDecl::Dump(string &s, int ind) const {
     // A namespaced global dumps with its qualifier: the dump merges every
     // file into one, so declarations carry their namespace themselves.
     if (isglobal && !ns.empty()) Append(s, ns, "::");
-    for (size_t i = 0; i < names.size(); i++) {
-        if (i) s += ", ";
-        s += names[i];
+    if (!destruct_fields.empty()) {
+        s += "{ ";
+        for (size_t i = 0; i < names.size(); i++) {
+            if (i) s += ", ";
+            s += destruct_fields[i];
+            if (names[i] != destruct_fields[i]) Append(s, ": ", names[i]);
+        }
+        s += " }";
+    } else {
+        for (size_t i = 0; i < names.size(); i++) {
+            if (i) s += ", ";
+            s += names[i];
+        }
     }
     if (type) { s += ": "; type->Dump(s); }
     for (size_t i = 0; i < inits.size(); i++) {

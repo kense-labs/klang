@@ -991,12 +991,12 @@ inline vector<string> CodeGen::GenForward(Call *c, const vector<TypeExpr *> &ret
     return vals;
 }
 
-inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
+inline void CodeGen::GenNormalReturn(const vector<Node *> &vals, bool on_error) {
     auto sp = curspec;
     assert(sp);
     if (task_flow) {
         if (!vals.empty()) GenAny(vals[0], FreshLv("f->result", sp->rets[0]));
-        EmitExitRestores(0);
+        EmitExitRestores(0, false, on_error);
         MarkFlush();
         L("return K_TASK_POLL_READY;");
         termjump = true;
@@ -1031,7 +1031,7 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
                 if (!starts[i].empty())
                     LandValue(cat("k_dst", i), DstTop0(i), starts[i], sp->rets[i],
                               cat("(*k_rl", i, ")"));
-            Epilogue(retv, sp->sf->task_suspends);
+            Epilogue(retv, sp->sf->task_suspends, true, on_error);
             return;
         }
     }
@@ -1075,7 +1075,7 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
             retv = T();
             L(CT(rt), " ", retv, ";");
             bool can_tail_rf = vals.size() == 1 && sp->rets.size() == 1 && !sp->sf->task_suspends &&
-                               IsFix(rt) && !NeedsResultLocation(rt) && !HasExitRestores() &&
+                               IsFix(rt) && !NeedsResultLocation(rt) && !HasExitRestores(0, true) &&
                                fdstsaves.empty();
             if (can_tail_rf) {
                 if (auto c = Is<Call>(vals[0]); c && c->builtin < 0 && !c->fvbody &&
@@ -1099,7 +1099,7 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
     }
     bool flush = !tailrf_flushed;
     tailrf_flushed = false;
-    Epilogue(retv, sp->sf->task_suspends, flush);
+    Epilogue(retv, sp->sf->task_suspends, flush, on_error);
 }
 
 // Writes the count into the prefix bytes reserved at `pref`, in front of
@@ -1141,8 +1141,8 @@ inline void CodeGen::EmitNrvoFinish(const NrvoDest &nd) {
     EmitPrefixPatch(nd.pref, nd.ls, nd.stk, cat(nd.hdr, ".len"), cat(nd.hdr, ".base"));
 }
 
-inline void CodeGen::Epilogue(const string &retv, bool suspending, bool flush) {
-    EmitExitRestores(0, suspending);
+inline void CodeGen::Epilogue(const string &retv, bool suspending, bool flush, bool on_error) {
+    EmitExitRestores(0, suspending, on_error);
     if (flush) MarkFlush();   // The caller and every later callee read stack tops from memory.
     for (auto &s : fdstsaves) L(s);
     L(retv.empty() ? "return;" : cat("return ", retv, ";"));
@@ -1163,7 +1163,7 @@ inline void CodeGen::GenTaskReturn(Return *r) {
 // target to propagate to, or is empty when k_rf already holds it (an
 // intermediate frame passing on a propagation it did not start).
 inline void CodeGen::PropagateReturn(const string &rfval) {
-    EmitExitRestores(0);
+    EmitExitRestores(0, false, true);
     MarkFlush();
     for (auto &s : fdstsaves) L(s);
     if (!rfval.empty()) L("k_rf = ", rfval, ";");

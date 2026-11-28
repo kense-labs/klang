@@ -446,9 +446,9 @@ struct Optimizer {
     static bool CodeFree(Node *n) {
         if (AsLiteral(n) || Is<Ident>(n)) return true;
         if (auto u = Is<Unary>(n)) return CodeFree(u->child);
-        if (auto b = Is<Binary>(n)) return CodeFree(b->left) && CodeFree(b->right);
+        if (auto b = Is<Binary>(n)) return b->op != T_QQUESTION && CodeFree(b->left) && CodeFree(b->right);
         if (auto c = Is<AsCast>(n)) return CodeFree(c->child);
-        if (auto d = Is<Dot>(n)) return CodeFree(d->obj);
+        if (auto d = Is<Dot>(n)) return !d->optchain && (d->variantconst || CodeFree(d->obj));
         if (auto ix = Is<Index>(n)) return CodeFree(ix->obj) && CodeFree(ix->idx);
         return false;
     }
@@ -937,6 +937,7 @@ inline Node *SelfRef::Cp1(Inliner &inl) const { return inl.ast.New<SelfRef>(line
 inline Node *Continue::Cp1(Inliner &inl) const { return inl.ast.New<Continue>(line); }
 inline Node *Defer::Cp1(Inliner &inl) const {
     auto d = inl.ast.New<Defer>(line, inl.CpBlock(body));
+    d->erronly = erronly;
     d->task_transfer = task_transfer;
     return d;
 }
@@ -969,7 +970,9 @@ inline Node *ArrayLit::Cp1(Inliner &inl) const {
 
 inline Node *StructLit::Cp1(Inliner &inl) const {
     auto c = inl.ast.New<StructLit>(line, type);
+    c->implicit_variant = implicit_variant;
     for (auto &fi : inits) c->inits.push_back({ fi.name, inl.Cp(fi.val), fi.fromdefault });
+    c->spread = spread ? inl.Cp(spread) : nullptr;
     c->defaultall = defaultall;
     c->sinst = sinst;
     c->einst = einst;
@@ -984,15 +987,19 @@ inline Node *Unary::Cp1(Inliner &inl) const {
 }
 
 inline Node *Binary::Cp1(Inliner &inl) const {
-    return inl.ast.New<Binary>(line, op, inl.Cp(left), inl.Cp(right));
+    auto b = inl.ast.New<Binary>(line, op, inl.Cp(left), inl.Cp(right));
+    b->coalesce_deref = coalesce_deref;
+    return b;
 }
 
 inline Node *Dot::Cp1(Inliner &inl) const {
-    auto c = inl.ast.New<Dot>(line, inl.Cp(obj), name, ns);
+    auto c = inl.ast.New<Dot>(line, obj ? inl.Cp(obj) : nullptr, name, ns);
     c->fieldidx = fieldidx;
     c->member = member;
     c->variantconst = variantconst;
     c->einst = einst;
+    c->optchain = optchain;
+    c->optchain_temp = optchain_temp;
     return c;
 }
 
@@ -1002,6 +1009,8 @@ inline Node *Call::Cp1(Inliner &inl) const {
     for (auto a : args) c->args.push_back(inl.Cp(a));
     c->firstdefault = firstdefault;
     c->ndefaults = ndefaults;
+    c->default_mask = default_mask;
+    c->optchain_temp = optchain_temp;
     c->trailing = trailing;   // Shared template; the checked fvbody below is what runs.
     c->spec = spec;
     c->dispatch = dispatch;
@@ -1152,6 +1161,8 @@ inline Node *VarDecl::Cp1(Inliner &inl) const {
     c->byref = byref;
     c->inline_arg = inline_arg;
     c->names = names;
+    c->destruct_fields = destruct_fields;
+    c->destruct_indices = destruct_indices;
     c->type = type;
     for (auto i : inits) c->inits.push_back(inl.Cp(i));
     for (auto d : defs) c->defs.push_back(inl.Remap(d));
@@ -1255,6 +1266,13 @@ inline Node *Unary::Opt(Optimizer &o) {
 }
 
 inline Node *Binary::Opt(Optimizer &o) {
+    if (op == T_QQUESTION) {
+        left = o.Opt(left);
+        o.branchdepth++;
+        right = o.OptIn(this, right);
+        o.branchdepth--;
+        return this;
+    }
     if (op == T_ANDAND || op == T_OROR) {
         left = o.Opt(left);
         if (auto lb = Is<BoolLit>(left)) {
@@ -1330,6 +1348,7 @@ inline Node *Binary::Opt(Optimizer &o) {
 }
 
 inline Node *Dot::Opt(Optimizer &o) {
+    if (!obj) return this;
     obj = IsField() && o.Viewed(this) ? o.OptViewed(obj) : o.Opt(obj);
     if ((member == B_LEN || member == B_CAP) && Is<Ident>(obj)) {
         // .len of a fixed array / .cap of a static-capacity limited array are
@@ -1361,6 +1380,13 @@ inline Node *Call::Opt(Optimizer &o) {
     // where it stands around the user format overloads they run.
     auto recv = builtin >= 0 && (builtindefs[builtin].flags & BF_MEMBER);
     auto d = Is<Dot>(callee);
+    if (d && d->optchain) {
+        d->obj = o.Opt(d->obj);
+        o.branchdepth++;
+        for (size_t i = 0; i < args.size(); i++) args[i] = o.OptIn(this, args[i]);
+        o.branchdepth--;
+        return this;
+    }
     if (d) d->obj = Optimizer::Hooked(this, 0) ? o.OptRendered(d->obj)
                     : recv                     ? o.OptViewed(d->obj)
                                                : o.Opt(d->obj);
@@ -1454,6 +1480,7 @@ inline Node *ArrayLit::Opt(Optimizer &o) {
 }
 
 inline Node *StructLit::Opt(Optimizer &o) {
+    if (spread) spread = o.Opt(spread);
     for (auto &fi : inits) fi.val = o.Opt(fi.val);
     return this;
 }

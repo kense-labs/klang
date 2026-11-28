@@ -242,7 +242,7 @@ inline void CodeGen::PlanTopClasses(FnSpec *sp) {
         }
         // A projected reference is used here, without a call boundary to
         // synchronize its owner's cached components (including inlined &x).
-        if (auto d = Is<Dot>(n); d && d->obj->exprtype &&
+        if (auto d = Is<Dot>(n); d && d->obj && d->obj->exprtype &&
             d->obj->exprtype->kind == TY_REF && IsRoot(d->obj->exprtype->ref->sub) &&
             !Is<Ident>(d->obj)) unknown = true;
         if (auto r = Is<Return>(n); r && !localexits.count(r->target)) farreturn = true;
@@ -352,7 +352,7 @@ inline bool CodeGen::RefTopsOk(FnSpec *sp, bool farreturn) {
     };
     function<void(Node *)> walk = [&](Node *n) {
         if (!n || !ok) return;
-        if (auto d = Is<Dot>(n); d && d->obj->exprtype &&
+        if (auto d = Is<Dot>(n); d && d->obj && d->obj->exprtype &&
             rootref(d->obj->exprtype) && !Is<Ident>(d->obj)) {
             ok = false;
             return;

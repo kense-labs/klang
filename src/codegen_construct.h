@@ -499,7 +499,7 @@ inline void CodeGen::GenConstruct(Node *n, const string &stk, TypeExpr *want, co
     if (!IsBytesT(et)) {
         // Fixed values normally construct as C values; ones containing
         // relative references must be built at their final address.
-        if ((Is<StructLit>(n) || Is<ArrayLit>(n)) && HasRelRef(et)) {
+        if (((Is<StructLit>(n) && !Is<StructLit>(n)->spread) || Is<ArrayLit>(n)) && HasRelRef(et)) {
             ConsRegion cons(*this, stk);
             FixedLitAtStk(n, stk);
             return;
@@ -1194,7 +1194,8 @@ inline void CodeGen::StructLitAt(StructLit *sl, const string &base, bool inroot)
             auto init = sl->InitFor((int)i);
             auto ft = ftypes[i];
             auto path = cat(b, ".", Sanitize(fields[i].name));
-            if (!init) {   // Omitted optional: null.
+            if (!init) {
+                if (sl->spread) continue;   // Already copied from spread base.
                 assert(ft->kind == TY_REF);
                 L("K_MEMZERO(&", path, ", sizeof(", path, "));");
                 continue;
@@ -1215,9 +1216,14 @@ inline void CodeGen::StructLitAt(StructLit *sl, const string &base, bool inroot)
     };
     if (et->kind == TY_STRUCT) {
         auto si = SI(et);
-        // Nothing writes the C object of a struct or a variant without
-        // fields, and copying one nothing wrote is undefined.
-        if (LastRealField(si->st->fields) < 0) L("K_MEMZERO(&", base, ", sizeof(", base, "));");
+        if (sl->spread) {
+            auto bv = GenVal(sl->spread);
+            L(base, " = ", bv, ";");
+        } else if (LastRealField(si->st->fields) < 0) {
+            // Nothing writes the C object of a struct or a variant without
+            // fields, and copying one nothing wrote is undefined.
+            L("K_MEMZERO(&", base, ", sizeof(", base, "));");
+        }
         fieldset(base, si->st->fields, si->ftypes, StructLayout(si), 0);
         return;
     }
@@ -1318,6 +1324,25 @@ inline bool CodeGen::HasSelfInit(StructLit *sl) {
 // §2's left-to-right rule; flagged for the spec).
 inline void CodeGen::GenStructLit(StructLit *sl, const string &stk, const string &lenlv) {
     auto et = sl->exprtype;
+    Loc spreadloc;
+    const Loc *sp = nullptr;
+    if (sl->spread) {
+        spreadloc = GenLoc(sl->spread);
+        if (spreadloc.t->kind == TY_REF) DerefLoc(spreadloc);
+        if (IsFrameObj(et)) {
+            if (!spreadloc.val) spreadloc = FoView(spreadloc);
+            auto bp = T();
+            L("const ", CT(et), " *", bp, " = &(", spreadloc.s, ");");
+            spreadloc.s = cat("(*", bp, ")");
+        } else if (spreadloc.val) {
+            auto bp = T();
+            L("const ", CT(et), " *", bp, " = &(", spreadloc.s, ");");
+            spreadloc.s = cat("(*", bp, ")");
+        } else {
+            PinLoc(spreadloc);
+        }
+        sp = &spreadloc;
+    }
     string selfbase;
     if (HasSelfInit(sl)) {
         selfbase = T();
@@ -1344,17 +1369,17 @@ inline void CodeGen::GenStructLit(StructLit *sl, const string &stk, const string
     auto si = SI(et);
     if (IsFrameObj(et)) {
         if (!selfbase.empty()) Fail(sl->line, "self references in a frame object are unsupported");
-        GenFrameObjLit(sl, si, stk, lenlv);
+        GenFrameObjLit(sl, si, stk, lenlv, sp);
         return;
     }
-    GenFieldInits(sl, si->st->fields, si->ftypes, stk, lenlv, selfbase);
+    GenFieldInits(sl, si->st->fields, si->ftypes, stk, lenlv, selfbase, sp);
 }
 
 // A frame object literal: fixed fields as C members of the receiving
 // object `obj`, the tail's header pointed at the stack top before its
 // elements are built there.
 inline void CodeGen::GenFrameObjLit(StructLit *sl, StructInst *si, const string &stk,
-                                    const string &obj) {
+                                    const string &obj, const Loc *spreadloc) {
     assert(!obj.empty());
     auto &fields = si->st->fields;
     for (size_t i = 0; i < fields.size(); i++) {
@@ -1371,6 +1396,10 @@ inline void CodeGen::GenFrameObjLit(StructLit *sl, StructInst *si, const string 
                 L(flv, ".len = 0;");
                 GenConstruct(init, stk, ft, cat(flv, ".len"));
             }
+            continue;
+        }
+        if (!init && spreadloc) {
+            L(flv, " = ", spreadloc->s, ".", Sanitize(fields[i].name), ";");
             continue;
         }
         if (!init || Is<NullLit>(init)) {
@@ -1391,7 +1420,8 @@ inline void CodeGen::GenFrameObjLit(StructLit *sl, StructInst *si, const string 
 
 inline void CodeGen::GenFieldInits(StructLit *sl, const vector<Field> &fields,
                                    const vector<TypeExpr *> &ftypes, const string &stk,
-                                   const string &lenlv, const string &selfbase) {
+                                   const string &lenlv, const string &selfbase,
+                                   const Loc *spreadloc) {
     for (size_t i = 0; i < fields.size(); i++) {
         if (fields[i].ispad) {
             auto n = fields[i].padsize > 0 ? fields[i].padsize : 0;
@@ -1404,6 +1434,15 @@ inline void CodeGen::GenFieldInits(StructLit *sl, const vector<Field> &fields,
         }
         auto init = sl->InitFor((int)i);
         auto ft = ftypes[i];
+        if (!init && spreadloc) {
+            auto fl = FieldLocAt(*spreadloc, (int)i);
+            if (IsVarintT(ft)) {
+                EmitVarintStore(stk, LoadLoc(fl, ast.inttypes[IS_I64], sl->line));
+            } else {
+                EmitValStore(stk, ft, LoadLoc(fl, ft, sl->line));
+            }
+            continue;
+        }
         if (IsRelRef(ft)) {
             // Relative-reference slot: store from the plain reference.
             if (!init) {

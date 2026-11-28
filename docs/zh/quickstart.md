@@ -59,7 +59,8 @@ K 把容器按照所有权与可变性清晰划分为多个轻量形态：
 - `[]T`：不拥有存储的连续借用切片视图；
 - `[N]T`：固定长度栈上数组；
 - 通过 `return ... from` 直接把结果构建在调用方目标槽位上，避免构建期大对象多次搬运；
-- 通过 `defer` 与类 C# 的 `using`（`using let x = open();` / `using (let x = open()) { ... }`）配合 `own Handle`，在零隐式析构器的前提下实现确定性资源释放。
+- 通过 `defer`、`errdefer` 与类 C# 的 `using`（`using let x = open();` / `using (let x = open()) { ... }`）配合 `own Handle`，在零隐式析构器的前提下实现确定性与错误回滚资源释放；
+- 支持隐式枚举前导点 `.Variant`、结构体更新 `..base` 与解构 `let { a, b } = cfg`、可选链 `?.` / 空合并 `??` 与具名函数实参，让日常表达保持紧凑清晰。
 
 ### 3.3 类型化索引与 `checkfree` 编译期无越界检查
 

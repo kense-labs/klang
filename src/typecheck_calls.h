@@ -275,6 +275,8 @@ inline Val TypeCheck::CheckRuntimeCall(Call *c, Node *callee, const Val &value) 
     if (IsOptional(value.type)) Error(c, "optional callable must be narrowed before calling it");
     if (!c->tyargs.empty() || c->trailing)
         Error(c, "a runtime callable takes its declared parameters");
+    if (!c->argnames.empty())
+        Error(c, "named arguments are not supported on runtime callable calls");
     auto type = RuntimeCallableType(value.type);
     auto arity = (size_t)type->struc->st->callable_arity;
     if (c->args.size() != arity)
@@ -319,9 +321,16 @@ inline Val TypeCheck::CheckCall(Call *c, TypeExpr *expected) {
     contextualfloats.erase(c);
     phase2waits.erase(c);
     lastcallrets.clear();
-    c->args.erase(c->args.begin() + c->firstdefault,
-                  c->args.begin() + c->firstdefault + c->ndefaults);
-    c->firstdefault = c->ndefaults = 0;
+    if (!c->orig_args.empty()) {
+        c->args = std::move(c->orig_args);
+        c->default_mask.clear();
+        c->firstdefault = c->ndefaults = 0;
+    } else {
+        c->args.erase(c->args.begin() + c->firstdefault,
+                      c->args.begin() + c->firstdefault + c->ndefaults);
+        c->default_mask.clear();
+        c->firstdefault = c->ndefaults = 0;
+    }
     // The types written here name what they name here: the type arguments,
     // unless the checker made the call, and a trailing block's parameter
     // types, whose sizes may name none of its parameters either.
@@ -818,6 +827,7 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
         if (auto controller = LookupVar(id->name, id->ns); controller && controller->task_scope)
             return CheckTaskScopeOperation(c, d, controller);
     auto entryreach = reachable;
+    c->optchain_temp = false;
     Val ov;
     {
         PathScope ps(*this, d->obj);
@@ -825,6 +835,101 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
         ov = CheckV(d->obj, nullptr);
     }
     d->obj->exprtype = ov.type;
+    if (d->optchain) {
+        auto oid = Is<Ident>(d->obj);
+        auto narrowed_opt = oid && oid->vdef && IsOptional(oid->vdef->type);
+        if (!IsOptional(ov.type) && !narrowed_opt)
+            Error(d, cat("?. requires an optional receiver (T?), got ", TypeStr(ov.type)));
+        if (d->name == kClosureInvoke)
+            Error(c, "optional chaining cannot be used to invoke a closure directly");
+        auto rt = IsOptional(ov.type) ? ov.type->ref->sub : oid->vdef->type->ref->sub;
+        auto ocq = IsOptional(ov.type) ? ov.type->cq : oid->vdef->type->cq;
+        if ((rt->kind == TY_STRUCT && rt->struc->st->task_join) &&
+            (d->name == "join" || d->name == kTaskAwaitResult))
+            Error(c, "optional chaining cannot be used with join or await");
+        Val non_opt = ov;
+        non_opt.type = ast.RefTo(rt, d->line, false);
+        non_opt.type->cq = ocq;
+        if (narrowed_opt) non_opt.SetProv(RefProvOf(oid->vdef));
+        auto snap = SaveFlow();
+        auto saved_reachable = reachable;
+        Node *rec = d->obj;
+        Val rv;
+        auto finish_opt = [&](Val res) -> Val {
+            RestoreFlow(snap);
+            reachable = saved_reachable;
+            d->obj->exprtype = ov.type;
+            if (res.type->kind == TY_VOID) {
+                c->rettypes.clear();
+                c->exprtype = ast.voidtype;
+                return res;
+            }
+            if (IsOptional(res.type)) {
+                c->rettypes = { res.type };
+                c->exprtype = res.type;
+                return res;
+            }
+            if (res.type->kind == TY_REF) {
+                auto opt_t = ast.RefTo(res.type->ref->sub, c->line, true);
+                opt_t->cq = res.type->cq;
+                res.type = opt_t;
+                c->rettypes = { opt_t };
+                c->exprtype = opt_t;
+                return res;
+            }
+            if (ClassOf(res.type) != SC_FIXED)
+                Error(c, "optional chaining on a call returning a non-fixed value is not "
+                         "supported; narrow the optional first");
+            c->optchain_temp = true;
+            auto opt_t = ast.RefTo(res.type, c->line, true);
+            opt_t->cq = true;
+            Val out;
+            out.type = opt_t;
+            out.Set(TempRoot(), false);
+            c->rettypes = { opt_t };
+            c->exprtype = opt_t;
+            return out;
+        };
+        auto bd = LookupBuiltin(d->name);
+        if (bd && (bd->flags & BF_MEMBER) && !(bd->flags & BF_PROPERTY) &&
+            rt->kind == TY_ARRAY) {
+            CheckWaitingArg(c, rec, entryreach);
+            RefCopyWarnings(non_opt);
+            auto argnodes = c->ArgNodes();
+            d->member = bd->kind;
+            rv = CheckBuiltin(c, *bd, argnodes, &non_opt);
+            c->SetArgNodes(argnodes);
+            return finish_opt(std::move(rv));
+        }
+        const FnValBind *fb;
+        if (auto t = LookupTypeParam(d->name, fb))
+            Error(c, cat("type parameter ", d->name, " is bound to the type ", TypeStr(t),
+                         ", not a function"));
+        if (fb)
+            Error(c, cat("type parameter ", d->name, " is bound to a function value, which is "
+                         "called as ", d->name, "(...), not as a member"));
+        FnSpec *env = nullptr;
+        auto cands = LookupLocalFns(d->name, env);
+        if (cands.empty()) {
+            DefaultScopeName(d->name, c, true);
+            cands = ast.LookupMethods(d->name, d->ns, rt);
+        }
+        if (!cands.empty()) {
+            rv = ResolveCall(c, cands, env, d->name, &non_opt, rec, entryreach, nullptr, nullptr);
+            return finish_opt(std::move(rv));
+        }
+        CheckWaitingArg(c, rec, entryreach);
+        if (bd && !(bd->flags & BF_PROPERTY)) {
+            RefCopyWarnings(non_opt);
+            auto argnodes = c->ArgNodes();
+            rv = CheckBuiltin(c, *bd, argnodes, &non_opt);
+            c->SetArgNodes(argnodes);
+            return finish_opt(std::move(rv));
+        }
+        if (bd) Error(c, cat(".", d->name, " is a property, not a call"));
+        if (LacksByError(rt)) throw Abandoned {};
+        Error(c, cat("unknown function or member: ", d->name));
+    }
     if (d->name == kClosureInvoke) return ResolveClosureCall(c, d->obj, ov, entryreach, expected);
     auto rt = ov.type;
     auto optional = IsOptional(rt);
@@ -956,6 +1061,64 @@ void TypeCheck::InParamDefault(Call *c, const MatchInfo &mi, FnSpec *env, size_t
     f();
 }
 
+inline void TypeCheck::ApplyNamedArgs(Call *c, MatchInfo &best, vector<Node *> &argnodes,
+                                       vector<Val> &argvals, bool receiver, FnSpec *env) {
+    auto shift = receiver ? 1 : 0;
+    auto P = best.paramtypes.size();
+    c->orig_args = c->args;
+    vector<Node *> new_argnodes(P);
+    vector<Val> new_argvals(P);
+    vector<Node *> new_cargs(P - shift);
+    c->default_mask.assign(P - shift, false);
+    int ndef = 0;
+    if (receiver) {
+        new_argnodes[0] = argnodes[0];
+        new_argvals[0] = argvals[0];
+    }
+    Discovering discovering(*this, c);
+    for (size_t i = 0; i < P; i++) {
+        if (best.argmap[i] >= 0) {
+            auto src = best.argmap[i];
+            new_argnodes[i] = argnodes[src];
+            new_argvals[i] = argvals[src];
+            if ((int)i >= shift) new_cargs[i - shift] = argnodes[src];
+            continue;
+        }
+        auto &p = best.sf->params[i];
+        auto pt = best.paramtypes[i];
+        auto d = p.defaultval->Clone(ast);
+        new_argnodes[i] = d;
+        Val v;
+        InParamDefault(c, best, env, i, [&]() {
+            {
+                PathScope ps(*this, d);
+                v = CheckV(new_argnodes[i], IsImplicitEnum(new_argnodes[i]) ? pt : nullptr);
+            }
+            RequireComplete(v.type, d->line);
+            RefArg(new_argnodes[i], v);
+            new_argnodes[i]->exprtype = v.type;
+            vector<pair<string_view, TypeExpr *>> nobindings;
+            auto tier = 0;
+            fitfail.clear();
+            if (p.type->kind != TY_SLICE) NoArrayJoin(v);
+            if (!UnifyArg(pt, v, nobindings, tier))
+                Error(d, cat("the default of parameter ", p.name, " cannot be passed as ",
+                             TypeStr(pt), ": ",
+                             fitfail.empty() ? cat("it is ", TypeStr(v.type)) : fitfail));
+            BindBranchByRef(new_argnodes[i], v, pt, p.type);
+        });
+        new_argvals[i] = std::move(v);
+        new_cargs[i - shift] = new_argnodes[i];
+        c->default_mask[i - shift] = true;
+        ndef++;
+    }
+    c->args = std::move(new_cargs);
+    c->firstdefault = 0;
+    c->ndefaults = ndef;
+    argnodes = std::move(new_argnodes);
+    argvals = std::move(new_argvals);
+}
+
 // Each parameter the call leaves out takes its default (§7.1): a fresh clone
 // of the declaration's expression, among the arguments where the missing one
 // would be, checked as they are -- for the specialization's key here, and
@@ -979,7 +1142,7 @@ inline void TypeCheck::AddParamDefaults(Call *c, MatchInfo &best, vector<Node *>
         InParamDefault(c, best, env, i, [&]() {
             {
                 PathScope ps(*this, d);
-                v = CheckV(argnodes[i], nullptr);
+                v = CheckV(argnodes[i], IsImplicitEnum(argnodes[i]) ? pt : nullptr);
             }
             RequireComplete(v.type, d->line);
             RefArg(argnodes[i], v);
@@ -997,6 +1160,48 @@ inline void TypeCheck::AddParamDefaults(Call *c, MatchInfo &best, vector<Node *>
         c->args[i - shift] = argnodes[i];
         argvals.insert(argvals.begin() + (int)i, v);
     }
+}
+
+inline TypeExpr *TypeCheck::InferImplicitEnumArgExpected(Call *c, const vector<SFunction *> &cands,
+                                                          size_t arg_idx, bool has_receiver) {
+    auto vname = ImplicitEnumVariantName(c->args[arg_idx]);
+    vector<TypeExpr *> matched;
+    for (auto sf : cands) {
+        if (sf->brokensig) continue;
+        auto shift = (has_receiver ? 1 : 0) + (sf->closure_body ? 1 : 0);
+        int pidx = -1;
+        if (!c->argnames.empty() && arg_idx < c->argnames.size() && !c->argnames[arg_idx].empty()) {
+            auto aname = c->argnames[arg_idx];
+            for (int k = shift; k < (int)sf->params.size(); k++)
+                if (sf->params[k].name == aname) { pidx = k; break; }
+        } else {
+            pidx = (int)arg_idx + shift;
+        }
+        if (pidx < 0 || pidx >= (int)sf->params.size()) continue;
+        auto pt = sf->params[pidx].type;
+        if (!pt) continue;
+        if (!c->tyargs.empty() && !sf->generics.empty()) {
+            vector<pair<string_view, TypeExpr *>> bindings;
+            for (size_t gi = 0; gi < c->tyargs.size() && gi < sf->generics.size(); gi++) {
+                auto st = Subst(c->tyargs[gi]);
+                ValidateType(st, c->line, VT_LOCAL);
+                bindings.push_back({ sf->generics[gi].name, st });
+            }
+            if (auto subt = SubstOwn(pt, bindings)) pt = subt;
+        }
+        if (pt->kind == TY_REF && !pt->ref->optional) pt = pt->ref->sub;
+        if (HasGenerics(pt) || pt->kind != TY_ENUM) continue;
+        if (!pt->enu->en->FindVariant(vname)) continue;
+        auto seen = false;
+        for (auto m : matched)
+            if (TypeEq(m, pt)) { seen = true; break; }
+        if (!seen) matched.push_back(pt);
+    }
+    if (matched.size() == 1) return matched[0];
+    if (matched.size() > 1)
+        Error(c->args[arg_idx], cat("ambiguous implicit enum variant .", vname,
+                                    "; qualify with EnumName.", vname));
+    return nullptr;
 }
 
 // Phase 1 checks arguments bottom-up for resolution; phase 2 re-checks
@@ -1017,11 +1222,15 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     }
     {
         Discovering discovering(*this, c);
-        for (auto &a : c->args) {
+        for (size_t idx = 0; idx < c->args.size(); idx++) {
+            auto &a = c->args[idx];
             Val v;
+            auto argexp = IsImplicitEnum(a)
+                ? InferImplicitEnumArgExpected(c, cands, idx, prenode != nullptr)
+                : nullptr;
             {
                 PathScope ps(*this, a);
-                v = CheckV(a, nullptr);
+                v = CheckV(a, argexp);
             }
             // A pending array (`var out = []`) is completed by the builtin
             // sharing this name (push, append, alloc_index, alloc_ref,
@@ -1062,9 +1271,14 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
         string which;
         for (auto &mi : set) {
             Append(which, "\n  candidate ", name, " at ", Where(mi.sf->line));
-            for (auto i = mi.nwritten; i < mi.sf->params.size(); i++)
-                Append(which, i == mi.nwritten ? ", taking the default of " : ", ",
+            auto first_def = true;
+            for (size_t i = 0; i < mi.sf->params.size(); i++) {
+                auto is_def = mi.argmap.empty() ? (i >= mi.nwritten) : (mi.argmap[i] < 0);
+                if (!is_def) continue;
+                Append(which, first_def ? ", taking the default of " : ", ",
                        mi.sf->params[i].name);
+                first_def = false;
+            }
         }
         Error(c, cat("ambiguous call to ", name, ": multiple overloads match equally well",
                      which));
@@ -1119,7 +1333,11 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     });
     ContextualFloatCall(c, cands, env, argnodes, argvals, best, expected, name);
     FnSpec *denv = nullptr;
-    if (best.nwritten < best.paramtypes.size()) {
+    if (!best.argmap.empty()) {
+        for (size_t i = 0; i < best.paramtypes.size(); i++)
+            if (best.argmap[i] < 0) { denv = ParamDefaultEnv(best); break; }
+        ApplyNamedArgs(c, best, argnodes, argvals, prenode != nullptr, denv);
+    } else if (best.nwritten < best.paramtypes.size()) {
         denv = ParamDefaultEnv(best);
         AddParamDefaults(c, best, argnodes, argvals, prenode != nullptr, denv);
     }
@@ -1133,7 +1351,16 @@ inline Val TypeCheck::FinishMatchedCall(Call *c, vector<SFunction *> &cands, str
     RefSliceArgs(argvals, best.paramtypes, c->line);
     {
         FlagScope rs(reachable, entryreach);
-        BindBranchesByRef(argnodes, argvals, best.paramtypes, best.sf, -1, best.nwritten);
+        auto opt_recv = Is<Dot>(c->callee) && Is<Dot>(c->callee)->optchain;
+        if (best.argmap.empty()) {
+            BindBranchesByRef(argnodes, argvals, best.paramtypes, best.sf, opt_recv ? 0 : -1,
+                              best.nwritten);
+        } else {
+            for (size_t i = 0; i < best.paramtypes.size() && i < argvals.size(); i++)
+                if (best.argmap[i] >= 0 && (!opt_recv || i > 0))
+                    BindBranchByRef(argnodes[i], argvals[i], best.paramtypes[i],
+                                    best.sf->params[i].type);
+        }
     }
     auto spec = GetOrCreateSpec(best, argvals, c);
     if (signature_only) {
@@ -1190,21 +1417,39 @@ inline void TypeCheck::RecheckArgs(Call *c, vector<SFunction *> &cands, MatchInf
             atskip();
             continue;
         }
+        auto opt_recv = i == 0 && Is<Dot>(c->callee) && Is<Dot>(c->callee)->optchain;
+        if (opt_recv) {
+            if (!waits) {
+                PathScope ps(*this, argnodes[i]);
+                auto value = CheckV(argnodes[i], nullptr);
+                argnodes[i]->exprtype = value.type;
+                if (track_loans) {
+                    auto type = mi.paramtypes[i];
+                    if (IsRefOrSlice(type) && !IsRelRef(type))
+                        c->task_arg_roots.emplace_back(argnodes[i], type, value.AsRoots(), (int)i);
+                    else if (TaskInputHolder(type))
+                        c->task_arg_roots.emplace_back(argnodes[i], type, ContentsOf(value), (int)i);
+                }
+            }
+            c->SetArgNode(i, argnodes[i]);
+            continue;
+        }
         UnrefForValueParam(argnodes[i], mi.paramtypes[i]);
         // A `&` at a parameter declared as a reference is redundant
         // (§4.1) -- unless it picked this overload. RefArg has warned
         // of one to a value that is not fixed-size; a varint's is the
         // i64 it decodes to (§3.6).
         auto &p = mi.sf->params[i];
-        if (i < mi.nwritten && UserRefOf(argnodes[i]) && cands.size() == 1 && p.type &&
+        auto is_written = mi.argmap.empty() ? (i < mi.nwritten) : (mi.argmap[i] >= 0);
+        if (is_written && UserRefOf(argnodes[i]) && cands.size() == 1 && p.type &&
             !HasGenerics(p.type) && p.type->kind == TY_REF &&
             ClassOf(LoadType(p.type->ref->sub)) == SC_FIXED)
             Warn(argnodes[i], cat("redundant &: ", ExprStr(Is<Unary>(argnodes[i])->child),
                                   " is passed by reference without it (§4.1)"));
         if (!waits) {
             Val value;
-            if (i < mi.nwritten) value = CheckArg(argnodes[i], p.borrows ? ast.WithOwnership(mi.paramtypes[i], true)
-                                                                        : mi.paramtypes[i]);
+            if (is_written) value = CheckArg(argnodes[i], p.borrows ? ast.WithOwnership(mi.paramtypes[i], true)
+                                                                     : mi.paramtypes[i]);
             else InParamDefault(c, mi, denv, i,
                                 [&]() { value = CheckArg(argnodes[i], mi.paramtypes[i]); });
             if (track_loans) {
@@ -1367,17 +1612,18 @@ inline void TypeCheck::ContextualFloatCall(Call *c, vector<SFunction *> &cands, 
         if (!pt || !NamesGeneric(pt, generic)) continue;
         // References, containers and defaults keep their own types. Only a
         // bare value parameter can provide this floating computation width.
-        if (pt->kind != TY_GENERIC || i >= best.nwritten) return;
-        auto &av = argvals[i];
+        auto ai = best.argmap.empty() ? (i < best.nwritten ? (int)i : -1) : best.argmap[i];
+        if (pt->kind != TY_GENERIC || ai < 0) return;
+        auto &av = argvals[ai];
         // Leave typed-argument unification alone, including integer/float
         // mixtures: context must not make their argument order significant.
         auto integer = IsIntT(av.type) &&
                        (av.ck == CK_INT || av.unsized || av.litint || av.flexint);
-        if (!LitFloat(av) && !integer && !contextualfloats.count(argnodes[i])) return;
+        if (!LitFloat(av) && !integer && !contextualfloats.count(argnodes[ai])) return;
         // Use typed f32 values for the trial. Its chosen specialization has
         // no literal parameters for T, just as an explicit <f32> would.
-        trial[i] = Val {};
-        trial[i].type = narrow;
+        trial[ai] = Val {};
+        trial[ai].type = narrow;
         seen = true;
     }
     if (!seen) return;
@@ -1427,20 +1673,25 @@ inline void TypeCheck::JudgeCallCasts(vector<SFunction *> &cands, MatchInfo &bes
     };
     auto joint = cands.size() > 1 || !best.bindings.empty();
     for (auto &p : best.sf->params) joint = joint || !p.type || HasGenerics(p.type);
+    vector<pair<size_t, size_t>> written_pairs;  // (arg_index, param_index)
+    for (size_t p = 0; p < best.paramtypes.size(); p++) {
+        int ai = best.argmap.empty() ? (p < best.nwritten ? (int)p : -1) : best.argmap[p];
+        if (ai >= 0 && (size_t)ai < argnodes.size()) written_pairs.push_back({ (size_t)ai, p });
+    }
     vector<size_t> differing;
-    for (size_t i = 0; i < best.nwritten && i < argnodes.size(); i++)
-        if (casttyped.count(argnodes[i])) differing.push_back(i);
+    for (auto &[ai, _] : written_pairs)
+        if (casttyped.count(argnodes[ai])) differing.push_back(ai);
     auto together = !joint || differing.size() < 2 || (differing.size() == 2 && without(differing));
     auto pair = !together && differing.size() == 2;
     auto later = pair && without({ differing[1] });
-    for (size_t i = 0; i < best.nwritten && i < argnodes.size(); i++) {
-        auto it = castalts.find(argnodes[i]);
+    for (auto &[ai, pi] : written_pairs) {
+        auto it = castalts.find(argnodes[ai]);
         if (it == castalts.end()) continue;
         auto a = it->second;
-        auto ok = without({ i });
-        if (ok && casttyped.count(argnodes[i]) && !together)
-            ok = pair && (i == differing[1] || !later);
-        if (ok) JudgeCastAt(argnodes[i], best.paramtypes[i], DecayRef(argvals[i]));
+        auto ok = without({ ai });
+        if (ok && casttyped.count(argnodes[ai]) && !together)
+            ok = pair && (ai == differing[1] || !later);
+        if (ok) JudgeCastAt(argnodes[ai], best.paramtypes[pi], DecayRef(argvals[ai]));
         else CastVerdict(a, "");
     }
 }
@@ -1450,23 +1701,67 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
     auto P = sf->params.size();
     auto N = argvals.size();
     auto hidden = (int64_t)(sf->closure_body != nullptr);
-    auto R = P;   // The parameters without a default, which every call gives.
-    if (defaults)
-        for (R = 0; R < P && !sf->params[R].defaultval;) R++;
-    // The arguments bind the parameters in order, and any function values
-    // for the leftover generics come after them (§7.6), which leaves the
-    // parameters from there on to their defaults.
-    auto K = std::min(N, P);
-    while (K > R && argvals[K - 1].type == fntype) K--;
-    if (K < R) {
-        why = cat("too few arguments: ", (int64_t)K - hidden, " given, ",
-                  R < P ? "at least " : "", (int64_t)R - hidden, " needed");
-        return false;
+    size_t K = 0;
+    if (!c->argnames.empty()) {
+        size_t recv_shift = N - c->args.size();
+        size_t param_start = std::max(recv_shift, (size_t)hidden);
+        mi.argmap.assign(P, -1);
+        if (recv_shift) {
+            if (P == 0) { why = "too many arguments"; return false; }
+            mi.argmap[0] = 0;
+        }
+        for (size_t j = 0; j < c->args.size(); j++) {
+            size_t avidx = j + recv_shift;
+            auto aname = j < c->argnames.size() ? c->argnames[j] : string_view {};
+            if (!aname.empty()) {
+                int found = -1;
+                for (size_t p = param_start; p < P; p++)
+                    if (sf->params[p].name == aname) { found = (int)p; break; }
+                if (found < 0) {
+                    why = cat("no parameter named ", aname);
+                    return false;
+                }
+                if (mi.argmap[found] >= 0) {
+                    why = cat("parameter ", aname, " specified more than once");
+                    return false;
+                }
+                mi.argmap[found] = (int)avidx;
+            } else {
+                size_t pidx = j + param_start;
+                if (pidx >= P) { why = "too many arguments"; return false; }
+                mi.argmap[pidx] = (int)avidx;
+            }
+        }
+        for (size_t p = 0; p < P; p++) {
+            if (mi.argmap[p] < 0) {
+                if ((int64_t)p < hidden) { why = "missing closure environment"; return false; }
+                if (!defaults || !sf->params[p].defaultval) {
+                    why = cat("missing required argument for parameter ", sf->params[p].name);
+                    return false;
+                }
+            }
+        }
+        K = N;
+        mi.nwritten = N;
+    } else {
+        auto R = P;   // The parameters without a default, which every call gives.
+        if (defaults)
+            for (R = 0; R < P && !sf->params[R].defaultval;) R++;
+        // The arguments bind the parameters in order, and any function values
+        // for the leftover generics come after them (§7.6), which leaves the
+        // parameters from there on to their defaults.
+        K = std::min(N, P);
+        while (K > R && argvals[K - 1].type == fntype) K--;
+        if (K < R) {
+            why = cat("too few arguments: ", (int64_t)K - hidden, " given, ",
+                      R < P ? "at least " : "", (int64_t)R - hidden, " needed");
+            return false;
+        }
+        for (auto i = K; i < N; i++) {
+            if (argvals[i].type != fntype) { why = "too many arguments"; return false; }
+        }
+        mi.nwritten = K;
     }
-    for (auto i = K; i < N; i++) {
-        if (argvals[i].type != fntype) { why = "too many arguments"; return false; }
-    }
-    mi.nwritten = K;
     if (c->tyargs.size() > sf->generics.size()) {
         why = "too many explicit type arguments";
         return false;
@@ -1509,12 +1804,16 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
             if (av.litelems) return ArrayLeaf(av.type)->kind == TY_FLT ? 1 : 2;
             return LitFloat(av) ? 1 : isliteral(av) || av.litint || av.flexint ? 2 : 0;
         };
-        vector<size_t> order;
-        for (auto k = 0; k < 4; k++)
-            for (size_t i = 0; i < K; i++) if (late(argvals[i]) == k) order.push_back(i);
-        for (auto i : order) {
+        vector<pair<size_t, size_t>> order;  // (param_idx, argval_idx)
+        for (auto k = 0; k < 4; k++) {
+            for (size_t i = 0; i < P; i++) {
+                int ai = mi.argmap.empty() ? (i < K ? (int)i : -1) : mi.argmap[i];
+                if (ai >= 0 && late(argvals[ai]) == k) order.push_back({ i, (size_t)ai });
+            }
+        }
+        for (auto &[i, ai] : order) {
             auto &p = sf->params[i];
-            auto &av = argvals[i];
+            auto &av = argvals[ai];
             auto unsized = false;
             if (isliteral(av) && !p.isvar && !sf->isextern) {
                 if (!p.type) {
@@ -1557,7 +1856,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
                 auto st = SubstOwn(p.type, mi.bindings);
                 auto at = st && st->kind == TY_REF ? StorageType(av) : av.type;
                 auto arg = i == 0 && hidden ? string("closure environment")
-                                            : cat("argument ", (int64_t)i + 1 - hidden);
+                                            : cat("argument ", (int64_t)ai + 1 - hidden);
                 why = cat(arg, ": cannot pass ", TypeStr(at), " as ", TypeStr(p.type));
                 string litwhy;
                 auto tofloat = false;
@@ -1580,9 +1879,12 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
     }
     // A left-out parameter has the type the arguments give it: its default
     // is a value of that type, and decides no type variable itself (§7.1).
+    auto is_omitted = [&](size_t i) {
+        return mi.argmap.empty() ? (i >= K) : (mi.argmap[i] < 0);
+    };
     auto undecided = [&](string_view g) {
-        for (auto i = K; i < P; i++) {
-            if (!NamesGeneric(sf->params[i].type, g)) continue;
+        for (size_t i = 0; i < P; i++) {
+            if (!is_omitted(i) || !NamesGeneric(sf->params[i].type, g)) continue;
             why = cat("cannot infer ", g, ", which the default of parameter ",
                       sf->params[i].name, " does not decide (use explicit <...>)");
             return true;
@@ -1608,7 +1910,8 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
     }
     // The left-out parameters' types, as the arguments made them. A type
     // variable a function value took leaves one undecided as well.
-    for (auto i = K; i < P; i++) {
+    for (size_t i = 0; i < P; i++) {
+        if (!is_omitted(i)) continue;
         TypeExpr *pt;
         {
             Saved<const vector<GenericParam> *> ex(ownexclude, &sf->generics);

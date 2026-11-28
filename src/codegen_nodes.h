@@ -143,6 +143,36 @@ inline string Binary::CgX(CodeGen &cg) {
         auto r = side(right);
         return cat("(uint8_t)((void *)(", l, ") ", op == T_DOTEQ ? "==" : "!=", " (void *)(", r, "))");
     }
+    if (op == T_QQUESTION) {
+        TypeExpr *lt = nullptr;
+        auto lx = cg.GenOptRef(left, lt);
+        auto lp = cg.T();
+        cg.L(cg.CT(lt), " ", lp, " = ", lx, ";");
+        auto res = cg.T();
+        cg.FixedLocal(exprtype, res);
+        cg.L("if (", cg.OptPtr(lp, lt), " != NULL) {");
+        cg.ind++;
+        if (coalesce_deref) {
+            auto sub = lt->ref->sub;
+            cg.L(res, " = ", cg.PointeeLv(lp, sub), ";");
+        } else {
+            cg.L(res, " = ", lp, ";");
+        }
+        cg.ind--;
+        cg.L("} else {");
+        cg.ind++;
+        cg.PushSc(CodeGen::SC_PLAIN);
+        auto rx = coalesce_deref ? cg.GenXD(right, exprtype) : cg.GenX(right);
+        if (exprtype->kind == TY_REF && cg.IsResz(exprtype->ref->sub) && Is<NullLit>(right)) {
+            cg.L(res, " = (k_rref){ 0, 0 };");
+        } else {
+            cg.L(res, " = ", rx, ";");
+        }
+        cg.PopSc();
+        cg.ind--;
+        cg.L("}");
+        return res;
+    }
     if (op == T_ANDAND || op == T_OROR) {
         auto l = cg.GenTruth(left);
         auto t = cg.T();
@@ -301,6 +331,57 @@ inline string Binary::CgX(CodeGen &cg) {
 }
 
 inline string Dot::CgX(CodeGen &cg) {
+    if (optchain) {
+        TypeExpr *ot = nullptr;
+        auto ox = cg.GenOptRef(obj, ot);
+        auto ptr = cg.T();
+        cg.L(cg.CT(ot), " ", ptr, " = ", ox, ";");
+        auto res = cg.T();
+        cg.FixedLocal(exprtype, res, cg.IsResz(exprtype->ref->sub) ? "" : "NULL");
+        if (cg.IsResz(exprtype->ref->sub)) cg.L(res, " = (k_rref){ 0, 0 };");
+        string tmp;
+        if (optchain_temp) {
+            tmp = cg.T();
+            cg.FixedLocal(exprtype->ref->sub, tmp);
+        }
+        cg.L("if (", cg.OptPtr(ptr, ot), " != NULL) {");
+        cg.ind++;
+        cg.PushSc(CodeGen::SC_PLAIN);
+        CodeGen::Loc base = ot->kind == TY_REF && cg.IsResz(ot->ref->sub)
+                                ? cg.FatRefLoc(ptr, ot->ref->sub)
+                                : CodeGen::Loc {};
+        if (!(ot->kind == TY_REF && cg.IsResz(ot->ref->sub))) {
+            base.t = ot;
+            base.val = true;
+            base.s = ptr;
+            cg.DerefLoc(base);
+        }
+        if (member >= 0) {
+            string val;
+            if (base.t->kind == TY_ARRAY && member == B_CAP) val = cg.LimitedCap(base);
+            else val = cat("(", cg.ArrayView(base).len, ")");
+            cg.L(tmp, " = ", val, ";");
+            cg.L(res, " = &", tmp, ";");
+        } else {
+            auto fl = cg.FieldLocAt(base, fieldidx);
+            if (optchain_temp) {
+                cg.L(tmp, " = ", cg.LoadLoc(fl, exprtype->ref->sub, line), ";");
+                cg.L(res, " = &", tmp, ";");
+            } else if (fl.t->kind == TY_REF) {
+                cg.L(res, " = ", cg.LoadLoc(fl, exprtype, line), ";");
+            } else if (cg.IsResz(fl.t)) {
+                cg.L(res, " = (k_rref){ (k_rhdr *)&", fl.hdr, ", ", fl.stk, " };");
+            } else {
+                cg.L(res, " = ", fl.val ? cat("&(", fl.s, ")")
+                                        : cat("(", cg.CT(exprtype), ")(", fl.s, ")"),
+                     ";");
+            }
+        }
+        cg.PopSc();
+        cg.ind--;
+        cg.L("}");
+        return res;
+    }
     if (variantconst) {
         auto et = exprtype;
         auto ei = einst;
@@ -394,6 +475,63 @@ inline string AsCast::CgX(CodeGen &cg) {
 }
 
 inline string Call::CgX(CodeGen &cg) {
+    if (auto d = Is<Dot>(callee); d && d->optchain) {
+        TypeExpr *ot = nullptr;
+        auto ox = cg.GenOptRef(d->obj, ot);
+        auto ptr = cg.T();
+        cg.L(cg.CT(ot), " ", ptr, " = ", ox, ";");
+        auto isvoid = cg.IsVoidT(exprtype);
+        string res, tmp;
+        if (!isvoid) {
+            res = cg.T();
+            cg.FixedLocal(exprtype, res, cg.IsResz(exprtype->ref->sub) ? "" : "NULL");
+            if (cg.IsResz(exprtype->ref->sub)) cg.L(res, " = (k_rref){ 0, 0 };");
+            if (optchain_temp) {
+                tmp = cg.T();
+                cg.FixedLocal(exprtype->ref->sub, tmp);
+            }
+        }
+        cg.L("if (", cg.OptPtr(ptr, ot), " != NULL) {");
+        cg.ind++;
+        cg.PushSc(CodeGen::SC_PLAIN);
+        auto non_opt_ot = cg.ast.RefTo(ot->ref->sub, d->line, false);
+        non_opt_ot->cq = ot->cq;
+        VarDef rec_vd;
+        rec_vd.type = non_opt_ot;
+        rec_vd.name = "optrecv";
+        cg.vnames[&rec_vd] = ptr;
+        Ident rec_id(d->line, "optrecv");
+        rec_id.vdef = &rec_vd;
+        rec_id.exprtype = non_opt_ot;
+        auto saved_obj = d->obj;
+        auto saved_exprtype = exprtype;
+        auto saved_rettypes = rettypes;
+        d->obj = &rec_id;
+        d->optchain = false;
+        if (!isvoid && optchain_temp) {
+            exprtype = exprtype->ref->sub;
+            if (!rettypes.empty()) rettypes[0] = exprtype;
+        }
+        if (isvoid) {
+            CgAny(cg, Dst {});
+        } else if (optchain_temp) {
+            auto val = CgX(cg);
+            cg.L(tmp, " = ", val, ";");
+            cg.L(res, " = &", tmp, ";");
+        } else {
+            auto val = CgX(cg);
+            cg.L(res, " = ", val, ";");
+        }
+        d->obj = saved_obj;
+        d->optchain = true;
+        exprtype = saved_exprtype;
+        rettypes = std::move(saved_rettypes);
+        cg.vnames.erase(&rec_vd);
+        cg.PopSc();
+        cg.ind--;
+        cg.L("}");
+        return res;
+    }
     // A result adapted to an ADT converts into a temporary (CgAny).
     if (cg.AdtFrom(this)) return cg.CtlValX(this);
     auto rets = cg.EmitCall(this, Dst {});
@@ -760,6 +898,14 @@ inline void InlineBlock::EmitBody(CodeGen &cg, const Dst &d) {
 }
 
 inline void Call::CgAny(CodeGen &cg, const Dst &d) {
+    if (auto dc = Is<Dot>(callee); dc && dc->optchain) {
+        if (cg.IsVoidT(exprtype)) {
+            (void)CgX(cg);
+            return;
+        }
+        cg.LeafAny(this, d);
+        return;
+    }
     // A result bound for a stack slot (a branch's value, say) is constructed
     // there as anywhere else, which is what copies in a resizable result
     // built behind a header of its own, or a returned reference's pointee.
@@ -864,6 +1010,62 @@ inline void AliasDecl::CgAny(CodeGen &cg, const Dst &) { cg.Fail(line, "internal
 // ---- CgStmt ---------------------------------------------------------------
 
 inline void VarDecl::CgStmt(CodeGen &cg) {
+    if (!destruct_fields.empty()) {
+        auto need_addr = byref;
+        for (auto d : defs)
+            if (d->type->kind == TY_REF && (byref || !cg.IsFix(d->type->ref->sub))) need_addr = true;
+        auto st = inits[0]->exprtype;
+        if (st->kind == TY_REF) st = st->ref->sub;
+        CodeGen::Loc base;
+        if (need_addr || !cg.IsFix(st)) {
+            base = cg.GenLoc(inits[0]);
+            if (base.t->kind == TY_REF) cg.DerefLoc(base);
+            if (base.val) {
+                auto p = cg.T();
+                cg.L(cg.CT(base.t), " *", p, " = &(", base.s, ");");
+                base.s = cat("(*", p, ")");
+            } else if (!cg.IsResz(base.t)) {
+                cg.PinLoc(base);
+            }
+        } else {
+            if (inits[0]->exprtype->kind == TY_REF) {
+                auto rp = cg.T();
+                auto ct = cg.CT(inits[0]->exprtype);
+                auto rv = cg.GenX(inits[0]);
+                cg.L(ct, " ", rp, " = ", rv, ";");
+                base.t = st;
+                base.val = true;
+                base.s = cat("(*", rp, ")");
+            } else {
+                auto tmp = cg.T();
+                cg.FixedLocal(st, tmp);
+                cg.GenAny(inits[0], Dst { DK_LVALUE, tmp, st });
+                base.t = st;
+                base.val = true;
+                base.s = tmp;
+            }
+        }
+        for (size_t i = 0; i < defs.size(); i++) {
+            auto d = defs[i];
+            auto name = cg.LocalName(d);
+            cg.vnames[d] = name;
+            auto fl = cg.FieldLocAt(base, destruct_indices[i]);
+            if (d->type->kind == TY_REF && (byref || fl.t->kind != TY_REF)) {
+                string rval;
+                if (fl.t->kind == TY_REF) {
+                    rval = fl.val ? cat("&(", fl.s, ")") : fl.s;
+                } else if (cg.IsResz(fl.t)) {
+                    rval = cat("((k_rref){ (k_rhdr *)&", fl.hdr, ", ", fl.stk, " })");
+                } else {
+                    rval = fl.val ? cat("&(", fl.s, ")") : fl.s;
+                }
+                cg.L(cg.VarCT(d), " ", name, " = ", rval, ";");
+            } else {
+                cg.FixedLocal(d->type, name, cg.LoadLoc(fl, d->type, line), true, d);
+            }
+        }
+        return;
+    }
     // Multi-name binding from one call: wire the call's channels straight
     // into the locals.
     if (names.size() > 1 && inits.size() == 1) {
@@ -1392,7 +1594,7 @@ inline void Return::CgStmt(CodeGen &cg) {
             // A function with several results is never inlined (Optimizer::Scan).
             assert(vals.size() <= 1);
             if (!vals.empty()) cg.GenExitValue(vals[0], i);
-            cg.EmitExitRestores(i);
+            cg.EmitExitRestores(i, false, !from.empty());
             cg.cscopes[i].usedbrk = true;
             cg.L("goto ", cg.cscopes[i].brklbl, ";");
             cg.termjump = true;
@@ -1401,7 +1603,7 @@ inline void Return::CgStmt(CodeGen &cg) {
         if (cg.cscopes[i].kind == CodeGen::SC_FN) break;
     }
     if (cg.curspec && target == cg.curspec->sf) {
-        cg.GenNormalReturn(vals);
+        cg.GenNormalReturn(vals, !from.empty());
         return;
     }
     cg.GenFromReturn(this);

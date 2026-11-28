@@ -504,7 +504,7 @@ struct BCE {
     // The declared type of the field a Dot reads, as its object's type
     // instantiates it; null for anything but a field.
     static TypeExpr *FieldTypeOf(Dot *d) {
-        auto t = d->obj->exprtype;
+        auto t = d->obj ? d->obj->exprtype : nullptr;
         if (!t || d->fieldidx < 0) return nullptr;
         if (t->kind == TY_REF) t = t->ref->sub;
         TypeExpr *ft = nullptr;
@@ -3095,7 +3095,7 @@ struct BCE {
     // and bounds-checked like any other.
     void WalkLvalParts(Node *n) {
         if (Is<Ident>(n)) return;
-        if (auto d = Is<Dot>(n)) { Walk(d->obj); return; }
+        if (auto d = Is<Dot>(n)) { if (d->obj) Walk(d->obj); return; }
         if (auto ix = Is<Index>(n)) { Walk(ix); return; }
         Walk(n);
     }
@@ -3883,6 +3883,13 @@ inline bool Node::BceWalk(BCE &b) {
 inline bool FunVal::BceWalk(BCE &) { return true; }
 
 inline bool Binary::BceWalk(BCE &b) {
+    if (op == T_QQUESTION && b.mode != BCE::M_KILLS) {
+        b.Walk(left);
+        auto after = b.flow;
+        b.Walk(right);
+        b.flow = b.Meet(after, b.flow);
+        return true;
+    }
     if ((op == T_ANDAND || op == T_OROR) && b.mode != BCE::M_KILLS) {
         // The right side runs only when the left settled it one way, so its
         // facts and effects merge against the short-circuit path.
@@ -3957,6 +3964,14 @@ inline bool SliceExpr::BceWalk(BCE &b) {
 
 inline bool Call::BceWalk(BCE &b) {
     Node *recv = nullptr;
+    if (auto d = Is<Dot>(callee); d && d->optchain) {
+        b.Walk(d->obj);
+        auto after = b.flow;
+        for (auto a : args) b.Walk(a);
+        b.CallKills(this);
+        b.flow = b.Meet(after, b.flow);
+        return true;
+    }
     // A call into user code is a site (RecordSite): each integer argument's
     // term is sampled as it is evaluated, a slice argument's length as its
     // bounds state it. The C backend may read a plain variable argument
@@ -4557,7 +4572,7 @@ inline bool VarDecl::BceWalk(BCE &b) {
     } else {
         for (auto i : inits) b.Walk(i);
     }
-    if (defs.size() == 1 && inits.size() == 1 && defs[0]) {
+    if (destruct_fields.empty() && defs.size() == 1 && inits.size() == 1 && defs[0]) {
         auto v = defs[0];
         auto lt = b.mode != BCE::M_KILLS && v->type && v->type->kind == TY_ARRAY
                       ? b.FreshLenOf(inits[0]) : BCE::Term {};

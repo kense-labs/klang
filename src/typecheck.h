@@ -2062,7 +2062,20 @@ struct TypeCheck {
     }
 
     Val CheckValueAt(Node *&n, TypeExpr *expected, Dest d, bool callsite = false);
-    Val Operand(Node *n);
+    Val Operand(Node *n, TypeExpr *expected = nullptr);
+
+    static bool IsImplicitEnum(const Node *n) {
+        if (auto d = Is<Dot>(n)) return !d->obj && !d->enumtype;
+        if (auto sl = Is<StructLit>(n)) return !sl->implicit_variant.empty();
+        return false;
+    }
+    static string_view ImplicitEnumVariantName(const Node *n) {
+        if (auto d = Is<Dot>(n)) return d->name;
+        if (auto sl = Is<StructLit>(n)) return sl->implicit_variant;
+        return {};
+    }
+    TypeExpr *InferImplicitEnumArgExpected(Call *c, const vector<SFunction *> &cands,
+                                           size_t arg_idx, bool has_receiver);
 
     string fitfail;  // A specific reason from the last failing FitsAt, if any.
 
@@ -2100,6 +2113,7 @@ struct TypeCheck {
     void RetypeVal(Val &v, TypeExpr *ct);
     Val CheckRefIdentity(Binary *b);
     Val CheckLogical(Binary *b);
+    Val CheckCoalesce(Binary *b, TypeExpr *expected);
     Val CheckBinaryResult(Binary *b, Val &lv, Val &rv);
     Val NumericBinary(Binary *b, Val lv, Val rv, TypeExpr *&ct, bool trial);
     void DecidedComparison(Binary *b, const Val &lv, const Val &rv, TypeExpr *lt, TypeExpr *rt);
@@ -2285,6 +2299,8 @@ struct TypeCheck {
         // The parameters the call's arguments bind, in order; the rest take
         // their defaults (§7.1).
         size_t nwritten = 0;
+        // For calls with named arguments: param_idx -> index in argvals (-1 = omitted default).
+        vector<int> argmap;
     };
 
     // Literal parameters (§7.7). A literal at a call site is checked against
@@ -2387,6 +2403,8 @@ struct TypeCheck {
     bool TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, MatchInfo &mi, string &why,
                   bool defaults = false);
     FnSpec *ParamDefaultEnv(const MatchInfo &mi);
+    void ApplyNamedArgs(Call *c, MatchInfo &best, vector<Node *> &argnodes,
+                        vector<Val> &argvals, bool receiver, FnSpec *env);
     void AddParamDefaults(Call *c, MatchInfo &best, vector<Node *> &argnodes,
                           vector<Val> &argvals, bool receiver, FnSpec *env);
     template<typename F> void InParamDefault(Call *c, const MatchInfo &mi, FnSpec *env,

@@ -1227,7 +1227,32 @@ compiler can tell that putting them back in order changes nothing: reads
 and arithmetic that cannot trap are fine; calls with effects, indexing and
 loops are not. Construction always proceeds in declaration order, directly
 into each field. If effects must happen in another order, do them before
-the literal. Spec §4.2.
+the literal.
+
+A struct literal may also copy remaining omitted fields from an existing
+value of the same struct type with a trailing `..base`. Any omitted field
+copied from `base` must be fixed-size; non-fixed fields must be named and
+initialized explicitly, and `base` cannot hold self-relative references.
+Struct fields can also be bound directly into locals with destructuring
+(`let { field, other: alias } = value;`, using `var`, `const`, or `.=` as
+in single-variable bindings).
+
+```klang
+struct Config { host: const u8[:], port: i64, tls: bool = false }
+fn main() {
+    let base = Config { host: "localhost", port: 8080 };
+    let prod = Config { port: 443, tls: true, ..base };
+    let { host, port, tls } = prod;
+    let { host: h } .= base;
+    print(host, ":", port, " tls=", tls, " ", h);
+}
+```
+
+```
+localhost:443 tls=true localhost
+```
+
+Spec §4.2.
 
 ### Field defaults
 
@@ -1593,6 +1618,30 @@ fn main() {
 20 rock
 ```
 
+When an expression's expected enum type is known from context — a typed
+`let`/`var`/`const` declaration, assignment, `return`, struct field, array
+literal element, call argument, `==`/`!=` comparison, or `match` arm — a
+leading dot `.Variant` or `.Variant { ... }` constructs or matches that
+variant without repeating `EnumName`.
+
+```klang
+enum Status { Ok, Err { code: i64 } }
+fn code_of(s: Status) -> i64 {
+    match s {
+        .Ok => 0,
+        .Err e => e.code,
+    }
+}
+fn main() {
+    var st: Status = .Err { code: 404 };
+    if st != .Ok { print(code_of(st), " ", code_of(.Ok)); }
+}
+```
+
+```
+404 0
+```
+
 Spec §8.1.
 
 ### Case functions
@@ -1828,7 +1877,32 @@ true
 An optional rebinds with `.=` to a reference, which narrows it, or to
 `null`, which does not. A narrowed optional writes through like any
 reference; there is no way to write through one *without* narrowing it.
-`assert(o)` narrows for the rest of the block. Spec §3.8.
+`assert(o)` narrows for the rest of the block.
+
+For concise read-side navigation, optional chaining `x?.field` and
+`x?.method(args)` unwrap an optional `T?` only when it is non-null: field
+or value results become optional (`R?` or `R` unchanged if already `T?`),
+and calling a `void` method does nothing when `x` is `null`. Null
+coalescing `a ?? b` evaluates `a` once and returns its unwrapped value when
+non-null, or short-circuits to evaluate `b` when `a` is `null`.
+
+```klang
+struct Item { val: i64, next: Item? = null }
+fn twice(it: Item&) -> i64 { it.val * 2 }
+fn main() {
+    let tail = Item { val: 21 };
+    let head = Item { val: 10, next: tail };
+    let missing: Item? = null;
+    let p: Item? = head;
+    print(p?.next?.val ?? -1, " ", missing?.twice() ?? 0);
+}
+```
+
+```
+21 0
+```
+
+Spec §3.8.
 
 ### What references may point to
 
@@ -2841,6 +2915,44 @@ bounds check, `exit`, and a contained worker's abort end the code without
 running any, and the process or the worker's end reclaims what the body
 would have released. Spec §6.6.
 
+### `errdefer`
+
+`errdefer` is a contextual keyword with the same block/statement syntax and
+restrictions as `defer`, except that it runs only when its enclosing scope
+unwinds on an error path (`return … from` or `exception::throw`), and is
+skipped on normal fallthrough, ordinary `return`, `break`, and `continue`.
+Like `defer`, `defer` and `errdefer` in the same scope share LIFO order;
+an `errdefer` body may consume an `own` handle on the unwind path without
+preventing the normal path from returning or keeping ownership.
+
+```klang
+import exception;
+
+fn step(fail: bool) -> i64 {
+    errdefer print("rollback");
+    defer print("close");
+    if fail { exception::throw(1); }
+    return 42;
+}
+
+fn main() {
+    var v: i64 = 0;
+    fn ok_call() { v = step(false); }
+    exception::try<i64>(ok_call) { _ => print("caught"); };
+    print("ok=", v);
+    fn bad_call() { step(true); }
+    exception::try<i64>(bad_call) { _ => print("caught"); };
+}
+```
+
+```
+close
+ok=42
+close
+rollback
+caught
+```
+
 ### `using`
 
 C#-style `using` declarations and blocks provide deterministic resource disposal
@@ -3220,6 +3332,25 @@ fn main() {
 
 ```
 2 15 100 -5 5 42 3.0
+```
+
+Call arguments may also pass parameters by name after any positional
+prefix (`name: expr`). Named arguments can reorder parameters and skip
+middle parameters that have defaults; every parameter without a default
+still must receive a value, and positional arguments cannot follow a named
+argument.
+
+```klang
+fn window(w: i64, h: i64 = 720, scale: i64 = 1, border: i64 = 0) -> i64 {
+    w * scale + h + border
+}
+fn main() {
+    print(window(1280, border: 8), " ", window(scale: 2, w: 640));
+}
+```
+
+```
+2008 2000
 ```
 
 ### Results
@@ -4659,6 +4790,7 @@ varint i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`.
 
 **Contextual keywords**, which are ordinary names everywhere else: `from`
 (after a `return` value), `upto` (after an unsigned type in a type),
+`errdefer` (a cleanup statement or block that runs only on error unwind),
 `inline` and `checkfree` (before `fn`, `recursive`, `simd` or `thread_fn`),
 `deprecated` (before the other function qualifiers, optionally followed by
 a string), `fields`, `variants` and `types` (in a `const for` header),
@@ -4668,7 +4800,7 @@ a string), `fields`, `variants` and `types` (in a `const for` header),
 
 | Level | Operators |
 |---|---|
-| postfix | `f(…)`, `a[i]`, `a[x..y]`, `.field`, `x as T`, `x as! T` |
+| postfix | `f(…)`, `a[i]`, `a[x..y]`, `.field`, `?.field`, `x as T`, `x as! T` |
 | unary | `-`, `!`, `~`, `&` |
 | multiplicative | `*`, `/`, `%` |
 | additive | `+`, `-` |
@@ -4680,6 +4812,7 @@ a string), `fields`, `variants` and `types` (in a `const for` header),
 | equality | `==`, `!=`, `.==`, `.!=` |
 | logical and | `&&` |
 | logical or | `\|\|` |
+| coalescing | `??` |
 
 Assignment statements: `=`, `.=`, and the compound form of every binary
 operator (`+=`, `<<=`, `&=`, …); `++` and `--` on integer lvalues. A range
