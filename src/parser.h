@@ -74,6 +74,9 @@ struct Parser {
     bool stmt_ended = false;
 
     SFunction *curfn = nullptr;      // The function whose body is being parsed.
+    SFunction *top_main = nullptr;   // Synthetic main for top-level statements (fileidx == 0).
+    Block *cur_top_block = nullptr;  // Active block for top-level statements (handles guard).
+    bool has_top_stmt = false;       // Set once a non-declaration top-level statement is parsed.
     struct FnScope {
         Parser &p;
         SFunction *saved;
@@ -317,6 +320,27 @@ struct Parser {
         return lex.tok == T_IDENT && lex.attr == "async" && lex.PeekTok() == T_FN;
     }
 
+    bool AtAsyncBlock() const {
+        if (lex.tok != T_IDENT || lex.attr != "async") return false;
+        auto next = lex.PeekTok();
+        return next == T_LCURLY || next == T_ARROW;
+    }
+
+    bool CanStartTopStmt() {
+        if (AtUsing() || AtErrDefer() || AtAsyncBlock()) return true;
+        switch (lex.tok) {
+            case T_DEFER: case T_GUARD: case T_IF: case T_WHILE: case T_FOR:
+            case T_LOOP: case T_MATCH: case T_BLOCK: case T_RETURN: case T_BREAK:
+            case T_CONTINUE: case T_LCURLY: case T_LPAREN: case T_LBRACKET:
+            case T_IDENT: case T_COLONCOLON: case T_SELF: case T_INTLIT:
+            case T_FLTLIT: case T_STRLIT: case T_TRUE: case T_FALSE: case T_NULLLIT:
+            case T_MINUS: case T_NOT: case T_BITNOT: case T_BITAND: case T_DOT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     bool AtRootStruct() const {
         return lex.tok == T_IDENT && lex.attr == "root" && lex.PeekTok() == T_STRUCT;
     }
@@ -513,8 +537,105 @@ struct Parser {
     // ------------------------------------------------------------------
     // Top level.
 
+    void EnsureTopMain(Line line) {
+        if (top_main) return;
+        top_main = new SFunction();
+        top_main->line = line;
+        top_main->body = New<Block>(line);
+        cur_top_block = top_main->body;
+    }
+
+    void AddTopStmt(Node *st) {
+        has_top_stmt = true;
+        auto at_root = cur_top_block == top_main->body;
+        cur_top_block->stmts.push_back(st);
+        if (at_root) ast.topdecls.push_back(st);
+    }
+
+    void RegisterGlobal(VarDecl *vd) {
+        // A var global may leave its initial value to its type (§11.1);
+        // a let or const one would keep that value for good.
+        if (vd->inits.empty() && !vd->isvar)
+            Error("let and const global declarations require an initializer");
+        if (vd->names.size() != 1) Error("global declarations declare a single name");
+        auto name = vd->names[0];
+        auto &ns = ast.NS(vd->ns);
+        if (ns.globalmap.count(name))
+            Error(cat("global name already declared: ", QualifiedStr(vd->ns, name)));
+        ns.globalmap[name] = vd;
+        ast.globals.push_back(vd);
+    }
+
+    Node *ParseAsyncBlock() {
+        auto line = CurLine();
+        lex.Next();  // 'async'
+        TypeExpr *ret = IsNext(T_ARROW) ? ParseType() : nullptr;
+        auto sf = new SFunction();
+        ast.functions.push_back(sf);
+        sf->name = ast.Intern(cat("async#block", ast.functions.size()));
+        sf->ns = curns;
+        sf->qname = ast.QualifiedName(sf->ns, sf->name);
+        sf->line = line;
+        if (ret) {
+            sf->rets.push_back(ret);
+            sf->has_rets = true;
+        }
+        {
+            FnScope fs(*this, sf);
+            sf->body = ParseBlockExpr("async block");
+        }
+        sf->end = PrevEnd();
+        if (sf->body && !sf->broken) LowerAsyncFunction(ast, sf);
+        ast.NS(sf->ns).functionmap[sf->name].push_back(sf);
+        auto c = New<Call>(line, New<Ident>(line, sf->name, sf->ns));
+        c->async_block_fn = sf;
+        Finish(c);
+        if (stmt_level && lex.tok != T_DOT && lex.tok != T_QDOT) stmt_ended = true;
+        return c;
+    }
+
     void ParseTop() {
         while (lex.tok != T_EOF) ParseTopDecl();
+        if (!top_main) return;
+        if (cur_top_block && cur_top_block != top_main->body) cur_top_block->end = PrevEnd();
+        if (top_main->body->stmts.empty()) {
+            delete top_main;
+            top_main = nullptr;
+            cur_top_block = nullptr;
+            return;
+        }
+        if (ast.MainFunction() || ast.DeclaresMain()) {
+            Diagnostic d;
+            d.where = LocOf(top_main->line);
+            d.message = "cannot mix top-level statements with an explicit fn main()";
+            d.text = ast.DiagnosticText(d);
+            ast.Report(d);
+            delete top_main;
+            top_main = nullptr;
+            cur_top_block = nullptr;
+            return;
+        }
+        ast.functions.push_back(top_main);
+        top_main->name = top_main->qname = "main";
+        top_main->is_synthetic_main = true;
+        top_main->end = top_main->body->stmts.back()->end;
+        top_main->body->end = top_main->end;
+        // A bare top-level void `async { ... }` statement runs to completion before exit.
+        for (auto &st : top_main->body->stmts) {
+            if (auto c = Is<Call>(st); c && c->async_block_fn && c->async_block_fn->async_rets.empty()) {
+                auto aw = ast.New<Call>(c->line, ast.New<Ident>(c->line, kTaskAwait, c->async_block_fn->ns));
+                aw->args.push_back(c);
+                st = aw;
+            }
+        }
+        if (ContainsAwaitExpr(top_main->body)) {
+            LowerAsyncFunction(ast, top_main);
+            SynthesizeAsyncMainWrapper(ast, top_main);
+        } else {
+            ast.NS("").functionmap["main"].push_back(top_main);
+        }
+        top_main = nullptr;
+        cur_top_block = nullptr;
     }
 
     // A declaration an error is raised in is reported and dropped, whatever
@@ -526,6 +647,9 @@ struct Parser {
     void ParseTopDecl() {
         ast.CheckCancel();
         auto mark = ast.Mark();
+        auto saved_block = cur_top_block;
+        auto saved_stmts = cur_top_block ? cur_top_block->stmts.size() : (size_t)0;
+        auto saved_has_stmt = has_top_stmt;
         auto startp = lex.attr.data();
         pendingdot = nullptr;
         try {
@@ -536,6 +660,9 @@ struct Parser {
             // followed it is a consequence.
             if (!pendingdot) Report(e);
             pendingdot = nullptr;
+            cur_top_block = saved_block;
+            if (cur_top_block) cur_top_block->stmts.resize(saved_stmts);
+            has_top_stmt = saved_has_stmt;
             ast.DropSince(mark);
             Resync(true, startp);
         }
@@ -698,12 +825,78 @@ struct Parser {
                 return;
             }
             case T_REUSABLE: case T_LET: case T_VAR: case T_CONST: {
-                auto vd = ParseVarDecl(true);
+                if (fileidx == 0 && lex.tok == T_CONST &&
+                    (lex.PeekTok() == T_FOR || lex.PeekTok() == T_IF)) {
+                    EnsureTopMain(line);
+                    FnScope fs(*this, top_main);
+                    AddTopStmt(lex.PeekTok() == T_FOR ? (Node *)ParseConstFor(false)
+                                                      : ParseConstIf(false));
+                    return;
+                }
+                if (fileidx == 0 &&
+                    (has_top_stmt || ((lex.tok == T_LET || lex.tok == T_VAR || lex.tok == T_CONST) &&
+                                      lex.PeekTok() == T_LCURLY))) {
+                    EnsureTopMain(line);
+                    FnScope fs(*this, top_main);
+                    auto vd = ParseVarDecl(false);
+                    Expect(T_SEMI, "variable declaration");
+                    AddTopStmt(vd);
+                    return;
+                }
+                auto vd = ParseVarDecl(true, fileidx != 0);
                 Expect(T_SEMI, "global declaration");
+                if (fileidx == 0 && vd->ns == curns &&
+                    (vd->names.size() != 1 || ContainsAwaitExpr(vd))) {
+                    vd->isglobal = false;
+                    EnsureTopMain(line);
+                    AddTopStmt(vd);
+                    return;
+                }
+                if (fileidx == 0) RegisterGlobal(vd);
                 ast.topdecls.push_back(vd);
                 return;
             }
             default:
+                if (fileidx == 0 && CanStartTopStmt()) {
+                    EnsureTopMain(line);
+                    FnScope fs(*this, top_main);
+                    if (lex.tok == T_GUARD) {
+                        lex.Next();
+                        auto cond = ParseScrutinee();
+                        Block *elseb = nullptr;
+                        if (IsNext(T_ELSE)) {
+                            elseb = ParseBlockExpr("guard else");
+                            IsNext(T_SEMI);
+                        } else {
+                            Expect(T_SEMI, "guard");
+                        }
+                        auto rest = New<Block>(line);
+                        auto ife = Finish(New<IfExpr>(line, cond, rest, elseb));
+                        AddTopStmt(ife);
+                        cur_top_block = rest;
+                        return;
+                    }
+                    if (AtUsing()) {
+                        Block tmp(line);
+                        ParseUsing(&tmp);
+                        for (auto st : tmp.stmts) AddTopStmt(st);
+                        return;
+                    }
+                    if (AtErrDefer()) {
+                        AddTopStmt(ParseDefer(true));
+                        return;
+                    }
+                    if (lex.tok == T_DEFER) {
+                        AddTopStmt(ParseDefer());
+                        return;
+                    }
+                    Block tmp(line);
+                    stmt_level = false;
+                    stmt_ended = false;
+                    ParseExprStatement(&tmp, false);
+                    for (auto st : tmp.stmts) AddTopStmt(st);
+                    return;
+                }
                 Error(cat("top-level declaration expected, found \'", TokStr(), "\'"));
         }
     }
@@ -1203,12 +1396,16 @@ struct Parser {
         // Only the root file's `fn main` is the program entry; an imported
         // file's main is ignored entirely (§11.1), letting a runnable file
         // double as an importable library.
-        if (!nested && !(sf->name == "main" && fileidx != 0))
-            ast.NS(sf->ns).functionmap[sf->name].push_back(sf);
+        if (!nested && !(sf->name == "main" && fileidx != 0)) {
+            if (async && sf->async_body && sf->name == "main" && sf->ns.empty())
+                SynthesizeAsyncMainWrapper(ast, sf);
+            else
+                ast.NS(sf->ns).functionmap[sf->name].push_back(sf);
+        }
         return Finish(New<FnDecl>(line, sf));
     }
 
-    VarDecl *ParseVarDecl(bool isglobal) {
+    VarDecl *ParseVarDecl(bool isglobal, bool register_global = true) {
         auto line = CurLine();
         auto doc = lex.doc;
         auto reusable = 0;
@@ -1267,19 +1464,7 @@ struct Parser {
                 if (!IsNext(T_COMMA)) break;
             }
         }
-        if (isglobal) {
-            // A var global may leave its initial value to its type (§11.1);
-            // a let or const one would keep that value for good.
-            if (vd->inits.empty() && !vd->isvar)
-                Error("let and const global declarations require an initializer");
-            if (vd->names.size() != 1) Error("global declarations declare a single name");
-            auto name = vd->names[0];
-            auto &ns = ast.NS(vd->ns);
-            if (ns.globalmap.count(name))
-                Error(cat("global name already declared: ", QualifiedStr(vd->ns, name)));
-            ns.globalmap[name] = vd;
-            ast.globals.push_back(vd);
-        }
+        if (isglobal && register_global) RegisterGlobal(vd);
         return Finish(vd);
     }
 
@@ -1858,7 +2043,8 @@ struct Parser {
 
     Node *ParseUnary() {
         auto line = CurLine();
-        if (lex.tok == T_IDENT && lex.attr == "await" && lex.PeekTok() == T_IDENT) {
+        if (lex.tok == T_IDENT && lex.attr == "await" &&
+            (lex.PeekTok() == T_IDENT || lex.PeekTok() == T_COLONCOLON)) {
             lex.Next();
             auto marker = New<Call>(line, New<Ident>(line, kTaskAwait, curns));
             marker->args.push_back(ParseUnary());
@@ -2169,6 +2355,7 @@ struct Parser {
                 return Finish(New<Dot>(line, nullptr, vname, curns));
             }
             case T_IDENT: case T_COLONCOLON: {
+                if (AtAsyncBlock()) return ParseAsyncBlock();
                 if (constcond && lex.tok == T_IDENT && lex.PeekTok() == T_LT &&
                     (lex.attr == "has_default" || lex.attr == "same"))
                     return ParseConstQuery(line);

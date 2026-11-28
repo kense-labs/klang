@@ -235,7 +235,7 @@ inline bool EndsInBlock(const Node *n) {
     if (Is<IfExpr>(n) || Is<MatchExpr>(n) || Is<EarlyBlock>(n) || Is<While>(n) ||
         Is<LoopExpr>(n) || Is<ForLoop>(n) || Is<FnDecl>(n) || Is<Block>(n) ||
         Is<InlineBlock>(n) || Is<ConstFor>(n) || Is<ConstIf>(n)) return true;
-    if (auto c = Is<Call>(n)) return c->trailing != nullptr;
+    if (auto c = Is<Call>(n)) return c->trailing != nullptr || c->async_block_fn != nullptr;
     // As Defer::Dump writes it: the block form, or its one statement.
     if (auto d = Is<Defer>(n))
         return d->body->stmts.size() != 1 || d->body->tail || EndsInBlock(d->body->stmts[0]);
@@ -265,7 +265,8 @@ inline const Node *Written(const Node *n) {
 // Struct literals need grouping in scrutinee contexts.
 inline void DumpOperand(string &s, const Node *n, int ind, bool postfix = false) {
     n = Written(n);
-    auto parens = EndsInBlock(n) || Is<StructLit>(n) ||
+    auto is_async_blk = Is<Call>(n) && Is<Call>(n)->async_block_fn != nullptr;
+    auto parens = (EndsInBlock(n) && (!is_async_blk || postfix)) || Is<StructLit>(n) ||
                   Is<Return>(n) || Is<Break>(n) || Is<Continue>(n) ||
                   (postfix && (Is<Unary>(n) || Is<IntLit>(n) || Is<FltLit>(n)));
     if (parens) s += "(";
@@ -509,6 +510,16 @@ inline void Dot::Dump(string &s, int ind) const {
 }
 
 inline void Call::Dump(string &s, int ind) const {
+    if (async_block_fn) {
+        s += "async";
+        if (!async_block_fn->async_rets.empty()) {
+            s += " -> ";
+            async_block_fn->async_rets[0]->Dump(s);
+        }
+        s += " ";
+        async_block_fn->async_body->Dump(s, ind);
+        return;
+    }
     if (task_await == TaskAwait::Yield) {
         s += "await yield_now(";
         if (!args.empty()) args[0]->Dump(s, ind);
@@ -868,7 +879,7 @@ inline void FnDecl::Dump(string &s, int ind) const {
     if (sf->isrec) s += "recursive ";
     if (sf->async_body) s += "async ";
     s += sf->isthread ? "thread_fn " : "fn ";
-    s += sf->isnested ? sf->name : sf->qname;   // See VarDecl::Dump.
+    s += sf->is_async_main ? string_view("main") : (sf->isnested ? sf->name : sf->qname);   // See VarDecl::Dump.
     DumpGenerics(s, sf->generics);
     s += "(";
     for (size_t i = 0; i < sf->params.size(); i++) {
@@ -1030,7 +1041,9 @@ inline void Ast::Dump(string &s) {
         else if (auto sd = Is<StructDecl>(d)) scope.Prepare(*this, sd->st->decorators);
         else if (auto ed = Is<EnumDecl>(d)) scope.Prepare(*this, ed->en->decorators);
         d->Dump(s, 0);
-        if (Is<VarDecl>(d)) s += ";";  // Globals; other decl kinds self-terminate.
+        if (!Is<FnDecl>(d) && !Is<StructDecl>(d) && !Is<EnumDecl>(d) && !Is<AliasDecl>(d) &&
+            !EndsInBlock(d))
+            s += ";";  // Globals and top-level non-block statements; decls self-terminate.
         s += "\n";
     }
     if (!openlib.empty()) s += "}\n";
@@ -1062,7 +1075,7 @@ inline void DumpDocs(Ast &ast, string &s) {
     };
     for (auto d : ast.topdecls) {
         if (auto fd = Is<FnDecl>(d)) {
-            doc(cat("fn ", fd->sf->qname), fd->sf->doc);
+            doc(cat("fn ", fd->sf->is_async_main ? string_view("main") : fd->sf->qname), fd->sf->doc);
         } else if (auto sd = Is<StructDecl>(d)) {
             doc(cat(sd->st->decorator_target != DecoratorTarget::None ? "decorator " : "struct ",
                     sd->st->qname), sd->st->doc);
@@ -1076,7 +1089,7 @@ inline void DumpDocs(Ast &ast, string &s) {
             }
         } else if (auto ad = Is<AliasDecl>(d)) {
             doc(cat("type ", ad->al->qname), ad->al->doc);
-        } else if (auto vd = Is<VarDecl>(d)) {
+        } else if (auto vd = Is<VarDecl>(d); vd && vd->isglobal) {
             doc(cat(vd->isconst ? "const " : vd->isvar ? "var " : "let ",
                     ast.QualifiedName(vd->ns, vd->names[0])), vd->doc);
         }

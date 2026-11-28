@@ -102,7 +102,7 @@ class Checker:
         start, body, expected, marker = block
         text = "\n".join(body) + "\n"
         expect_error = any(not l.lstrip().startswith("//") and re.search(r"//\s*error", l) for l in body)
-        has_main = re.search(r"^\s*fn main\(", text, re.M) is not None
+        has_main = re.search(r"^\s*(?:async\s+)?fn\s+(?:::)?main\(", text, re.M) is not None
         forms = [("as-is", text), ("std", "import std;\n" + text)]
         if not has_main:
             forms += [("main-wrap", "import std;\nfn main() {\n" + text + "}\n"),

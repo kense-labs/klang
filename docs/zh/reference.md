@@ -3137,7 +3137,29 @@ started grace [0, 1]
 <a id="main"></a>
 ### `main`
 
-根文件全局命名空间中的 `fn main() { }` 是程序入口点。被导入文件中的 `fn main` 会被完全忽略，因此可执行文件也能兼作库使用：只需定义 `fn main_x()` 和一个 `fn main() { main_x(); }` 包装器，导入方就可以调用 `main_x`。程序的命令行参数通过 `os` 模块获取（`args()`、`arg_count()`），`exit(code)` 则用于设置进程退出码。
+根文件全局命名空间中的 `fn main() { }`（或 `async fn main() { }`）是程序入口点。独立脚本也可以省略 `fn main()`，直接在文件顶层书写语句；编译器会按源码顺序将其合成为隐式入口（支持直接使用顶级 `await` 与 `async [-> T] { ... }` 块，并会在退出前自动等待裸 `async { ... }` 语句完成）。在同一文件中同时混用顶级语句与显式 `fn main()` 会触发编译错误。
+
+```klang
+async fn fetch(v: i64) -> i64 {
+    await yield_now();
+    return v * 2;
+}
+
+async fn main() {
+    let a = await fetch(21);
+    let b = await async -> i64 {
+        let step = await fetch(5);
+        return step + 1;
+    };
+    print(a, " ", b);
+}
+```
+
+```
+42 11
+```
+
+被导入文件中的 `fn main` 会被完全忽略，因此可执行文件也能兼作库使用：只需定义 `fn main_x()` 和一个 `fn main() { main_x(); }` 包装器，导入方就可以调用 `main_x`。程序的命令行参数通过 `os` 模块获取（`args()`、`arg_count()`），`exit(code)` 则用于设置进程退出码。
 
 <a id="embed_file"></a>
 ### `embed_file`

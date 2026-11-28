@@ -169,6 +169,7 @@ inline Node *Call::Clone1(Ast &ast) const {
     c->decorator_forward = decorator_forward;
     c->decorator_await = decorator_await;
     c->task_await = task_await;
+    c->async_block_fn = async_block_fn;
     for (auto t : tyargs) c->tyargs.push_back(ast.CloneExpansionType(t));
     c->implicit = implicit;
     c->argnames = argnames;

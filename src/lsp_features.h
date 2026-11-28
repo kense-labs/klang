@@ -542,7 +542,7 @@ inline Place PlaceOfName(const Analysis &an, int fileidx, string_view name, Line
 }
 
 inline Place PlaceOfFn(const Analysis &an, const SFunction *sf) {
-    return PlaceOfName(an, sf->line.fileidx, sf->name, sf->line);
+    return PlaceOfName(an, sf->line.fileidx, sf->is_async_main ? string_view("main") : sf->name, sf->line);
 }
 // A variable's declaration: its parameter, or the name in its `let`,
 // `var`, loop, arm or block (Analysis::defplaces); unknown for a binding
@@ -2381,7 +2381,7 @@ inline bool CodeLenses(Workspace &ws, const Json &params, JsonOut &j) {
             else
                 lens(p, title, "", {}, writelines);
         }
-        if (sf->qname == "main" && ws.clientcommands.count("klang.run"))
+        if ((sf->qname == "main" || sf->is_async_main) && ws.clientcommands.count("klang.run"))
             lens(p, "Run", "klang.run", [&] { j.Str(f.uri); }, {});
     }
     j.EndArray();

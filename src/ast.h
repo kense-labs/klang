@@ -1167,6 +1167,7 @@ NODE(Call)
     bool decorator_forward = false;  // An implicit argument list on a statically bound continuation.
     bool decorator_await = false;    // A suspension that transfers the pending decorator continuation.
     TaskAwait task_await = TaskAwait::None;
+    SFunction *async_block_fn = nullptr;  // Backing lowered task fn for `async [-> T] { ... }`.
     vector<VarDef *> task_values;     // Initialized values at a checked suspension, filtered by liveness.
     vector<VarDef *> task_dead;       // Lexical values whose storage can end at this suspension.
     vector<pair<VarDef *, Roots>> task_loan_roots;  // Local loans at a suspension site.
@@ -1676,6 +1677,8 @@ struct SFunction {
     bool task_stage = false;        // A separately called task poll segment.
     bool task_suspends = false;     // The normal stage result saves a continuation.
     bool task_flow = false;         // Poll body with in-place control-flow resume points.
+    bool is_async_main = false;     // User-written `async fn main()` renamed to `main#async`.
+    bool is_synthetic_main = false; // Synthesized entry `main()` (top-level script or async main join wrapper).
     SFunction *task_final_of = nullptr;  // Final stage shares its task's result contract.
     bool task_child_start = false;  // Returns the saved frame and a single owned child.
     struct TaskSuspension {

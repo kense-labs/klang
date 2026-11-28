@@ -4310,8 +4310,36 @@ started grace [0, 1]
 
 ### `main`
 
-`fn main() { }` in the global namespace of the root file is the entry
-point. A `fn main` in an imported file is ignored entirely, so a runnable
+`fn main() { }` (or `async fn main() { }`) in the global namespace of the
+root file is the entry point. Alternatively, a standalone script file may
+omit `fn main()` and write statements directly at the top level; they run
+in source order as an implicit entry point (and may use `await` and
+`async { ... }` blocks directly, in which case the compiler lowers the
+top level to an async entry point and awaits bare `async { ... }` blocks
+before exit). Mixing top-level statements with an explicit `fn main()` is
+a parse error.
+
+```klang
+async fn fetch(v: i64) -> i64 {
+    await yield_now();
+    return v * 2;
+}
+
+async fn main() {
+    let a = await fetch(21);
+    let b = await async -> i64 {
+        let step = await fetch(5);
+        return step + 1;
+    };
+    print(a, " ", b);
+}
+```
+
+```
+42 11
+```
+
+A `fn main` in an imported file is ignored entirely, so a runnable
 file doubles as a library: give it `fn main_x()` and a `fn main() {
 main_x(); }` wrapper, and importers call `main_x`. A program's arguments
 come through the `os` module (`args()`, `arg_count()`), and `exit(code)`

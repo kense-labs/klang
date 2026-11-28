@@ -17,8 +17,10 @@ inline void LowerAsyncFunction(Ast &ast, SFunction *sf) {
     auto ns = sf->ns;
     auto body = sf->body;
     auto continuation = sf->decorator_result_source ? sf->decorator_next : nullptr;
-    if (sf->IsGeneric() || sf->rets.size() > 1 || (sf->name == "main" && sf->ns.empty()))
-        AsyncLoweringError(ast, sf->line, "async fn needs typed parameters, at most one result, and a synchronous entry point");
+    if (sf->IsGeneric() || sf->rets.size() > 1)
+        AsyncLoweringError(ast, sf->line, "async fn needs typed parameters and at most one result");
+    if (sf->name == "main" && sf->ns.empty() && (!sf->params.empty() || !sf->rets.empty()))
+        AsyncLoweringError(ast, sf->line, "async fn main() takes no parameters and returns nothing");
     auto named_call = [](Node *n, string_view name) -> Call * {
         auto call = Is<Call>(n);
         auto id = call ? Is<Ident>(call->callee) : nullptr;
@@ -217,6 +219,40 @@ inline void LowerAsyncFunction(Ast &ast, SFunction *sf) {
     call->args.push_back(ast.New<Ident>(line, join->params[0].name, ns));
     join->body->tail = call;
     finish();
+}
+
+inline SFunction *SynthesizeAsyncMainWrapper(Ast &ast, SFunction *async_main) {
+    async_main->is_async_main = true;
+    async_main->name = async_main->qname = ast.Intern("main#async");
+    ast.NS("").functionmap[async_main->name].push_back(async_main);
+    auto wrapper = new SFunction();
+    ast.functions.push_back(wrapper);
+    wrapper->name = wrapper->qname = "main";
+    wrapper->line = async_main->line;
+    wrapper->end = async_main->end;
+    wrapper->is_synthetic_main = true;
+    wrapper->body = ast.New<Block>(async_main->line);
+    wrapper->body->end = async_main->end;
+    auto start = ast.New<Call>(async_main->line,
+                               ast.New<Ident>(async_main->line, async_main->name, string_view()));
+    auto join = ast.New<Call>(async_main->line,
+                              ast.New<Dot>(async_main->line, start, "join", string_view()));
+    wrapper->body->stmts.push_back(join);
+    ast.NS("").functionmap["main"].push_back(wrapper);
+    return wrapper;
+}
+
+inline bool ContainsAwaitExpr(Node *n) {
+    if (!n || Is<FnDecl>(n) || Is<FunVal>(n) || Is<Defer>(n)) return false;
+    if (auto c = Is<Call>(n)) {
+        if (c->task_await != TaskAwait::None) return true;
+        if (auto id = Is<Ident>(c->callee); id && id->name == kTaskAwait) return true;
+    }
+    bool found = false;
+    n->Children([&](Node *ch) {
+        if (!found && ContainsAwaitExpr(ch)) found = true;
+    });
+    return found;
 }
 
 }  // namespace klang

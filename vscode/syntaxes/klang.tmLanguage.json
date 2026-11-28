@@ -8,6 +8,8 @@
     { "match": "\\broot\\b(?=\\s+struct\\b)", "name": "storage.modifier.klang" },
     { "match": "\\busing\\b(?=\\s+(?:let|var)\\b|\\s*\\()", "name": "keyword.control.klang" },
     { "match": "\\berrdefer\\b(?=\\s*(?:\\{|[A-Za-z_:@&~!'\\[]))", "name": "keyword.control.klang" },
+    { "match": "\\basync\\b(?=\\s*(?:\\{|->|fn\\b))", "name": "storage.modifier.klang" },
+    { "match": "\\bawait\\b(?=\\s*(?:[A-Za-z_]|::))", "name": "keyword.control.klang" },
     { "match": "\\bdeprecated\\b(?=\\s+(\"[^\"]*\"\\s+)?(checkfree|inline|simd|recursive|export|extern|fn|thread_fn)\\b)", "name": "storage.modifier.klang" },
     { "include": "#declarations" },
     { "match": "\\b(?:bool|varint|[iu](?:8|16|32|64)|f(?:32|64))\\b", "name": "storage.type.klang" },
