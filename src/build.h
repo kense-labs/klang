@@ -431,10 +431,14 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
                 // Overlap their compiles and link only after both succeeded.
                 string built_runtime;
                 exception_ptr failure;
-                jthread worker([&] {
+                thread worker([&] {
                     try { built_runtime = RuntimeObject(b, runtime, seed_dir); }
                     catch (...) { failure = current_exception(); }
                 });
+                struct WorkerJoin {
+                    thread &t;
+                    ~WorkerJoin() { if (t.joinable()) t.join(); }
+                } worker_guard { worker };
                 input = cache.Path("exe.app.o");
                 compile_flags.push_back("-pthread");
                 auto compiled = b.CompileObject(cfile, input, cat("compiling ", cfile),

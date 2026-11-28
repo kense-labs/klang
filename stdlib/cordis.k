@@ -15,13 +15,13 @@ struct InferenceLayout { input: TensorInfo, output: TensorInfo }
 struct InferenceResult { status: i32, written: u32 }
 struct InferenceArena { reserved_bytes: u64, in_use_bytes: u64, peak_in_use_bytes: u64 }
 struct InferenceWorkspace {
-    active: InferenceArena,
-    retired_reserved_bytes: u64,
+    active:                         InferenceArena,
+    retired_reserved_bytes:         u64,
     last_activation_reserved_bytes: u64,
-    active_measured: u32,
-    retired_count: u32,
-    retired_measured: u32,
-    last_activation_measured: u32,
+    active_measured:                u32,
+    retired_count:                  u32,
+    retired_measured:               u32,
+    last_activation_measured:       u32,
 }
 
 struct GatewayListener { token: u64 }

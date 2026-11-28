@@ -183,7 +183,35 @@ macOS 需要 Xcode 或 Xcode Command Line Tools。使用 Visual Studio 生成器
 
 ## 安装发行版
 
-如果平台有预构建包，先对照发布中的 `SHA256SUMS` 校验，再将解压后包含 `k` 的目录
+### 一键安装
+
+安装脚本会自动校验 `SHA256SUMS`，将完整运行时布局安装至 `~/.klang/current`（Windows
+为 `$HOME\.klang\current`），并自动将 `k` 加入 `PATH`。
+
+**macOS / Linux：**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kense-labs/klang/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell)：**
+
+```powershell
+irm https://raw.githubusercontent.com/kense-labs/klang/main/scripts/install.ps1 | iex
+```
+
+可通过 `--version <tag>`、`--profile <default|core|cloud>`、`--dir <path>` 或
+`--no-modify-path`（PowerShell 为 `-Version`、`-InstallDir`、`-NoModifyPath`）自定义安装：
+
+```sh
+# 指定预览版本或选择配置档（如 macOS arm64 的 core 或 Linux 的 cloud）
+curl -fsSL https://raw.githubusercontent.com/kense-labs/klang/main/scripts/install.sh | \
+  sh -s -- --version v0.1.0-preview.1 --profile core
+```
+
+### 手动下载安装
+
+如果有对应平台的预构建包，先对照发布中的 `SHA256SUMS` 校验，再将解压后包含 `k` 的目录
 加入 `PATH`。运行时文件需与可执行文件保持在同一安装布局中。
 在 Linux 上使用进程内执行需要系统 C 库开发头文件。macOS 需要 Xcode 或
 Command Line Tools 提供的 SDK。[GitHub Releases](https://github.com/kense-labs/klang/releases)

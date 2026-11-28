@@ -60,8 +60,12 @@ ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool ech
     // it may wait for input before it prints anything or exits.
     fclose(p.stdin_file);
     p.stdin_file = nullptr;
-    jthread drain;
-    if (captured_stderr) drain = jthread([&] {
+    thread drain;
+    struct DrainJoin {
+        thread &t;
+        ~DrainJoin() { if (t.joinable()) t.join(); }
+    } drain_guard { drain };
+    if (captured_stderr) drain = thread([&] {
         char buf[4096];
         while (auto n = subprocess_read_stderr(&p, buf, sizeof buf)) captured_stderr->append(buf, n);
     });

@@ -215,6 +215,35 @@ Line Tools. With the Visual Studio generator, the compiler is
 
 ## Install a release
 
+### Quick install (one-liner)
+
+The installers verify `SHA256SUMS`, preserve the compiler's runtime layout under
+`~/.klang/current` (`$HOME\.klang\current` on Windows), and add `k` to `PATH`.
+
+**macOS / Linux:**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kense-labs/klang/main/scripts/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/kense-labs/klang/main/scripts/install.ps1 | iex
+```
+
+Pass `--version <tag>`, `--profile <default|core|cloud>`, `--dir <path>`, or
+`--no-modify-path` (`-Version`, `-InstallDir`, `-NoModifyPath` on PowerShell) to
+customize the install:
+
+```sh
+# Install a specific preview with the reproducible macOS arm64 core or Linux cloud profile
+curl -fsSL https://raw.githubusercontent.com/kense-labs/klang/main/scripts/install.sh | \
+  sh -s -- --version v0.1.0-preview.1 --profile core
+```
+
+### Manual archive install
+
 When a prebuilt archive is available for your platform, check its SHA-256
 checksum against the release's `SHA256SUMS`, extract it, and put the directory
 containing `k` on `PATH`. Keep the runtime files beside the executable. On
