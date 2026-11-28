@@ -311,7 +311,7 @@ int64_t locked_value(void) {
     cmake = f"""cmake_minimum_required(VERSION 3.20)
 project(cached C)
 include(FetchContent)
-FetchContent_Declare(payload URL "{archive.as_uri()}" URL_HASH SHA256={digest})
+FetchContent_Declare(payload URL "{archive.as_posix()}" URL_HASH SHA256={digest})
 FetchContent_MakeAvailable(payload)
 add_library(cached STATIC native.c)
 target_link_libraries(cached PRIVATE payload)

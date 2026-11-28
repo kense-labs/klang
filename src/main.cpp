@@ -1858,8 +1858,8 @@ string ExePath(const char *argv0) {
 // what a program's depth reaches is ever committed. The typechecker stops at
 // stackfloor, STACKHEADROOM short of the end, which leaves room for the frames
 // a body nests below its last check and for reporting the error.
-#if defined(_MSC_VER) && defined(_DEBUG)
-constexpr size_t COMPILERSTACK = (size_t)96 << 20;
+#if defined(_MSC_VER) && !defined(NDEBUG)
+constexpr size_t COMPILERSTACK = (size_t)128 << 20;
 #else
 constexpr size_t COMPILERSTACK = (size_t)64 << 20;
 #endif
