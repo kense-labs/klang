@@ -1559,6 +1559,7 @@ NODE(VarDecl)
     // The results of `a, b = f();`, which the assignments after it in its
     // block take (Parser::ParseMultiAssign).
     bool results = false;
+    bool using_anon = false;    // Anonymous `using (expr) { ... }` resource temporary.
     TypeExpr *type = nullptr;
     vector<Node *> inits;       // Empty for uninitialized locals.
     vector<VarDef *> defs;      // Filled by typecheck, aligned with names.

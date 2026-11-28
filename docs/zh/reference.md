@@ -2062,6 +2062,38 @@ block done
 
 `defer` 只能出现在函数中：全局初始化器没有作用域退出。当根本没有发生正常退出时，不会运行任何 `defer`：`abort`、失败的 `assert` 或边界检查、`exit`，以及受控 Worker 的中止都会直接结束代码而不运行任何 `defer`，此时将由进程或 Worker 的结束来回收主体原本要释放的资源。规范 §6.6。
 
+<a id="using"></a>
+### `using`
+
+类似 C# 的 `using` 声明与语句块在不引入隐式析构器的前提下提供确定性的资源释放语义。它直接脱糖为变量绑定与紧随其后的 `defer x.dispose();`，在作用域任何退出路径（正常离开、提前 `return`、循环 `break`/`continue`、`return … from`，并完整配合 `own` 句柄义务检查）上按后进先出（LIFO）顺序调用 `.dispose()`：
+
+* **`using let x = expr;` / `using var x = expr;`**（C# 8+ 风格声明语句）：在当前块内绑定 `x`，并在当前块退出时自动调用 `x.dispose()`。
+* **`using (let x = expr) { … }` / `using (var x = expr) { … }`**（作用域块形式）：将 `x` 作用域限制在花括号块内，离开块时调用 `x.dispose()`。
+* **`using (expr) { … }`**（匿名资源守卫）：求值 `expr` 并在匿名作用域块退出时调用 `.dispose()`。
+
+```klang
+struct File { id: i64 }
+fn open(id: i64) -> File { File { id: id } }
+fn dispose(f: File) { print("close ", f.id); }
+
+fn main() {
+    using let a = open(1);
+    using (let b = open(2)) {
+        print("use ", b.id);
+    }
+    print("after inner ", a.id);
+}
+```
+
+```
+use 2
+close 2
+after inner 1
+close 1
+```
+
+`using` 为上下文关键字：在非 `using` 声明/语句位置上仍可作为普通标识符或函数名使用（如 `let using = 10;`），与 Cordis 扩展语法兼容。
+
 <a id="loops"></a>
 ### 循环
 

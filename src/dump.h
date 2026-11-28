@@ -215,6 +215,21 @@ inline const VarDecl *MultiAssignOf(const Block *b) {
     return vd;
 }
 
+// The block `using (expr) { ... }` parses to (Parser::ParseUsing), while
+// still keeping its shape: temporary VarDecl (`using_anon`), `defer`
+// calling `.dispose()`, and the body block as tail or third statement.
+inline const Block *UsingAnonOf(const Block *b, const VarDecl **out_vd = nullptr) {
+    auto vd = b->stmts.size() >= 2 ? Is<VarDecl>(b->stmts[0]) : nullptr;
+    if (!vd || !vd->using_anon || vd->inits.size() != 1 || !Is<Defer>(b->stmts[1]))
+        return nullptr;
+    const Block *body = nullptr;
+    if (b->stmts.size() == 2 && b->tail) body = Is<Block>(b->tail);
+    else if (b->stmts.size() == 3 && !b->tail) body = Is<Block>(b->stmts[2]);
+    if (!body) return nullptr;
+    if (out_vd) *out_vd = vd;
+    return body;
+}
+
 inline bool EndsInBlock(const Node *n) {
     if (auto b = Is<Block>(n); b && MultiAssignOf(b)) return false;
     if (Is<IfExpr>(n) || Is<MatchExpr>(n) || Is<EarlyBlock>(n) || Is<While>(n) ||
@@ -282,6 +297,14 @@ inline void Block::Dump(string &s, int ind) const {
         }
         s += " = ";
         vd->inits[0]->Dump(s, ind);
+        return;
+    }
+    const VarDecl *uvd = nullptr;
+    if (auto body = UsingAnonOf(this, &uvd)) {
+        s += "using (";
+        uvd->inits[0]->Dump(s, ind);
+        s += ") ";
+        body->Dump(s, ind);
         return;
     }
     s += "{";

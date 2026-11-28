@@ -1,0 +1,34 @@
+body a=1 b=2
+dispose res 2
+dispose res 1
+ret1=10
+body a=1 b=2
+body c=3
+dispose res 3
+dispose res 2
+dispose res 1
+ret2=20
+inner 4
+dispose res 4
+after inner
+scoped 5
+dispose mut 5 dirties=3
+block 6
+dispose res 6
+dispose mut 7 dirties=2
+mut=42
+returning 8
+dispose res 8
+val=80
+in anon outer
+loop 0
+dispose res 100
+dispose res 101
+loop 2
+dispose res 102
+dispose res 103
+in anon inner
+dispose guard inner
+dispose guard outer
+after anon
+compat 9 10

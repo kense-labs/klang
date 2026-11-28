@@ -666,6 +666,47 @@ def check_extern_dylib(exe, cc, base, *, jit, runtime, extra=()):
         "structured owner 42", "structured joined 87 13 13",
     ]
     expect_output(async_owned, lines=async_owned_expected)
+    using_owned_src = '''
+struct CounterHandle { token: u64 }
+extern "lib/dltest" {
+    fn open_counter(value: i32) -> own CounterHandle = "dlt_counter_open";
+    fn read_counter(borrow handle: CounterHandle) -> i32 = "dlt_counter_read";
+    fn dispose(handle: own CounterHandle) = "dlt_counter_close";
+    fn opens() -> i32 = "dlt_counter_opened";
+    fn closes() -> i32 = "dlt_counter_closed";
+}
+
+async fn async_using() -> i32 {
+    using let h = open_counter(40);
+    await yield_now();
+    return read_counter(h);
+}
+
+fn main() {
+    using (let a = open_counter(10)) {
+        print(read_counter(a), " ", opens(), " ", closes());
+    }
+    print("after scoped ", opens(), " ", closes());
+    using (open_counter(20)) {
+        print("in anon ", opens(), " ", closes());
+    }
+    print("after anon ", opens(), " ", closes());
+    print(async_using().join(), " ", opens(), " ", closes());
+    using let b = open_counter(30);
+    print("after decl ", read_counter(b), " ", opens(), " ", closes());
+}
+'''
+    using_owned = base / "using-owned-counter.k"
+    tc.write_text(using_owned, using_owned_src)
+    using_owned_expected = [
+        "10 1 0",
+        "after scoped 1 1",
+        "in anon 2 1",
+        "after anon 2 2",
+        "40 3 3",
+        "after decl 30 4 3",
+    ]
+    expect_output(using_owned, lines=using_owned_expected)
     async_decorators = base / "async-decorated-counter.k"
     tc.write_text(async_decorators, ASYNC_DECORATORS)
     async_decorators_expected = [

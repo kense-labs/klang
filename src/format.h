@@ -48,7 +48,7 @@ struct Item {
     enum Kind { TOKEN, LINE_COMMENT, BLOCK_COMMENT } kind = TOKEN;
     TType tok = T_EOF;
     string_view text;
-    uint8_t roles = 0;           // TokenRole bits.
+    uint16_t roles = 0;          // TokenRole bits.
     int closes = 0;              // The generic lists a `>` or `>>` closes.
     int nl = 0;                  // Line breaks between it and the item before.
     bool space = false;          // Whitespace before it on its line.
@@ -115,7 +115,7 @@ inline int Space(const Item &a, const Item &b) {
     if (rangeb) return OperandEnd(a) ? 0 : 1;
     if (rangea) return 0;
     if (b.tok == T_COLON) return 0;
-    if (b.tok == T_LPAREN) return OperandEnd(a) || a.tok == T_FN ? 0 : 1;
+    if (b.tok == T_LPAREN) return (OperandEnd(a) && !(a.roles & R_USING)) || a.tok == T_FN ? 0 : 1;
     if (b.tok == T_LBRACKET) return OperandEnd(a) || a.tok == T_REUSABLE ? 0 : 1;
     if (b.roles & R_ANGLE_OPEN) return OperandEnd(a) ? 0 : 1;
     return 1;
@@ -139,8 +139,8 @@ inline bool Glues(string_view a, string_view b) {
 
 // The tokens and comments of `src`, with the roles the parse gave them. A
 // comment's text is its own, less trailing whitespace on a line comment.
-inline vector<Item> Collect(const string &src, const vector<pair<const char *, uint8_t>> &roles) {
-    unordered_map<const char *, pair<uint8_t, int>> rolemap;
+inline vector<Item> Collect(const string &src, const vector<pair<const char *, uint16_t>> &roles) {
+    unordered_map<const char *, pair<uint16_t, int>> rolemap;
     for (auto &[at, r] : roles) {
         auto &e = rolemap[at];
         e.first |= r;
@@ -346,6 +346,7 @@ struct OutLine {
 // The keywords that may come before the name a table's line declares.
 inline bool DeclKeyword(const Item &it) {
     if (it.kind != Item::TOKEN) return false;
+    if (it.roles & R_USING) return true;
     switch (it.tok) {
         case T_EXPORT: case T_LET: case T_VAR: case T_CONST: case T_EXTERN: case T_PAD:
             return true;
@@ -546,7 +547,7 @@ inline vector<OutLine> Lines(const vector<Item> &items, const unordered_map<int,
 }
 
 // The formatted text of `src`, whose tokens carry `roles`.
-inline string Layout(const string &src, const vector<pair<const char *, uint8_t>> &roles) {
+inline string Layout(const string &src, const vector<pair<const char *, uint16_t>> &roles) {
     auto items = Collect(src, roles);
     auto out = Lines(items, {});
     // Tables, as gofmt lines them up: a run of consecutive lines that declare
@@ -766,7 +767,7 @@ inline FormatResult Format(string_view input, const string &filename, bool verif
     ast.sink = [](const Diagnostic &) {};
     ast.sources.emplace_back(filename, make_unique<string>(src));
     auto &text = *ast.sources[0].second;
-    vector<pair<const char *, uint8_t>> roles;
+    vector<pair<const char *, uint16_t>> roles;
     try {
         Parser p(ast, ast.sources[0].first, text, 0);
         p.roles = &roles;

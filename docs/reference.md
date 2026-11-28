@@ -2841,6 +2841,46 @@ bounds check, `exit`, and a contained worker's abort end the code without
 running any, and the process or the worker's end reclaims what the body
 would have released. Spec §6.6.
 
+### `using`
+
+C#-style `using` declarations and blocks provide deterministic resource disposal
+without implicit destructors. Any single-variable `let` or `var` declaration
+prefixed with `using`, or a parenthesized `using (...) { ... }` block, runs
+`x.dispose()` automatically via `defer` when its scope exits (LIFO order,
+including early `return`, loop `break`/`continue`, `return … from`, and `own`
+handle obligations):
+
+* **`using let x = expr;` / `using var x = expr;`** binds `x` in the enclosing
+  block and emits `defer x.dispose();` immediately after it.
+* **`using (let x = expr) { … }` / `using (var x = expr) { … }`** limits `x`
+  to the inner block and calls `x.dispose()` when that block ends.
+* **`using (expr) { … }`** evaluates `expr` into an anonymous scoped binding and
+  disposes it when the inner block exits.
+
+```klang
+struct File { id: i64 }
+fn open(id: i64) -> File { File { id: id } }
+fn dispose(f: File) { print("close ", f.id); }
+
+fn main() {
+    using let a = open(1);
+    using (let b = open(2)) {
+        print("use ", b.id);
+    }
+    print("after inner ", a.id);
+}
+```
+
+```
+use 2
+close 2
+after inner 1
+close 1
+```
+
+`using` is contextual: outside statement/declaration position, `using` remains an
+ordinary identifier (`let using = 10;`).
+
 ### Loops
 
 <!-- fragment -->

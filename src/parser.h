@@ -23,7 +23,7 @@ struct Import {
 // (format.h): a `<` or `>` of a generic list rather than a comparison, a
 // unary operator rather than a binary one, and a bracket whose list may end
 // in a comma. Recorded only where Parser::roles is set.
-enum TokenRole : uint8_t {
+enum TokenRole : uint16_t {
     R_ANGLE_OPEN = 1,     // `<` opening a generic parameter or argument list.
     R_ANGLE_CLOSE = 2,    // `>` closing one; recorded twice for a `>>` closing two.
     R_GLUE = 4,           // `>`, `..` and `<` inside an array type's `[>..<]`.
@@ -32,6 +32,7 @@ enum TokenRole : uint8_t {
     R_GLUE_LEFT = 32,     // The `!` of `as!`.
     R_LIST = 64,          // A `(`, `[` or `{` whose list may end in a comma.
     R_FUNVAL = 128,       // The `{` of a trailing block, a function value.
+    R_USING = 256,        // Contextual `using` statement / declaration keyword.
 };
 
 struct Parser {
@@ -43,11 +44,12 @@ struct Parser {
     // The roles of the tokens parsed (TokenRole), by where each starts in
     // the source, for the formatter; null, and nothing recorded, in a
     // compile. A backtrack drops those of what it backtracks over.
-    vector<pair<const char *, uint8_t>> *roles = nullptr;
-    void Role(uint8_t r) { if (roles) roles->push_back({ lex.attr.data(), r }); }
-    void RoleAt(const char *at, uint8_t r) { if (roles) roles->push_back({ at, r }); }
+    vector<pair<const char *, uint16_t>> *roles = nullptr;
+    void Role(uint16_t r) { if (roles) roles->push_back({ lex.attr.data(), r }); }
+    void RoleAt(const char *at, uint16_t r) { if (roles) roles->push_back({ at, r }); }
     size_t RoleMark() const { return roles ? roles->size() : 0; }
     void DropRoles(size_t mark) { if (roles) roles->resize(mark); }
+    int using_anon_seq = 0;          // Counter for anonymous `using (expr) { ... }` temporaries.
 
     // Rust-style restriction: no struct literals / trailing blocks directly in
     // if/while/for/match/guard scrutinee position, so `if x {` is unambiguous.
@@ -166,7 +168,7 @@ struct Parser {
                 return !declaration;
             default:
                 return (declaration && AtDecorator()) || AtAsync() || AtInline() ||
-                       AtCheckfree() || AtDeprecated();
+                       AtCheckfree() || AtDeprecated() || (!declaration && AtUsing());
         }
     }
 
@@ -364,6 +366,38 @@ struct Parser {
     bool AtDeprecated() {
         if (lex.tok != T_IDENT || lex.attr != "deprecated") return false;
         return DeprecatedIntro();
+    }
+
+    // Separate helper keeps Lexer copy out of ParseStatement's stack frame.
+    bool UsingParenIntro() {
+        auto copy = lex;
+        try {
+            copy.Next();  // '('
+            copy.Next();
+            if (copy.tok == T_LET || copy.tok == T_VAR) return true;
+            int depth = 1;
+            while (depth > 0 && copy.tok != T_EOF) {
+                if (copy.tok == T_LPAREN) depth++;
+                else if (copy.tok == T_RPAREN) depth--;
+                copy.Next();
+            }
+            return depth == 0 && copy.tok == T_LCURLY;
+        } catch (CompileError &) {
+            return false;
+        }
+    }
+
+    // Contextual `using` statement/declaration:
+    //   using let/var x = expr;
+    //   using let/var x = expr { ... }
+    //   using (let/var x = expr) { ... }
+    //   using (expr) { ... }
+    // Remains an ordinary identifier everywhere else (`let using = ...`, `using(x)`).
+    bool AtUsing() {
+        if (lex.tok != T_IDENT || lex.attr != "using") return false;
+        auto next = lex.PeekTok();
+        if (next == T_LET || next == T_VAR) return true;
+        return next == T_LPAREN && UsingParenIntro();
     }
 
     void Expect(TType t, const char *context) {
@@ -2461,6 +2495,7 @@ struct Parser {
     // ended (its `}` consumed, by a guard's rest of the block included).
     bool ParseStatement(Block *b) {
         if (AtAsync() || AtInline() || AtCheckfree() || AtDeprecated()) goto nestedfndecl;
+        if (AtUsing()) return ParseUsing(b);
         switch (lex.tok) {
             case T_LET: case T_VAR: case T_CONST: case T_REUSABLE: {
                 if (lex.tok == T_CONST && lex.PeekTok() == T_FOR) {
@@ -2563,7 +2598,7 @@ struct Parser {
                 case T_SIMD:
                     Error(cat("defer takes a statement or a block, not `", TokStr(), "`"));
                 default:
-                    if (AtDeprecated())
+                    if (AtDeprecated() || AtUsing())
                         Error(cat("defer takes a statement or a block, not `", TokStr(), "`"));
                     break;
             }
@@ -2573,6 +2608,70 @@ struct Parser {
             Finish(body);
         }
         return Finish(New<Defer>(line, body));
+    }
+
+    Node *MakeDisposeDefer(Line line, string_view name) {
+        auto rec = Finish(New<Ident>(line, name));
+        auto dot = Finish(New<Dot>(line, rec, "dispose", curns));
+        auto call = Finish(New<Call>(line, dot));
+        auto db = New<Block>(line);
+        db->stmts.push_back(call);
+        Finish(db);
+        return Finish(New<Defer>(line, db));
+    }
+
+    // C#-style deterministic disposal: `using let/var x = e;`,
+    // `using (let/var x = e) { ... }`, and `using (e) { ... }`.
+    // Desugars cleanly to declaration + `defer x.dispose();`.
+    bool ParseUsing(Block *b) {
+        auto line = CurLine();
+        Role(R_USING);
+        lex.Next();  // 'using'
+        auto check_using_decl = [&](VarDecl *vd) {
+            if (vd->names.size() != 1 || vd->inits.size() != 1 || vd->byref)
+                Error("using declaration requires a single initialized let or var");
+        };
+        auto finish_using_scope = [&](VarDecl *vd, Block *body) -> bool {
+            auto scope = New<Block>(line);
+            scope->stmts.push_back(vd);
+            scope->stmts.push_back(MakeDisposeDefer(line, vd->names[0]));
+            if (body->tail) scope->tail = body;
+            else scope->stmts.push_back(body);
+            Finish(scope);
+            bool semi = IsNext(T_SEMI);
+            if (scope->tail && !semi && IsNext(T_RCURLY)) {
+                b->tail = scope;
+                return false;
+            }
+            b->stmts.push_back(scope);
+            return true;
+        };
+
+        if (lex.tok == T_LET || lex.tok == T_VAR) {
+            auto vd = ParseVarDecl(false);
+            check_using_decl(vd);
+            Expect(T_SEMI, "using declaration");
+            b->stmts.push_back(vd);
+            b->stmts.push_back(MakeDisposeDefer(line, vd->names[0]));
+            return true;
+        }
+
+        Expect(T_LPAREN, "using statement");
+        VarDecl *vd = nullptr;
+        if (lex.tok == T_LET || lex.tok == T_VAR) {
+            vd = ParseVarDecl(false);
+            check_using_decl(vd);
+        } else {
+            auto expr = ParseExpr();
+            vd = New<VarDecl>(line, false);
+            vd->using_anon = true;
+            vd->names.push_back(ast.Intern(cat("using#", ++using_anon_seq)));
+            vd->inits.push_back(expr);
+            Finish(vd);
+        }
+        Expect(T_RPAREN, "using statement");
+        auto body = ParseBlockExpr("using body");
+        return finish_using_scope(vd, body);
     }
 
     // `a, b = f();` assigns a call's results to places that exist (§7.1),
