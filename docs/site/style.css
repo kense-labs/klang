@@ -1636,3 +1636,136 @@ footer.doc-footer a:hover {
     display: none;
   }
 }
+
+/* ---------- Bilingual Language Dropdown & i18n Controls ---------- */
+.lang-wrap {
+  position: relative;
+}
+
+.lang-popover {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  min-width: 148px;
+  padding: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-raised);
+  z-index: 60;
+  display: none;
+}
+
+.lang-popover.open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lang-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-align: left;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard);
+}
+
+.lang-option:hover {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.lang-option[aria-checked="true"] {
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.lang-check {
+  opacity: 0;
+  color: var(--accent);
+}
+
+.lang-option[aria-checked="true"] .lang-check {
+  opacity: 1;
+}
+
+/* Sidebar EN badge for English-only deep docs when browsing in Chinese */
+.sb-row {
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.sb-row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sb-en-badge {
+  display: none;
+  flex-shrink: 0;
+  padding: 0 0.32rem;
+  height: 15px;
+  line-height: 15px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font: 500 0.58rem/15px var(--mono);
+  letter-spacing: 0.02em;
+}
+
+html[data-lang="zh"] .sb-en-badge {
+  display: inline-block;
+}
+
+/* Fallback notice banner on English-only pages viewed with Chinese UI */
+.zh-fallback-note {
+  display: none;
+  margin: 0.65rem 0 1rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+html[data-lang="zh"] .zh-fallback-note {
+  display: block;
+}
+
+.zh-fallback-note a {
+  color: var(--ink);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Hide redundant GitHub-only language switcher & anchor jump rows in home README */
+.home-readme-body > h1:first-of-type + p,
+.home-readme-body > h1:first-of-type + p + p {
+  display: none;
+}
+
+/* Search result language pill */
+.kui-cmdk-lang-pill {
+  display: inline-block;
+  padding: 0 0.32rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font: 500 0.62rem/1.35 var(--mono);
+  margin-right: 0.25rem;
+}
+

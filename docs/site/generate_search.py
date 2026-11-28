@@ -8,7 +8,6 @@ import hashlib
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SITE = os.path.dirname(os.path.abspath(__file__))
 
-# Copy logic from build.py
 pages = []
 pages.append(("README.md", "index.html"))
 pages.append(("README.zh-CN.md", "README.zh-CN.html"))
@@ -17,6 +16,9 @@ for src in sorted(glob.glob(os.path.join(ROOT, "docs", "*.md"))):
     name = os.path.basename(src)
     if name != "index.md":
         pages.append(("docs/" + name, "docs/" + name[:-3] + ".html"))
+for src in sorted(glob.glob(os.path.join(ROOT, "docs", "zh", "*.md"))):
+    name = os.path.basename(src)
+    pages.append(("docs/zh/" + name, "docs/zh/" + name[:-3] + ".html"))
 for src in sorted(glob.glob(os.path.join(ROOT, "docs", "design", "*.md"))):
     name = os.path.basename(src)
     pages.append(("docs/design/" + name, "docs/design/" + name[:-3] + ".html"))
@@ -27,6 +29,7 @@ for src in sorted(glob.glob(os.path.join(ROOT, "bench", "*.md"))):
     pages.append(("bench/" + name, "bench/" + name[:-3] + ".html"))
 pages.append(("vscode/README.md", "vscode/index.html"))
 pages.append(("test/k_in_k/README.md", "test/k_in_k/index.html"))
+
 
 def slug(h):
     # Matches pandoc's gfm auto identifiers
@@ -52,6 +55,7 @@ def build_index(out_dir):
         with open(src_path, encoding='utf-8') as f:
             lines = f.read().split('\n')
 
+        page_lang = 'zh' if (src_rel == 'README.zh-CN.md' or src_rel.startswith('docs/zh/')) else 'en'
         page_title = os.path.basename(src_rel).replace('.md', '')
         for line in lines:
             m = re.match(r'^#\s+(.*)', line)
@@ -59,7 +63,6 @@ def build_index(out_dir):
                 page_title = plain(m.group(1))
                 break
 
-        # One entry per section, code blocks included
         sections = [(page_title, "", [])]
         in_code = False
         for line in lines:
@@ -80,10 +83,10 @@ def build_index(out_dir):
                 'heading': heading if anchor else "",
                 'url': out_url + ('#' + anchor if anchor else ''),
                 'content': text,
+                'lang': page_lang,
             })
 
-    data = json.dumps(search_index, separators=(',', ':')).encode('utf-8')
-    # Content hash in the name lets the browser cache the file forever
+    data = json.dumps(search_index, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     name = 'search.%s.json' % hashlib.sha256(data).hexdigest()[:10]
     with open(os.path.join(out_dir, name), 'wb') as f:
         f.write(data)

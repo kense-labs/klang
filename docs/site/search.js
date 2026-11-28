@@ -1,4 +1,4 @@
-// KUI Command Palette Search for K docs — zero dependencies
+// KUI Command Palette Bilingual Search for K docs — zero dependencies
 (function () {
   var searchIndex = [];
   var loading = false;
@@ -6,6 +6,10 @@
   var selectedIndex = -1;
 
   var backdrop, input, resultsEl, countEl, openBtn, closeBtn;
+
+  function activeLang() {
+    return document.documentElement.getAttribute("data-lang") || "en";
+  }
 
   function loadSearchIndex() {
     if (loading || !window.searchFile) return;
@@ -15,8 +19,12 @@
       .then(function (data) {
         data.forEach(function (d) { d.lower = d.content.toLowerCase(); });
         searchIndex = data;
-        if (input && input.value.trim().length >= 2) {
+        if (input && input.value.trim().length > 0) {
           runSearch(input.value);
+        } else if (countEl && backdrop && backdrop.classList.contains("open")) {
+          countEl.textContent = activeLang() === "zh"
+            ? ("已索引 " + searchIndex.length + " 个章节")
+            : (searchIndex.length + " sections indexed");
         }
       })
       .catch(function (err) {
@@ -38,7 +46,7 @@
     return score;
   }
 
-  function scoreMatch(item, terms) {
+  function scoreMatch(item, terms, uiLang) {
     var heading = (item.heading || item.title).toLowerCase();
     var text = item.lower;
     var score = 0;
@@ -48,6 +56,7 @@
       score += s;
     }
     if (item.heading === "") score += 0.5;
+    if (item.lang === uiLang) score += 5;
     return score;
   }
 
@@ -86,37 +95,55 @@
 
   function runSearch(query) {
     if (!resultsEl) return;
-    if (!query || query.trim().length < 2) {
+    var uiLang = activeLang();
+    var trimmed = (query || "").trim();
+    var minLen = /[\u4e00-\u9fff]/.test(trimmed) ? 1 : 2;
+    if (trimmed.length < minLen) {
       currentResults = [];
       selectedIndex = -1;
-      resultsEl.innerHTML = '<div class="kui-cmdk-empty">Type at least 2 characters to search K language docs, benchmarks, and design notes.</div>';
-      if (countEl) countEl.textContent = searchIndex.length ? searchIndex.length + " sections indexed" : "";
+      resultsEl.innerHTML = '<div class="kui-cmdk-empty">' +
+        (uiLang === "zh"
+          ? "输入中文或英文关键词，搜索 K 语言文档、图解、规范与基准报告。"
+          : "Type at least 2 characters to search K language docs, benchmarks, and design notes.") +
+        "</div>";
+      if (countEl) {
+        countEl.textContent = searchIndex.length
+          ? (uiLang === "zh" ? ("已索引 " + searchIndex.length + " 个章节") : (searchIndex.length + " sections indexed"))
+          : "";
+      }
       return;
     }
 
-    var terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+    var terms = trimmed.toLowerCase().split(/\s+/).filter(Boolean);
     currentResults = searchIndex
-      .map(function (item) { return { item: item, score: scoreMatch(item, terms) }; })
+      .map(function (item) { return { item: item, score: scoreMatch(item, terms, uiLang) }; })
       .filter(function (r) { return r.score > 0; })
       .sort(function (a, b) { return b.score - a.score; })
       .slice(0, 18);
 
     selectedIndex = currentResults.length > 0 ? 0 : -1;
-    if (countEl) countEl.textContent = currentResults.length + " results";
+    if (countEl) {
+      countEl.textContent = uiLang === "zh"
+        ? (currentResults.length + " 条匹配")
+        : (currentResults.length + " results");
+    }
 
     if (currentResults.length === 0) {
-      resultsEl.innerHTML = '<div class="kui-cmdk-empty">No matching documentation sections found.</div>';
+      resultsEl.innerHTML = '<div class="kui-cmdk-empty">' +
+        (uiLang === "zh" ? "未找到匹配的文档章节。" : "No matching documentation sections found.") +
+        "</div>";
       return;
     }
 
     resultsEl.innerHTML = currentResults.map(function (r, idx) {
       var item = r.item;
-      var snippet = getSnippet(item.content, query);
+      var snippet = getSnippet(item.content, trimmed);
       var title = item.heading ? item.heading : item.title;
       var page = item.heading ? item.title : item.url;
+      var badge = item.lang === "zh" ? "中文" : "EN";
       return (
         '<a href="' + root + item.url + '" class="kui-cmdk-item' + (idx === 0 ? " active" : "") + '" data-index="' + idx + '">' +
-        '<div class="kui-cmdk-item-title"><span>' + escapeHtml(title) + '</span><span class="kui-cmdk-item-page">' + escapeHtml(page) + "</span></div>" +
+        '<div class="kui-cmdk-item-title"><span>' + escapeHtml(title) + '</span><span class="kui-cmdk-item-page"><span class="kui-cmdk-lang-pill">' + badge + '</span> ' + escapeHtml(page) + "</span></div>" +
         (snippet ? '<div class="kui-cmdk-item-snippet">' + escapeHtml(snippet) + "</div>" : "") +
         "</a>"
       );
@@ -148,12 +175,8 @@
     closeBtn = document.getElementById("k-cmdk-close");
     if (!backdrop || !input || !resultsEl) return;
 
-    if (openBtn) {
-      openBtn.addEventListener("click", openModal);
-    }
-    if (closeBtn) {
-      closeBtn.addEventListener("click", closeModal);
-    }
+    if (openBtn) openBtn.addEventListener("click", openModal);
+    if (closeBtn) closeBtn.addEventListener("click", closeModal);
     backdrop.addEventListener("click", function (e) {
       if (e.target === backdrop) closeModal();
     });
@@ -164,10 +187,7 @@
     });
 
     input.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") {
-        closeModal();
-        return;
-      }
+      if (e.key === "Escape") { closeModal(); return; }
       if (e.key === "ArrowDown") {
         if (!currentResults.length) return;
         e.preventDefault();
@@ -187,9 +207,7 @@
     });
 
     resultsEl.addEventListener("click", function (e) {
-      if (e.target.closest(".kui-cmdk-item")) {
-        closeModal();
-      }
+      if (e.target.closest(".kui-cmdk-item")) closeModal();
     });
 
     document.addEventListener("keydown", function (e) {
@@ -200,9 +218,7 @@
         return;
       }
       if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable)) {
-        if (e.key === "Escape" && backdrop.classList.contains("open")) {
-          closeModal();
-        }
+        if (e.key === "Escape" && backdrop.classList.contains("open")) closeModal();
         return;
       }
       if (e.key === "/") {

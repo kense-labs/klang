@@ -1,5 +1,29 @@
-// K Language Documentation — KUI UI Interactions
+// K Language Documentation — KUI UI & Bilingual i18n Interactions
 (function () {
+  function getActiveLang() {
+    return document.documentElement.getAttribute("data-lang") || "en";
+  }
+
+  function applyLocale(lang) {
+    document.documentElement.setAttribute("data-lang", lang);
+
+    document.querySelectorAll("[data-en][data-zh]").forEach(function (el) {
+      el.textContent = lang === "zh" ? el.getAttribute("data-zh") : el.getAttribute("data-en");
+    });
+
+    document.querySelectorAll("[data-en-href][data-zh-href]").forEach(function (el) {
+      el.setAttribute("href", lang === "zh" ? el.getAttribute("data-zh-href") : el.getAttribute("data-en-href"));
+    });
+
+    document.querySelectorAll("[data-en-placeholder][data-zh-placeholder]").forEach(function (el) {
+      el.setAttribute("placeholder", lang === "zh" ? el.getAttribute("data-zh-placeholder") : el.getAttribute("data-en-placeholder"));
+    });
+
+    document.querySelectorAll(".lang-option").forEach(function (opt) {
+      opt.setAttribute("aria-checked", opt.getAttribute("data-lang-val") === lang ? "true" : "false");
+    });
+  }
+
   function initTheme() {
     var btn = document.getElementById("k-theme-toggle");
     if (!btn) return;
@@ -18,8 +42,7 @@
 
     function syncActive() {
       var cur = document.documentElement.getAttribute("data-accent") || "neutral";
-      var swatches = pop.querySelectorAll(".accent-swatch");
-      swatches.forEach(function (el) {
+      pop.querySelectorAll(".accent-swatch").forEach(function (el) {
         el.setAttribute("aria-pressed", el.getAttribute("data-accent-val") === cur ? "true" : "false");
       });
     }
@@ -27,6 +50,8 @@
 
     btn.addEventListener("click", function (e) {
       e.stopPropagation();
+      var langPop = document.getElementById("k-lang-popover");
+      if (langPop) langPop.classList.remove("open");
       var open = pop.classList.toggle("open");
       btn.setAttribute("aria-expanded", open ? "true" : "false");
     });
@@ -38,6 +63,48 @@
       document.documentElement.setAttribute("data-accent", val);
       try { localStorage.setItem("k-docs-accent", val); } catch (err) {}
       syncActive();
+    });
+
+    document.addEventListener("click", function (e) {
+      if (!pop.contains(e.target) && e.target !== btn) {
+        pop.classList.remove("open");
+        btn.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
+
+  function initLanguageDropdown() {
+    var btn = document.getElementById("k-lang-btn");
+    var pop = document.getElementById("k-lang-popover");
+    if (!btn || !pop) return;
+
+    applyLocale(getActiveLang());
+
+    btn.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var accPop = document.getElementById("k-accent-popover");
+      if (accPop) accPop.classList.remove("open");
+      var open = pop.classList.toggle("open");
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+
+    pop.addEventListener("click", function (e) {
+      var opt = e.target.closest(".lang-option");
+      if (!opt) return;
+      var targetLang = opt.getAttribute("data-lang-val");
+      var targetHref = opt.getAttribute("data-target-href");
+      var isPaired = opt.getAttribute("data-paired") === "true";
+      var pageLang = document.documentElement.getAttribute("data-page-lang") || "en";
+
+      try { localStorage.setItem("k-docs-lang", targetLang); } catch (err) {}
+      pop.classList.remove("open");
+      btn.setAttribute("aria-expanded", "false");
+
+      if (isPaired && targetLang !== pageLang && targetHref) {
+        window.location.href = targetHref;
+        return;
+      }
+      applyLocale(targetLang);
     });
 
     document.addEventListener("click", function (e) {
@@ -71,8 +138,7 @@
       if (e.key === "Escape") closeDrawer();
     });
 
-    var links = document.querySelectorAll("aside.aside .sb-row");
-    links.forEach(function (a) {
+    document.querySelectorAll("aside.aside .sb-row").forEach(function (a) {
       a.addEventListener("click", closeDrawer);
     });
   }
@@ -80,10 +146,10 @@
   function copyText(text, btn) {
     if (!navigator.clipboard) return;
     navigator.clipboard.writeText(text).then(function () {
-      var orig = btn.getAttribute("data-orig-label") || btn.textContent;
-      btn.setAttribute("data-orig-label", orig);
+      var lang = getActiveLang();
+      var orig = lang === "zh" ? (btn.getAttribute("data-zh") || "复制") : (btn.getAttribute("data-en") || "Copy");
       btn.setAttribute("data-copied", "true");
-      btn.textContent = "Copied";
+      btn.textContent = lang === "zh" ? "已复制" : "Copied";
       clearTimeout(btn._copyTimer);
       btn._copyTimer = setTimeout(function () {
         btn.removeAttribute("data-copied");
@@ -111,14 +177,11 @@
   function enhanceCodeBlocks() {
     var body = document.querySelector(".doc-body");
     if (!body) return;
-    var blocks = body.querySelectorAll("div.sourceCode, pre");
-    blocks.forEach(function (block) {
-      if (block.tagName === "PRE" && block.parentElement && block.parentElement.classList.contains("sourceCode")) {
-        return;
-      }
-      if (block.parentElement && block.parentElement.classList.contains("kui-code-wrap")) {
-        return;
-      }
+    var activeLang = getActiveLang();
+    body.querySelectorAll("div.sourceCode, pre").forEach(function (block) {
+      if (block.tagName === "PRE" && block.parentElement && block.parentElement.classList.contains("sourceCode")) return;
+      if (block.parentElement && block.parentElement.classList.contains("kui-code-wrap")) return;
+
       var lang = detectLang(block);
       var wrap = document.createElement("div");
       wrap.className = "kui-code-wrap";
@@ -133,14 +196,15 @@
       var btn = document.createElement("button");
       btn.type = "button";
       btn.className = "kui-copy-btn";
-      btn.textContent = "Copy";
+      btn.setAttribute("data-en", "Copy");
+      btn.setAttribute("data-zh", "复制");
+      btn.textContent = activeLang === "zh" ? "复制" : "Copy";
       btn.addEventListener("click", function () {
         copyText(block.innerText.replace(/\n$/, ""), btn);
       });
 
       head.appendChild(label);
       head.appendChild(btn);
-
       block.parentNode.insertBefore(wrap, block);
       wrap.appendChild(head);
       wrap.appendChild(block);
@@ -148,8 +212,7 @@
   }
 
   function enhanceTables() {
-    var tables = document.querySelectorAll(".doc-body table");
-    tables.forEach(function (tbl) {
+    document.querySelectorAll(".doc-body table").forEach(function (tbl) {
       if (tbl.parentElement && tbl.parentElement.classList.contains("table-wrap")) return;
       var wrap = document.createElement("div");
       wrap.className = "table-wrap";
@@ -166,7 +229,7 @@
     if (!modal || !img) return;
     img.src = src;
     img.alt = title || "Diagram";
-    if (ttl) ttl.textContent = title || "Kense OS Diagram";
+    if (ttl) ttl.textContent = title || (getActiveLang() === "zh" ? "Kense OS 架构图解" : "Kense OS Diagram");
     if (openLink) {
       if (svgUrl) {
         openLink.href = svgUrl;
@@ -183,21 +246,13 @@
     var closeBtn = document.getElementById("k-lightbox-close");
     if (!modal) return;
 
-    function close() {
-      modal.classList.remove("open");
-    }
-
+    function close() { modal.classList.remove("open"); }
     if (closeBtn) closeBtn.addEventListener("click", close);
-    modal.addEventListener("click", function (e) {
-      if (e.target === modal) close();
-    });
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape") close();
-    });
+    modal.addEventListener("click", function (e) { if (e.target === modal) close(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
 
-    // Attach zoom action to diagram images inside article body
-    var imgs = document.querySelectorAll('.doc-body img[src*="diagrams/"]');
-    imgs.forEach(function (img) {
+    var activeLang = getActiveLang();
+    document.querySelectorAll('.doc-body img[src*="diagrams/"]').forEach(function (img) {
       var parentLink = img.closest("a");
       var svgHref = parentLink ? parentLink.getAttribute("href") : img.getAttribute("src");
       var container = img.closest("p");
@@ -206,7 +261,9 @@
         bar.className = "diagram-frame-bar";
 
         var desc = document.createElement("span");
-        desc.textContent = "Kense OS Architecture Diagram";
+        desc.setAttribute("data-en", "Kense OS Architecture Diagram");
+        desc.setAttribute("data-zh", "Kense OS 架构图解");
+        desc.textContent = activeLang === "zh" ? "Kense OS 架构图解" : "Kense OS Architecture Diagram";
 
         var acts = document.createElement("span");
         acts.className = "diagram-frame-actions";
@@ -214,7 +271,9 @@
         var zoomBtn = document.createElement("button");
         zoomBtn.type = "button";
         zoomBtn.className = "stage-chip";
-        zoomBtn.textContent = "Inspect";
+        zoomBtn.setAttribute("data-en", "Inspect");
+        zoomBtn.setAttribute("data-zh", "放大查看");
+        zoomBtn.textContent = activeLang === "zh" ? "放大查看" : "Inspect";
         zoomBtn.addEventListener("click", function () {
           openLightbox(svgHref || img.src, img.alt || "Kense OS Diagram", svgHref);
         });
@@ -279,9 +338,7 @@
 
   function scrollActiveSidebar() {
     var active = document.querySelector('aside.aside .sb-row[aria-current="page"]');
-    if (active) {
-      active.scrollIntoView({ block: "nearest" });
-    }
+    if (active) active.scrollIntoView({ block: "nearest" });
   }
 
   function init() {
@@ -292,6 +349,7 @@
     enhanceTables();
     initLightbox();
     initHeroStage();
+    initLanguageDropdown();
     scrollActiveSidebar();
   }
 
