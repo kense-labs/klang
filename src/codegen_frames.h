@@ -79,7 +79,50 @@ inline string CodeGen::SyncReach(FnSpec *callee, const vector<string> &args,
     // one, above) reaches none of them.
     auto &ki = sinfo[callee];
     if ((reftops || topdst || topcap) && ki.hasrf) return "*";
-    if ((reftops || topdst) && !ki.globals.empty()) return "*";
+    if ((reftops || topdst) && !ki.globals.empty()) {
+        if (!curspec) return "*";
+        vector<TypeExpr *> cached;
+        if (reftops) {
+            for (auto pt : curspec->argtypes) {
+                if (IsFatRef(pt)) cached.push_back(pt->ref->sub);
+                else if (pt->kind == TY_REF && IsRoot(pt->ref->sub)) {
+                    for (auto ft : SI(pt->ref->sub)->ftypes)
+                        if (ft && IsResz(ft)) cached.push_back(ft);
+                }
+            }
+        }
+        if (topdst) {
+            for (auto rt : curspec->rets)
+                if (IsBytesT(rt)) cached.push_back(rt);
+        }
+        auto tail_of = [&](TypeExpr *x) -> TypeExpr * {
+            if (!IsFrameObj(x)) return nullptr;
+            auto si = SI(x);
+            return si->ftypes[LastRealField(si->st->fields)];
+        };
+        auto matches_cached = [&](TypeExpr *gt) {
+            for (auto pt0 : cached) {
+                for (auto a = gt; a; a = tail_of(a))
+                    for (auto b = pt0; b; b = tail_of(b))
+                        if (TEq(b, a)) return true;
+            }
+            return false;
+        };
+        function<bool(TypeExpr *)> global_may_alias = [&](TypeExpr *t) -> bool {
+            if (!t || HoldsFatRef(t)) return true;
+            if (t->kind == TY_ARRAY && !IsBytesT(t->arr->sub) && !HoldsFatRef(t->arr->sub))
+                return matches_cached(t);
+            if (IsRoot(t)) {
+                for (auto ft : SI(t)->ftypes)
+                    if (ft && (IsBytesT(ft) || HoldsFatRef(ft)) && global_may_alias(ft))
+                        return true;
+                return false;
+            }
+            return true;
+        };
+        for (auto d : ki.globals)
+            if (!d || global_may_alias(d->type)) return "*";
+    }
     auto s = handed;
     for (auto &a : args) { s += a; s += '\x01'; }
     for (auto d : sinfo[callee].globals) {

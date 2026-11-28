@@ -852,6 +852,13 @@ struct CodeGen {
     void RestoreStack(const StackSave &save);
     void PopSc();
     void EmitExitRestores(int to, bool suspending = false);
+    bool HasExitRestores(int to = 0) const {
+        for (int i = (int)cscopes.size() - 1; i >= to; i--) {
+            const auto &s = cscopes[i];
+            if (s.task_controller || !s.defers.empty() || !s.saves.empty()) return true;
+        }
+        return false;
+    }
     void RegisterDefer(Defer *d);
     void EmitDeferBody(Defer *d);
     string AllocStk(bool forlocal);
@@ -1275,6 +1282,8 @@ struct CodeGen {
     // watermark base variables are in C scope wherever exits may restore them.
 
     bool termjump = false;   // The last emitted statement left via goto/return.
+    bool tailrf = false;     // Current return directly returns the emitted call's fixed result.
+    bool tailrf_flushed = false;
 
     void GenBlockInner(Block *b, Dst d, size_t first = 0, int exitscope = -1);
     size_t GenInlineArgs(Block *b);
@@ -1401,7 +1410,7 @@ struct CodeGen {
     void EmitPrefixPatch(const string &pref, IntStorage ls, const string &stk, const string &count,
                          const string &elems);
     void EmitNrvoFinish(const NrvoDest &nd);
-    void Epilogue(const string &retv, bool suspending = false);
+    void Epilogue(const string &retv, bool suspending = false, bool flush = true);
     void GenTaskReturn(Return *r);
     void PropagateReturn(const string &rfval);
     void GenFromReturn(Return *r);

@@ -786,6 +786,8 @@ inline string CodeGen::BytesResultBase(const Dst &dd, string &stk) {
 
 inline vector<string> CodeGen::EmitSpecCall(Call *c, FnSpec *sp, Dst d0, vector<Dst> *alldst) {
     assert(sinfo.count(sp));
+    bool is_tail_rf = tailrf;
+    tailrf = false;
     auto &ki = sinfo[sp];
     auto an = CallArgNodes(c, sp->params.size());
     string ername, slidebase;
@@ -931,12 +933,17 @@ inline vector<string> CodeGen::EmitSpecCall(Call *c, FnSpec *sp, Dst d0, vector<
     } else {
         L(callee, "(", argstr, ");");
     }
-    MarkReload(reach);
+    bool skip_rf = is_tail_rf && c->builtin < 0 && !c->fvbody && !sp->sf->isextern &&
+                   c->rettypes.size() == 1 && TEq(c->rettypes[0], curspec->rets[0]) &&
+                   reprefixbase.empty() && slidebase.empty() && !loan_count &&
+                   !(curspec && sp->needs.count(curspec));
+    if (skip_rf && reach == "*") tailrf_flushed = true;
+    else MarkReload(reach);
     if (loan_count) L("k_task_loans_close(", loans, ", ", loan_count, ");");
     // Checked before the result is fixed up: a call that unwound left none,
     // and a value in flight to a target may sit behind its reserved prefix,
     // where a fixup would move it from where the target's catch finds it.
-    if (ki.hasrf) EmitRfCheck(sp);
+    if (ki.hasrf && !skip_rf) EmitRfCheck(sp);
     if (!reprefixbase.empty()) EmitReprefix(sp, reprefix, reprefixbase, reprefixcnt);
     if (!slidebase.empty()) {
         // Value form arrived as [len][elems]; slide the prefix out and
@@ -1000,7 +1007,7 @@ inline void CodeGen::EmitReprefix(FnSpec *sp, const Dst &dd, const string &base,
 
 inline void CodeGen::EmitRfCheck(FnSpec *callee) {
     if (norfcheck) return;
-    L("if (k_rf) {");
+    L("if (K_UNLIKELY(k_rf)) {");
     ind++;
     auto caught = curspec && callee->needs.count(curspec);
     if (caught) {
@@ -1244,6 +1251,8 @@ inline vector<string> CodeGen::EmitFvCall(Call *c, Dst d0) {
 // specialization with the payload, sharing all other argument slots and
 // return channels across the arms.
 inline vector<string> CodeGen::EmitDispatch(Call *c, Dst d0, vector<Dst> *alldst) {
+    bool is_tail_rf = tailrf;
+    tailrf = false;
     auto sp0 = c->dispatch[0];
     auto an = CallArgNodes(c, sp0->params.size());
     auto pos = c->dispatcharg;
@@ -1432,7 +1441,10 @@ inline vector<string> CodeGen::EmitDispatch(Call *c, Dst d0, vector<Dst> *alldst
         if (ki.cret >= 0) L(retex[ki.cret], " = ", ki.cname, "(", argstr, ");");
         else L(ki.cname, "(", argstr, ");");
         MarkReload(reach);
-        if (ki.hasrf) EmitRfCheck(sp);
+        bool skip_rf = is_tail_rf && c->builtin < 0 && !c->fvbody && !sp->sf->isextern &&
+                       c->rettypes.size() == 1 && TEq(c->rettypes[0], curspec->rets[0]) &&
+                       !reprefix.t && !(curspec && sp->needs.count(curspec));
+        if (ki.hasrf && !skip_rf) EmitRfCheck(sp);
         PopSc();
         ind--;
         L("} break;");

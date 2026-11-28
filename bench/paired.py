@@ -18,18 +18,29 @@ from run_bench import HERE, KLANGDIR, K_N, RUSTDIR, RUST_N, tc, write_sized
 
 ROOT = HERE.parent
 RUST_FLAGS = {"opt-level": 2, "codegen-units": 1, "strip": "none"}
-CARGO_PROJECT = f"""[package]
-name = "paired-bench"
-version = "0.1.0"
-edition = "2021"
+EXTREME_RUST_FLAGS = {"opt-level": 3, "lto": "fat", "codegen-units": 1, "panic": "abort", "strip": "none",
+                      "rustflags": "-C target-cpu=native"}
 
-[workspace]
 
-[profile.release]
-opt-level = {RUST_FLAGS['opt-level']}
-codegen-units = {RUST_FLAGS['codegen-units']}
-strip = "{RUST_FLAGS['strip']}"
-"""
+def cargo_project(rust_flags):
+    lines = [
+        "[package]",
+        'name = "paired-bench"',
+        'version = "0.1.0"',
+        'edition = "2021"',
+        "",
+        "[workspace]",
+        "",
+        "[profile.release]",
+        f"opt-level = {rust_flags['opt-level']}",
+        f"codegen-units = {rust_flags['codegen-units']}",
+        f"strip = \"{rust_flags['strip']}\"",
+    ]
+    if "lto" in rust_flags:
+        lines.append(f"lto = \"{rust_flags['lto']}\"")
+    if "panic" in rust_flags:
+        lines.append(f"panic = \"{rust_flags['panic']}\"")
+    return "\n".join(lines) + "\n"
 
 
 def tool(command, env):
@@ -104,12 +115,15 @@ def builds(root, ksrc, rsrc, settings, first):
     kbin = root / ("k-app" + tc.EXE_SUFFIX)
     rbin = rust_out / "release" / ("paired-bench" + tc.EXE_SUFFIX)
     manifest = root / "rust/Cargo.toml"
-    manifest.write_text(CARGO_PROJECT, encoding="utf-8")
-    envs = {"k": {**settings["env"], "K_HOME": str(k_home)},
-            "rust": {**settings["env"], "CARGO_HOME": str(settings["cargo_home"]),
-                     "CARGO_TARGET_DIR": str(rust_out), "RUSTC": str(settings["rustc"])}}
+    manifest.write_text(cargo_project(settings["rust_flags"]), encoding="utf-8")
+    rust_env = {**settings["env"], "CARGO_HOME": str(settings["cargo_home"]),
+                "CARGO_TARGET_DIR": str(rust_out), "RUSTC": str(settings["rustc"])}
+    if "rustflags" in settings["rust_flags"]:
+        rust_env["RUSTFLAGS"] = settings["rust_flags"]["rustflags"]
+    envs = {"k": {**settings["env"], "K_HOME": str(k_home)}, "rust": rust_env}
     tool([settings["cargo"], "generate-lockfile", "--offline", "--manifest-path", manifest], envs["rust"])
-    commands = {"k": [settings["k"], "build", "--offline", "-O2", "--cc", settings["cc"], "-o", kbin, ksrc],
+    commands = {"k": [settings["k"], "build", "--offline", *settings["k_flags"],
+                      "--cc", settings["cc"], "-o", kbin, ksrc],
                 "rust": [settings["cargo"], "build", "--release", "--offline", "--locked", "--manifest-path", manifest]}
     executables = {"k": kbin, "rust": rbin}
     results = {"k": {}, "rust": {}}
@@ -216,6 +230,7 @@ def run_case(root, work, case, settings, args, first):
 def markdown(report):
     lines = ["# Paired K and Rust benchmark", "", f"{report['host']['platform']} · {report['host']['cpu']}", "",
              f"{report['reps']} measured pairs per size. First process in the first pair is {report['first']}.",
+             f"K flags: `{' '.join(report.get('k_flags', ['-O2']))}` · Rust flags: `{json.dumps(report.get('rust_flags', {}), sort_keys=True)}`",
              "", "| Workload | Series | Size | K median ms | Rust median ms | Rust / K with 95% interval |",
              "| --- | --- | ---: | ---: | ---: | ---: |"]
     for work in report["cases"]:
@@ -240,9 +255,20 @@ def main(argv):
     ap.add_argument("--warmup", type=int, default=2)
     ap.add_argument("--first", choices=("k", "rust"), default="k")
     ap.add_argument("--no-jit", action="store_true")
+    ap.add_argument("--extreme-rust", action="store_true",
+                    help="Use opt-level=3, lto=fat, codegen-units=1, panic=abort, and -C target-cpu=native")
+    ap.add_argument("--k-flags", default="-O2",
+                    help="Comma- or space-separated flags passed to k build (default: -O2)")
+    ap.add_argument("--workloads", default="",
+                    help="Optional comma-separated subset of workload IDs to run")
     args = ap.parse_args(argv)
     if args.reps < 3 or args.warmup < 1:
         ap.error("use at least three measured pairs and one warmup pair")
+    k_flags = [tok for tok in re.split(r"[\s,]+", args.k_flags.strip()) if tok]
+    if not k_flags:
+        k_flags = ["-O2"]
+    rust_flags = dict(EXTREME_RUST_FLAGS if args.extreme_rust else RUST_FLAGS)
+    workload_filter = {w.strip() for w in args.workloads.split(",") if w.strip()}
     args.out = args.out.resolve()
     k, cc, rustc = (p.resolve() for p in (args.exe, args.cc, args.rustc))
     cargo = rustc.with_name("cargo" + tc.EXE_SUFFIX)
@@ -276,7 +302,8 @@ def main(argv):
     if f"commit-hash: {manifest['rust_commit']}" not in rust_version.splitlines():
         raise RuntimeError("rustc does not match the manifest's pinned Rust commit")
     sysroot = Path(tool([rustc, "--print", "sysroot"], env)["stdout"].strip())
-    settings = {"k": k, "cc": cc, "rustc": rustc, "cargo": cargo, "env": env, "cargo_home": args.out / "cargo-home"}
+    settings = {"k": k, "cc": cc, "rustc": rustc, "cargo": cargo, "env": env, "cargo_home": args.out / "cargo-home",
+                "k_flags": k_flags, "rust_flags": rust_flags}
     report = {"schema": 1, "host": host, "status": "failed", "first": args.first, "reps": args.reps,
               "warmup_pairs": args.warmup, "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
               "runner_sha256": {path.name: digest(path) for path in
@@ -284,7 +311,7 @@ def main(argv):
               "tools": {name: {"path": str(path), "sha256": digest(path),
                                "version": tool([path, "--version" if name != "k" else "version"], env)["stdout"].strip()}
                         for name, path in tools.items()},
-              "rust_flags": RUST_FLAGS, "prerequisites": prerequisites,
+              "k_flags": k_flags, "rust_flags": rust_flags, "prerequisites": prerequisites,
               "environment": {key: env[key] for key in ("LC_ALL", "K_PROGRESS", "MACOSX_DEPLOYMENT_TARGET")
                               if key in env},
               "installation_bytes": {"k_release": bytes_on_disk(k.parent), "rust_sysroot": bytes_on_disk(sysroot),
@@ -294,6 +321,8 @@ def main(argv):
     groups = {}
     try:
         for work in manifest["workloads"]:
+            if workload_filter and work["id"] not in workload_filter:
+                continue
             for case in work["cases"]:
                 root = args.out / f"{work['id']}-{case['size']}"
                 root.mkdir()
@@ -302,6 +331,7 @@ def main(argv):
                 report["cases"].append({**{key: work[key] for key in ("id", "family", "tier", "role")},
                                         **case, **results})
                 groups.setdefault(f"{work['tier']} {work['role']}", []).append(logs)
+                groups.setdefault("overall (all workloads)", []).append(logs)
         report["summary"] = {name: ratio_summary(logs) for name, logs in groups.items()}
         validate(manifest)
         report["status"] = "passed"

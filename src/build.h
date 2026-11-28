@@ -23,6 +23,9 @@ struct BuildOptions {
     bool offline = false;     // --offline: CMake uses dependencies already on disk
     string exe;               // -o: the executable/library; "" puts it beside the root source
     bool wasi = false;
+    int opt_level = 2;        // C backend optimization tier (2 = -O2, 3 = -O3)
+    bool lto = false;         // --lto: link-time optimization across the program and runtime
+    bool native_cpu = false;  // --cpu=native: target the host CPU ISA
 };
 
 // K_HOME/build/prog/<stem>-<hash of the root's absolute path>/: where a
@@ -48,13 +51,28 @@ struct Builder {
         if (tc.style == "msvc") {
             vector<string> f = { "/nologo" };
             if (opts.debug) f.push_back("/Od"), f.push_back("/Zi");
-            else f.push_back("/O2");
+            else {
+                f.push_back("/O2");
+                if (opts.opt_level >= 3) f.push_back("/Oi"), f.push_back("/Ot");
+                if (opts.lto && !opts.wasi) f.push_back("/GL");
+            }
             return f;
         }
         vector<string> f;
         if (opts.wasi) f = { "--target=wasm32-wasip1", "-mexec-model=command" };
         if (opts.debug) f.push_back("-O0"), f.push_back("-g");
-        else f.push_back("-O2");
+        else {
+            f.push_back(opts.opt_level >= 3 ? "-O3" : "-O2");
+            if (opts.lto && !opts.wasi)
+                f.push_back(tc.name == "clang" ? "-flto=thin" : "-flto");
+            if (opts.native_cpu && !opts.wasi) {
+                #if defined(__APPLE__) && defined(__aarch64__)
+                    f.push_back("-mcpu=native");
+                #else
+                    f.push_back("-march=native");
+                #endif
+            }
+        }
         return f;
     }
 
@@ -171,6 +189,10 @@ struct Builder {
             argv.push_back(src);
             for (auto &o : objects) argv.push_back(o);
             for (auto &r : rsps) argv.push_back(cat("@", r));
+            if (!opts.debug && opts.lto && !opts.wasi) {
+                argv.push_back("/link");
+                argv.push_back("/LTCG");
+            }
         } else {
             if (opts.shared) {
                 // Not on Windows, where clang rejects the flag for its

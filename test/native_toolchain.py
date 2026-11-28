@@ -68,6 +68,12 @@ def check_native_toolchain(exe, base, *, jit):
         code, out, err = run([exe, "build", "--dry-run", "--cc", info["cc"]["path"], "-o", app, source])
         require(code == 0 and len(runtimes) == 1 and str(runtimes[0]) in out + err,
                 f"the reported compiler did not select the same runtime object:\n{out}{err}")
+        app_opt = root / ("app-opt" + tc.EXE_SUFFIX)
+        code, out, err = run([exe, "build", "-O3", "--lto", "--cpu=native", "-o", app_opt, source])
+        require(code == 0, f"k build -O3 --lto --cpu=native:\n{out}{err}")
+        code, out, err = run([app_opt])
+        require(code == 0 and out.split() == ["12", "-15"],
+                f"the built -O3 --lto --cpu=native program:\n{out}{err}")
         if jit:
             code, out, err = run([exe, "run", source])
             require(code == 0 and out.split() == ["12", "-15"], f"k run:\n{out}{err}")

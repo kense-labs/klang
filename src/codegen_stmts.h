@@ -1074,7 +1074,18 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
         } else if ((int)i == si.cret) {
             retv = T();
             L(CT(rt), " ", retv, ";");
+            bool can_tail_rf = vals.size() == 1 && sp->rets.size() == 1 && !sp->sf->task_suspends &&
+                               IsFix(rt) && !NeedsResultLocation(rt) && !HasExitRestores() &&
+                               fdstsaves.empty();
+            if (can_tail_rf) {
+                if (auto c = Is<Call>(vals[0]); c && c->builtin < 0 && !c->fvbody &&
+                                                c->rettypes.size() == 1 && TEq(c->rettypes[0], rt)) {
+                    tailrf = true;
+                    tailrf_flushed = false;
+                }
+            }
             GenAny(vals[i], Dst { DK_LVALUE, retv, rt });
+            tailrf = false;
         } else if (PtrAbi(rt)) {
             // The caller points k_r at fresh storage (Dst::fresh), so the
             // value is built there directly.
@@ -1086,7 +1097,9 @@ inline void CodeGen::GenNormalReturn(const vector<Node *> &vals) {
             L("*k_r", i, " = ", tv, ";");
         }
     }
-    Epilogue(retv, sp->sf->task_suspends);
+    bool flush = !tailrf_flushed;
+    tailrf_flushed = false;
+    Epilogue(retv, sp->sf->task_suspends, flush);
 }
 
 // Writes the count into the prefix bytes reserved at `pref`, in front of
@@ -1128,9 +1141,9 @@ inline void CodeGen::EmitNrvoFinish(const NrvoDest &nd) {
     EmitPrefixPatch(nd.pref, nd.ls, nd.stk, cat(nd.hdr, ".len"), cat(nd.hdr, ".base"));
 }
 
-inline void CodeGen::Epilogue(const string &retv, bool suspending) {
+inline void CodeGen::Epilogue(const string &retv, bool suspending, bool flush) {
     EmitExitRestores(0, suspending);
-    MarkFlush();   // The caller and every later callee read stack tops from memory.
+    if (flush) MarkFlush();   // The caller and every later callee read stack tops from memory.
     for (auto &s : fdstsaves) L(s);
     L(retv.empty() ? "return;" : cat("return ", retv, ";"));
     termjump = true;

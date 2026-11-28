@@ -122,16 +122,22 @@ inline void CodeGen::EmitRelRangeCheck(TypeExpr *rt, const string &off, Line ln,
     if (bits >= 64) return;
     if (rt->ref->pool) {
         L("#if K_STACK_RESERVE >= (1ull << ", bits, ")");
-        L("if ((uint64_t)", off, " > ", (1ull << bits) - 1, "ull) k_abort(K_E_RELOFF, ",
+        L("if (K_UNLIKELY((uint64_t)", off, " > ", (1ull << bits) - 1, "ull)) k_abort(K_E_RELOFF, ",
           LocArgs(ln), ");");
         L("#endif");
         return;
     }
     auto guarded = inroot && relrootmax <= (1ll << (bits - 1));
     if (guarded) L("#if K_STACK_RESERVE > (1ull << ", bits - 1, ")");
-    L("if (", off, " < -(1LL << ", bits - 1, ") || ", off, " >= (1LL << ",
-      bits - 1, ")) k_abort(K_E_RELOFF, ",
-      LocArgs(ln), ");");
+    if (bits <= 32) {
+        L("if (K_UNLIKELY((uint64_t)((", off, ") + (1LL << ", bits - 1, ")) >= (1ULL << ",
+          bits, "))) k_abort(K_E_RELOFF, ",
+          LocArgs(ln), ");");
+    } else {
+        L("if (K_UNLIKELY(", off, " < -(1LL << ", bits - 1, ") || ", off, " >= (1LL << ",
+          bits - 1, "))) k_abort(K_E_RELOFF, ",
+          LocArgs(ln), ");");
+    }
     if (guarded) L("#endif");
 }
 

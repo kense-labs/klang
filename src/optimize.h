@@ -605,9 +605,10 @@ struct Optimizer {
 
     Optimizer(Ast &_ast, int level) : ast(_ast) {
         switch (level) {
-            case 0:  nc = 0;  ncu = 0;  break;
-            case 1:  nc = 8;  ncu = 48; break;
-            default: nc = 16; ncu = 96; break;
+            case 0:  nc = 0;  ncu = 0;   break;
+            case 1:  nc = 8;  ncu = 48;  break;
+            case 2:  nc = 16; ncu = 96;  break;
+            default: nc = 24; ncu = 144; break;
         }
         // Reachability and use counts from the roots.
         ReachRoots();

@@ -157,13 +157,15 @@ build would use, and why. Setting up Visual Studio's environment takes a
 second or two, so `k` keeps the result in `K_HOME/toolchain` and
 `k toolchain --refresh` sets it up again.
 
-The C is always compiled optimized (`/O2` or `-O2`), whatever `-O` level
-the K compiler used, except under `--debug`. The options of a build,
-beyond those in [§5](#5-options-for-run-build-and-check):
+The C is always compiled optimized (`/O2` or `-O2`, or `-O3` with `-O3`),
+whatever `-O` level the K compiler used, except under `--debug`. The options
+of a build, beyond those in [§5](#5-options-for-run-build-and-check):
 
 | Option | What it does |
 |---|---|
 | `-o exe` | Where the executable goes. Its directory is made if needed. |
+| `--lto` | Enable link-time optimization across the program and runtime. |
+| `--cpu=native` | Tune native code generation for the host CPU (`-mcpu=native` or `-march=native`). |
 | `--debug` | Turn on the overflow, range and tag checks (`K_DEBUG=1`), and build the C without optimization and with debug information (`/Od /Zi`, or `-O0 -g`), for a debugger. |
 | `--cc name\|path` | The C compiler, as above. |
 | `--standalone` | Compile the runtime into the program, rather than linking the runtime object built once per C compiler. |
@@ -231,7 +233,7 @@ These options have the same meaning for `k run`, `k build`,
 
 | Option | What it does |
 |---|---|
-| `-O0`, `-O1`, `-O2` | How much the K compiler inlines: nothing, a little, or the most (the default). Constant folding and propagation run at every level, and a build's C compiler optimizes at every level. |
+| `-O0`, `-O1`, `-O2`, `-O3` | How much the K compiler inlines: nothing, a little, the default, or an expanded `-O3` budget (which also builds C with `-O3`). Constant folding and propagation run at every level, and a build's C compiler optimizes at every level. |
 | `--debug` | Turn on the overflow checks, the range checks of `as` casts and the tag checks (`K_DEBUG=1`). Each failure names its source line, and an overflow or a cast names the values involved. A build also gets debug information ([§3](#3-building-an-executable)). |
 | `-D NAME[=VALUE]` | Define a C macro in the generated program, as `-DNAME[=VALUE]` does too. The define is written into the C itself, so a run and a build see the same source. The value is 1 when none is given. |
 | `--stack-reserve size` | The address space reserved for each data stack, from 64K up to 256T with a `K`, `M`, `G` or `T` suffix. The default is 2G. The address space is committed as it is used, so a large reservation costs nothing until it is used. |

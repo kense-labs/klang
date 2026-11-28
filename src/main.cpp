@@ -303,7 +303,8 @@ Commands:
   help       Print this (or --help, -h); with a command, that command's help.
 
 Common options:
-  -O0, -O1, -O2   Inlining level (default -O2).
+  -O0, -O1, -O2, -O3
+                  Inlining level (default -O2).
   --debug         Overflow, range and tag checks that name the source line
                   they fail on.
   --stats         Print what the compile did (declarations, bounds checks
@@ -333,7 +334,7 @@ its exit code. What follows -- is the program's arguments. A program that
 starts threads needs k build.
 
 Options:
-  -O0, -O1, -O2         Inlining level (default -O2).
+  -O0, -O1, -O2, -O3    Inlining level (default -O2).
 )", DEBUGOPTION, COMPILEOPTIONS,
 R"(  --cc name|path        The C compiler for packages' native parts: msvc,
                         clang-cl, clang, gcc, cc or a path (or K_CC).
@@ -353,8 +354,10 @@ Options:
   --target wasm32-wasip1
                         Build a WASI command module (.wasm). Set WASI_SDK_PATH
                         or pass --cc with the WASI SDK clang path.
-  -O0, -O1, -O2         Inlining level (default -O2). The C compiler
-                        optimizes at every level, unless --debug.
+  -O0, -O1, -O2, -O3    Inlining level (default -O2). The C compiler
+                        optimizes at every level, unless --debug (-O3 uses -O3).
+  --lto                 Enable link-time optimization across the program and runtime.
+  --cpu=native          Tune native code generation for the host CPU.
   --debug               Overflow, range and tag checks that name the source
                         line they fail on, and the C built for a debugger.
 )", COMPILEOPTIONS, CORDISOPTIONS,
@@ -509,7 +512,7 @@ Options:
   --<package>-link msvc|cc
                         Print the response file that links the native part of
                         a package compiled into k (--gfx-link cc).
-  -O0, -O1, -O2         Inlining level (default -O2).
+  -O0, -O1, -O2, -O3    Inlining level (default -O2).
 )", DEBUGOPTION, COMPILEOPTIONS);
     if (topic == "internals") return cat(
 R"(usage: k [options] file.k
@@ -1072,6 +1075,7 @@ int Main(int argc, char **argv) {
     auto stacks = false;
     auto stats = false;
     auto forcejit = false, standalone = false, shared = false;
+    auto lto = false, native_cpu = false;
     auto json = false, refresh = false, debug = false, verbose = false, dryrun = false;
     auto jsondiag = false;
     string ccrequest, target;
@@ -1170,6 +1174,9 @@ int Main(int argc, char **argv) {
         else if (arg == "-O0") optlevel = 0;
         else if (arg == "-O1") optlevel = 1;
         else if (arg == "-O2") optlevel = 2;
+        else if (arg == "-O3") optlevel = 3;
+        else if (arg == "--lto") lto = true;
+        else if (arg == "--cpu=native") native_cpu = true;
         else if (arg == "-o" && i + 1 < argc) outname = argv[++i];
         else if (arg == "--header" && i + 1 < argc) headername = argv[++i];
         else if (arg == "--include" && i + 1 < argc) includenames.push_back(argv[++i]);
@@ -1243,6 +1250,14 @@ int Main(int argc, char **argv) {
         fprintf(stderr, "--shared is an option of k build\n");
         return 1;
     }
+    if ((lto || native_cpu) && verb != "build") {
+        fprintf(stderr, "--lto and --cpu=native are options of k build\n");
+        return 1;
+    }
+    if (wasi && (lto || native_cpu)) {
+        fprintf(stderr, "--lto and --cpu=native are not supported for the WASI target\n");
+        return 1;
+    }
     // What `k build` builds with; its -o names the executable or shared
     // library, and the C goes to the program's build directory (build.h).
     const bool offline = package_fetch == PackageFetchMode::Offline;
@@ -1268,7 +1283,8 @@ int Main(int argc, char **argv) {
             return 1;
         }
         if (shared || wasi) standalone = true;
-        buildopts = BuildOptions { debug, verbose, dryrun, standalone, shared, offline, outname, wasi };
+        buildopts = BuildOptions { debug, verbose, dryrun, standalone, shared, offline, outname, wasi,
+                                   optlevel, lto, native_cpu };
         outname.clear();
     }
     if (files.size() > 1 && !multitest) {

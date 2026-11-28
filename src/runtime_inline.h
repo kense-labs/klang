@@ -213,6 +213,15 @@ R"KRT(#ifdef _MSC_VER
 #endif
 
 )KRT"
+R"KRT(#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
+#define K_LIKELY(x)   __builtin_expect(!!(x), 1)
+#define K_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define K_LIKELY(x)   (x)
+#define K_UNLIKELY(x) (x)
+#endif
+
+)KRT"
 R"KRT(#if K_NEED_THREADS
 #ifdef _MSC_VER
 #define K_TLS __declspec(thread)
@@ -317,8 +326,8 @@ R"KRT(/* Bounds check as one unsigned compare; the index operand must be side-ef
    one the C compiler knows does not return, also where k_idxfail is in the
    runtime object. */
 #define K_IDX(i, n, f, l) \
-    ((uint64_t)(i) < (uint64_t)(n) ? (i) \
-                                   : (k_idxfail((int64_t)(i), (n), (f), (l)), (int64_t)0))
+    (K_LIKELY((uint64_t)(i) < (uint64_t)(n)) ? (i) \
+                                             : (k_idxfail((int64_t)(i), (n), (f), (l)), (int64_t)0))
 
 )KRT"
 R"KRT(/* Statically unreachable spots (e.g. an ADT tag no variant matches): checked
@@ -1310,7 +1319,7 @@ R"KRT(#define K_ULEB_READ(p) ((*(p) & 0x80) ? k_uleb_read_slow(p) : (int64_t)*(p
 #define K_ULEB_SIZE(p) ((*(p) & 0x80) ? k_uleb_size_slow(p) : (int64_t)1)
 
 )KRT"
-R"KRT(static int64_t k_uleb_write(uint8_t *p, uint64_t v) {
+R"KRT(static K_NOINLINE int64_t k_uleb_write_slow(uint8_t *p, uint64_t v) {
     uint8_t *q = p;
     for (;;) {
         uint8_t b = v & 0x7f;
@@ -1321,13 +1330,38 @@ R"KRT(static int64_t k_uleb_write(uint8_t *p, uint64_t v) {
 }
 
 )KRT"
-R"KRT(static int64_t k_zig_read(const uint8_t *p) {
-    uint64_t u = (uint64_t)k_uleb_read(p);
+R"KRT(static inline int64_t k_uleb_write(uint8_t *p, uint64_t v) {
+    if (K_LIKELY(v < 128)) {
+        p[0] = (uint8_t)v;
+        return 1;
+    }
+    if (K_LIKELY(v < 16384)) {
+        p[0] = (uint8_t)(v | 0x80);
+        p[1] = (uint8_t)(v >> 7);
+        return 2;
+    }
+    return k_uleb_write_slow(p, v);
+}
+
+)KRT"
+R"KRT(static inline int64_t k_zig_read(const uint8_t *p) {
+    uint64_t u;
+    uint8_t b0 = p[0];
+    if (K_LIKELY(!(b0 & 0x80))) {
+        u = b0;
+    } else {
+        uint8_t b1 = p[1];
+        if (K_LIKELY(!(b1 & 0x80))) {
+            u = (uint64_t)(b0 & 0x7f) | ((uint64_t)b1 << 7);
+        } else {
+            u = (uint64_t)k_uleb_read_slow(p);
+        }
+    }
     return (int64_t)((u >> 1) ^ (0u - (u & 1)));
 }
 
 )KRT"
-R"KRT(static int64_t k_zig_write(uint8_t *p, int64_t v) {
+R"KRT(static inline int64_t k_zig_write(uint8_t *p, int64_t v) {
     return k_uleb_write(p, ((uint64_t)v << 1) ^ (uint64_t)(v >> 63));
 }
 
