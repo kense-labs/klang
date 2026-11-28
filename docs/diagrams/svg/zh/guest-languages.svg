@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="462" viewBox="0 0 920 462" role="img" aria-labelledby="title description">
+  <title id="title">K · 客座语言</title>
+  <desc id="description">可选 Cordis 组件处理客座语言语法与执行。</desc>
+  <rect width="920" height="462" rx="14" fill="#F8F6F0"/>
+  <g font-family='"PingFang SC", "Noto Sans SC", "Hiragino Sans GB", "Microsoft YaHei", Menlo, monospace'>
+    <rect x="36" y="24" width="848" height="42" rx="8" fill="#141413" stroke="none" stroke-width="1.15"/>
+    <text x="54" y="51" fill="#FDFCF9" font-size="20" text-anchor="start" font-weight="700">客座语言</text>
+    <text x="36" y="92" fill="#645F56" font-size="15" text-anchor="start">可选 Cordis 组件处理客座语言语法与执行。</text>
+    <g>
+    <rect x="36" y="114" width="848" height="58" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="460.0" y="137.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">项目锁选定扩展或运行时服务</text>
+    <text x="460.0" y="159.0" fill="#645F56" font-size="14" text-anchor="middle">k-cordis-source · k-cordis-ts</text>
+    </g>
+    <path d="M460 172V193M170.0 193H750.0" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M170.0 193V218" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="166,211 170,218 174,211" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M170.0 308V329" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="36.0" y="220" width="268.0" height="88" rx="8" fill="#141413" stroke="#141413" stroke-width="1.15"/>
+    <text x="170.0" y="247.0" fill="#FDFCF9" font-size="16" text-anchor="middle" font-weight="700">源码转换</text>
+    <text x="170.0" y="269.0" fill="#FDFCF9" font-size="13.5" text-anchor="middle">围栏 using → 普通 K</text>
+    <text x="170.0" y="291.0" fill="#FDFCF9" font-size="13.5" text-anchor="middle">源码映射 · 类型化桥接</text>
+    </g>
+    <path d="M460.0 193V218" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="456,211 460,218 464,211" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M460.0 308V329" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="326.0" y="220" width="268.0" height="88" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="460.0" y="247.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">代码块适配器</text>
+    <text x="460.0" y="269.0" fill="#645F56" font-size="13.5" text-anchor="middle">CPython / QuickJS</text>
+    <text x="460.0" y="291.0" fill="#645F56" font-size="13.5" text-anchor="middle">i64 · UTF-8 · bytes</text>
+    </g>
+    <path d="M750.0 193V218" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="746,211 750,218 754,211" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M750.0 308V329" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="616.0" y="220" width="268.0" height="88" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="750.0" y="247.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">TypeScript 项目</text>
+    <text x="750.0" y="269.0" fill="#645F56" font-size="13.5" text-anchor="middle">前端 + QuickJS 服务</text>
+    <text x="750.0" y="291.0" fill="#645F56" font-size="13.5" text-anchor="middle">本地 ESM · 顶层 await</text>
+    </g>
+    <path d="M170.0 329H750.0" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M460 329V348" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="456,341 460,348 464,341" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="36" y="348" width="848" height="48" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="460.0" y="377.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">带客座桥接的生成 K 代码包，或独立 ESM 执行</text>
+    </g>
+    <rect x="36" y="410" width="848" height="38" rx="8" fill="#394DF2" stroke="none" stroke-width="1.15"/>
+    <text x="460.0" y="434" fill="#FDFCF9" font-size="14" text-anchor="middle">无论选用何种客座语言，普通 K 源码均使用同一解析器。</text>
+  </g>
+</svg>

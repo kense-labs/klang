@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="462" viewBox="0 0 920 462" role="img" aria-labelledby="title description">
+  <title id="title">K · C 互操作性</title>
+  <desc id="description">以显式所有权与存储生命周期跨越原生 ABI 边界。</desc>
+  <rect width="920" height="462" rx="14" fill="#F8F6F0"/>
+  <g font-family='"PingFang SC", "Noto Sans SC", "Hiragino Sans GB", "Microsoft YaHei", Menlo, monospace'>
+    <rect x="36" y="24" width="848" height="42" rx="8" fill="#141413" stroke="none" stroke-width="1.15"/>
+    <text x="54" y="51" fill="#FDFCF9" font-size="20" text-anchor="start" font-weight="700">C 互操作性</text>
+    <text x="36" y="92" fill="#645F56" font-size="15" text-anchor="start">以显式所有权与存储生命周期跨越原生 ABI 边界。</text>
+    <g>
+    <rect x="36" y="114" width="848" height="58" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="460.0" y="137.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">K extern / export fn + C 声明</text>
+    <text x="460.0" y="159.0" fill="#645F56" font-size="14" text-anchor="middle">由 stdlib/ffi.k 提供辅助接口</text>
+    </g>
+    <path d="M460 172V193M170.0 193H750.0" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M170.0 193V218" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="166,211 170,218 174,211" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M170.0 308V329" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="36.0" y="220" width="268.0" height="88" rx="8" fill="#141413" stroke="#141413" stroke-width="1.15"/>
+    <text x="170.0" y="247.0" fill="#FDFCF9" font-size="16" text-anchor="middle" font-weight="700">调用边界</text>
+    <text x="170.0" y="269.0" fill="#FDFCF9" font-size="13.5" text-anchor="middle">C 布局与函数签名</text>
+    <text x="170.0" y="291.0" fill="#FDFCF9" font-size="13.5" text-anchor="middle">参数 · 返回值</text>
+    </g>
+    <path d="M460.0 193V218" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="456,211 460,218 464,211" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M460.0 308V329" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="326.0" y="220" width="268.0" height="88" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="460.0" y="247.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">资源契约</text>
+    <text x="460.0" y="269.0" fill="#645F56" font-size="13.5" text-anchor="middle">borrow · own · defer 语义</text>
+    <text x="460.0" y="291.0" fill="#645F56" font-size="13.5" text-anchor="middle">资源清理 · 持久存储</text>
+    </g>
+    <path d="M750.0 193V218" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="746,211 750,218 754,211" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M750.0 308V329" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="616.0" y="220" width="268.0" height="88" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="750.0" y="247.0" fill="#141413" font-size="16" text-anchor="middle" font-weight="700">外部库绑定</text>
+    <text x="750.0" y="269.0" fill="#645F56" font-size="13.5" text-anchor="middle">静态 / 链接期原生绑定</text>
+    <text x="750.0" y="291.0" fill="#645F56" font-size="13.5" text-anchor="middle">动态 extern + 生命周期</text>
+    </g>
+    <path d="M170.0 329H750.0" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M460 329V348" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="456,341 460,348 464,341" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="36" y="348" width="848" height="48" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="460.0" y="377.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">版本化原生导出 · 平凡值或显式句柄</text>
+    </g>
+    <rect x="36" y="410" width="848" height="38" rx="8" fill="#394DF2" stroke="none" stroke-width="1.15"/>
+    <text x="460.0" y="434" fill="#FDFCF9" font-size="14" text-anchor="middle">外部资源必须遵循其声明的借用或所有权契约。</text>
+  </g>
+</svg>

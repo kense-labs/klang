@@ -1,6 +1,6 @@
 # 快速上手与 K 语言核心特性
 
-本指南面向希望快速安装 K 编译器，并在 10 分钟内掌握 K 语言与 C++、Rust、Go 关键差异的开发者。如需逐行完整教材或规范细节，可随时参阅英文原版 [Tutorial](../tutorial.md)、[Language Reference](../reference.md) 与 [Specification](../k_spec.md)。
+本指南面向希望快速安装 K 编译器，并在 10 分钟内掌握 K 语言与 C++、Rust、Go 关键差异的开发者。如需逐行完整教材或规范细节，可随时参阅中文完整版 [完整教程（Tutorial）](tutorial.md)、[语言参考手册（Reference）](reference.md) 与 [形式化语言规范（Specification）](k_spec.md)。
 
 ---
 
@@ -69,7 +69,7 @@ K 把容器按照所有权与可变性清晰划分为多个轻量形态：
 
 ### 3.4 按载荷布局的变长 `enum`
 
-传统语言中的 Tagged Union 往往不得不按最大变体对齐，导致大量小节点或内联字符串浪费数倍内存。K 的可变模式 `enum` 允许每个实例只占用自己载荷所需的紧凑空间——这也是 [基准报告](benchmarks.md) 中 `records` 与 `interp` 内存大幅低于 Rust 的关键原因。
+传统语言中的 Tagged Union 往往不得不按最大变体对齐，导致大量小节点或内联字符串浪费数倍内存。K 的可变模式 `enum` 允许每个实例只占用自己载荷所需的紧凑空间——这也是 [基准报告](bench/summary.md) 中 `records` 与 `interp` 内存大幅低于 Rust 的关键原因。
 
 ### 3.5 结构化 `async` 与零共享工作线程
 
@@ -80,6 +80,6 @@ K 把容器按照所有权与可变性清晰划分为多个轻量形态：
 
 ## 下一步阅读
 
-- 浏览全部 [18 张 Kense OS 架构图解](diagrams.md)
-- 查看 [31 个精选实战示例](../../samples/README.md)
-- 查阅 [完整英文教程](../tutorial.md) 与 [性能基准报告](benchmarks.md)
+- 浏览全部 [18 张中文 Kense OS 架构图解](diagrams.md)
+- 查看 [31 个精选实战示例](samples.md)
+- 阅读 [完整教程（Tutorial）](tutorial.md) 与 [性能基准报告](bench/summary.md)

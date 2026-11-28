@@ -1,0 +1,697 @@
+<!doctype html><html lang="zh-CN"><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>K，逐字节解析</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=Fragment+Mono&display=swap">
+<style>
+/* Layout: a long poster on a byte grid. Every diagram is drawn in one-byte cells,
+   and orange marks K and the stack pointer, where memory grows. Text and
+   figures sit side by side on wide screens and stack on phones. */
+:root {
+  --paper: #f2f4f5;      /* feather grey-white: page and chart surface */
+  --ink: #15181b;        /* neck black: text */
+  --ink-2: #4f5861;      /* secondary text, brackets */
+  --rule: #d3d9de;       /* hairlines and grid */
+  --cell: #e1e6ea;       /* a plain byte */
+  --cell-2: #c6ced6;     /* a length, header or tag byte */
+  --bill: #d9650a;       /* orange: K's marks and the stack pointer */
+  --on-bill: #15181b;
+  --pond: #2f6db8;       /* blue: the other side of a comparison */
+  --quiet: #a3abb3;      /* de-emphasised bars */
+  --code-bg: #e7ebee;
+  --tk: #22589f; --ts: #9a4508; --tc: #5f6973; --tn: #6b3fa0; --tt: #15181b; --tb: #9a2f6b; --td: #15181b;
+  --term-bg: #15181b; --term-ink: #e6e9ec; --term-err: #ff8a70; --term-loc: #9cc1f2;
+
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;   /* set wide: font-stretch 112-125% */
+  --font-body: "Archivo", "Helvetica Neue", Arial, sans-serif;      /* set normal width */
+  --font-mono: "Fragment Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --t-hero: clamp(4.25rem, 2.2rem + 10vw, 9.5rem);
+  --t-h2: clamp(1.7rem, 1.1rem + 2.2vw, 2.55rem);
+  --t-h3: 1.15rem;
+  --t-lead: clamp(1.25rem, 1.05rem + 0.8vw, 1.55rem);
+  --t-body: 1.0625rem;
+  --t-small: 0.9rem;
+  --t-micro: 0.75rem;
+  --t-stat: clamp(2.3rem, 1.7rem + 2vw, 3.1rem);
+  --cw: 26px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #121517; --ink: #eceef0; --ink-2: #a4adb6; --rule: #2b3136;
+    --cell: #23292e; --cell-2: #3a434b; --bill: #e0701a; --on-bill: #121517;
+    --pond: #4a88d0; --quiet: #5b646d; --code-bg: #1a1f23;
+    --tk: #8db4ec; --ts: #f0a46b; --tc: #8b959f; --tn: #c3a2f0; --tt: #eceef0; --tb: #f08cbf; --td: #eceef0;
+    --term-bg: #0b0d0f; --term-ink: #e6e9ec; --term-err: #ff8a70; --term-loc: #9cc1f2;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #121517; --ink: #eceef0; --ink-2: #a4adb6; --rule: #2b3136;
+  --cell: #23292e; --cell-2: #3a434b; --bill: #e0701a; --on-bill: #121517;
+  --pond: #4a88d0; --quiet: #5b646d; --code-bg: #1a1f23;
+  --tk: #8db4ec; --ts: #f0a46b; --tc: #8b959f; --tn: #c3a2f0; --tt: #eceef0; --tb: #f08cbf; --td: #eceef0;
+  --term-bg: #0b0d0f; --term-ink: #e6e9ec; --term-err: #ff8a70; --term-loc: #9cc1f2;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--font-body); font-size: var(--t-body); line-height: 1.6;
+  padding-inline: 20px; -webkit-font-smoothing: antialiased;
+}
+.page { max-width: 1180px; margin-inline: auto; padding-block: 40px 88px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 96px; }
+.page > *, .sec > *, .two > *, .hero > * { min-width: 0; }
+a { color: inherit; text-decoration-color: var(--bill); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+a:hover { color: var(--bill); }
+a:focus-visible, .row:focus-visible, summary:focus-visible { outline: 2px solid var(--pond); outline-offset: 3px; border-radius: 3px; }
+p { margin: 0; max-width: 62ch; }
+code { font-family: var(--font-mono); font-size: 0.88em; }
+p code, li code, figcaption code, .snote code { background: var(--code-bg); padding: 0.06em 0.3em; border-radius: 3px; }
+h3 { font-family: var(--font-body); font-weight: 700; font-size: var(--t-h3); line-height: 1.3; margin: 0; text-wrap: balance; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+::selection { background: color-mix(in srgb, var(--bill) 32%, transparent); color: inherit; }
+.mono { font-family: var(--font-mono); }
+
+/* Masthead and theme switch */
+.masthead { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
+.topbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px 24px; }
+.themes { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--rule); border-radius: 6px; }
+.themes button {
+  font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-2); background: transparent; border: 0; border-radius: 4px; padding: 6px 10px; cursor: pointer;
+}
+.themes button:hover { color: var(--ink); }
+.themes button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.themes button:focus-visible { outline: 2px solid var(--pond); outline-offset: 2px; }
+
+/* Hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr); gap: 48px; align-items: center; }
+@media (min-width: 960px) { .hero { grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr); gap: 56px; } }
+.hero-text { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-content: start; }
+.eyebrow { font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+.wordmark {
+  font-family: var(--font-display); font-weight: 900; font-stretch: 125%;
+  font-size: var(--t-hero); line-height: 0.82; letter-spacing: -0.035em; margin: 6px 0 0;
+}
+.namebytes { display: flex; align-items: center; gap: 2px; --nbw: 34px; }
+.namebytes .cell { width: var(--nbw); height: var(--nbw); font-size: 13px; background: var(--cell-2); }
+.np { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); }
+.np i { width: 4px; height: 42px; border-radius: 2px; background: var(--bill); }
+.nb { animation: nbfill 0.36s ease-out both; animation-delay: calc(var(--i) * 110ms + 200ms); }
+.np { animation: npmove 0.55s steps(5, end) both; animation-delay: 200ms; }
+@keyframes nbfill { from { background: transparent; color: transparent; box-shadow: inset 0 0 0 1px var(--rule); } }
+@keyframes npmove { from { transform: translateX(calc(-5 * (var(--nbw) + 2px))); } }
+@media (prefers-reduced-motion: reduce) { .nb, .np { animation: none; } }
+.lead { font-size: var(--t-lead); font-weight: 650; line-height: 1.3; max-width: 26ch; text-wrap: balance; margin-top: 10px; }
+.intro { color: var(--ink-2); }
+
+/* Byte cells */
+.cells { display: flex; gap: 2px; }
+.cell {
+  width: var(--cw); height: var(--cw); flex: none; display: grid; place-items: center;
+  font-family: var(--font-mono); font-size: 11px; line-height: 1; border-radius: 3px;
+  background: var(--cell); color: var(--ink);
+}
+.cell.h { background: var(--cell-2); }
+.cell.sm { width: 12px; height: 12px; border-radius: 2px; }
+.cell.sm.c { background: var(--cell-2); }
+.cell.sm.h { background: var(--ink-2); }
+.cell.sm.e { background: transparent; box-shadow: inset 0 0 0 1px var(--quiet); }
+.cell.sm.g { background: var(--bill); }
+.cell.sm.q { background: var(--quiet); }
+.strip-row { display: flex; gap: 6px; align-items: flex-start; }
+.strip-row.wrap { flex-wrap: wrap; row-gap: 16px; }
+.grp { display: grid; gap: 5px; justify-items: stretch; }
+.lab {
+  font-family: var(--font-mono); font-size: 10px; line-height: 1.25; color: var(--ink-2);
+  border-top: 1px solid var(--ink-2); padding-top: 4px; white-space: pre-line;
+}
+.igrp { display: grid; gap: 8px; }
+.ilab { border-top: 2px solid var(--ink); color: var(--ink); font-size: 11px; }
+
+/* The data stack figure */
+.stackfig { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 18px; row-gap: 2px; align-items: center; --cw: 24px; }
+.stackfig > div:not(.sptr):not(.smark) { grid-column: 1; }
+.stackfig .snote { grid-column: 2; font-size: var(--t-small); color: var(--ink-2); line-height: 1.45; }
+.snote b { color: var(--ink); }
+.sfree, .solder {
+  display: grid; place-items: center; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2);
+}
+.sfree { height: 72px; box-shadow: inset 0 0 0 1px var(--rule); background: repeating-linear-gradient(135deg, transparent 0 7px, var(--cell) 7px 8px); }
+.solder { height: 46px; background: var(--cell); }
+.sfree span, .solder span { background: var(--paper); padding: 1px 6px; border-radius: 3px; }
+.sptr, .smark { grid-column: 1; position: relative; height: 14px; }
+.sptr::before { content: ""; position: absolute; inset: 5px 0; background: var(--bill); border-radius: 2px; }
+.smark::before { content: ""; position: absolute; left: 0; right: 0; top: 6px; height: 2px; background: var(--ink-2); }
+.snote.bracket { align-self: stretch; display: flex; align-items: center; border-left: 2px solid var(--ink-2); padding-left: 12px; }
+.stackfig figcaption { grid-column: 1 / -1; margin-top: 14px; font-size: var(--t-small); color: var(--ink-2); max-width: 60ch; }
+
+/* KPI row */
+.kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 24px; }
+@media (min-width: 880px) { .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.kpi { border-top: 3px solid var(--ink); padding-top: 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; align-content: start; }
+.kv { font-weight: 650; font-stretch: 112%; font-size: var(--t-stat); line-height: 1; letter-spacing: -0.02em; }
+.kl { font-weight: 600; line-height: 1.3; }
+.kd { font-family: var(--font-mono); font-size: var(--t-micro); color: var(--ink-2); }
+.kpi-note { grid-column: 1 / -1; font-size: var(--t-small); color: var(--ink-2); max-width: 90ch; }
+
+/* Sections */
+.sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
+.sec-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 24px; border-top: 1px solid var(--rule); padding-top: 20px; }
+h2 {
+  font-family: var(--font-display); font-weight: 800; font-stretch: 112%;
+  font-size: var(--t-h2); line-height: 1.06; letter-spacing: -0.015em; margin: 0; max-width: 24ch; text-wrap: balance;
+}
+.ref { font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); text-decoration: none; white-space: nowrap; }
+.ref:hover { color: var(--bill); }
+.sec-lead { font-size: 1.12rem; line-height: 1.55; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr); gap: 36px; align-items: start; }
+@media (min-width: 960px) { .two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; } }
+.panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-content: start; min-width: 0; }
+.stack14 { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; min-width: 0; }
+.aside { color: var(--ink-2); }
+
+/* Code */
+pre.code, pre.term {
+  margin: 0; padding: 14px 16px; border-radius: 6px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; tab-size: 4;
+}
+pre.code { background: var(--code-bg); color: var(--ink); }
+pre.term { background: var(--term-bg); color: var(--term-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tk { color: var(--tk); } .ts { color: var(--ts); } .tc { color: var(--tc); font-style: italic; }
+.tn { color: var(--tn); } .tt { color: var(--tt); font-weight: 600; } .tb { color: var(--tb); } .td { color: var(--td); font-weight: 600; }
+.terr { color: var(--term-err); font-weight: 600; } .tloc { color: var(--term-loc); }
+
+/* Array family */
+.family { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; }
+@media (min-width: 900px) { .family { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.fam { background: var(--cell); padding: 16px 16px 18px; display: grid; gap: 6px; align-content: start; }
+.fam .spell { font-size: 1.25rem; background: none; padding: 0; }
+.fam b { font-size: var(--t-small); }
+.fam span { font-size: var(--t-small); color: var(--ink-2); line-height: 1.45; }
+.fam.hot { box-shadow: inset 0 -4px 0 var(--bill); }
+
+/* Byte strip figures */
+figure.bytes { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; }
+figure.bytes figcaption, .figcap { font-size: var(--t-small); color: var(--ink-2); max-width: 70ch; }
+.order { --cw: 26px; }
+.nodes, .enums { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.nrow { display: grid; grid-template-columns: 5.2rem minmax(0, 1fr); gap: 4px 12px; align-items: start; }
+.nname { font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); padding-top: 1px; }
+.ntot { grid-column: 2; font-weight: 700; font-size: var(--t-small); }
+.ntot span { font-weight: 400; color: var(--ink-2); }
+.nrow .strip-row { flex-wrap: wrap; row-gap: 10px; }
+.erow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.ehead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: var(--t-small); }
+.ehead span { color: var(--ink-2); }
+.ehead em { font-style: normal; font-weight: 700; margin-left: auto; }
+.ekey { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--t-micro); color: var(--ink-2); font-family: var(--font-mono); }
+.ekey span { display: inline-flex; align-items: center; gap: 6px; }
+.ekey .cell { display: inline-block; }
+
+/* Charts */
+.chart { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; --gap: 12px; }
+.chart figcaption { display: grid; gap: 4px; }
+.chart .sub, .cnote { font-size: var(--t-small); color: var(--ink-2); max-width: 62ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--t-small); color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+.sw.k { background: var(--bill); } .sw.rust { background: var(--pond); }
+.plot { position: relative; display: grid; }
+.plot .grid { position: absolute; top: 0; bottom: 0; left: calc(var(--lw) + var(--gap)); right: 0; pointer-events: none; }
+.plot .grid span { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--rule); }
+.plot .grid span.base { background: var(--ink-2); }
+.row { display: grid; grid-template-columns: var(--lw) minmax(0, 1fr); column-gap: var(--gap); align-items: center; min-height: 30px; position: relative; cursor: default; border-radius: 3px; }
+.row:hover .rlab, .row:focus-visible .rlab { text-decoration: underline; text-decoration-color: var(--bill); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.plot, .axis, .legend { -webkit-user-select: none; user-select: none; }
+.rlab { font-size: 0.84rem; line-height: 1.2; padding-block: 3px; }
+.rlab.mono { font-family: var(--font-mono); font-size: 0.8rem; }
+.track { position: relative; height: 30px; }
+.bar { position: absolute; top: 8px; height: 14px; background: var(--quiet); transition: filter 0.12s; }
+.bar.k { background: var(--bill); } .bar.rust { background: var(--pond); }
+.bar.pos { border-radius: 0 4px 4px 0; } .bar.neg { border-radius: 4px 0 0 4px; }
+.row:hover .bar, .row:focus-visible .bar { filter: brightness(1.15) saturate(1.1); }
+.val {
+  position: absolute; top: 50%; transform: translateY(-50%); font-family: var(--font-mono); font-size: 11.5px; color: var(--ink);
+  white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--paper); padding: 1px 4px; border-radius: 2px;
+}
+.val.in { color: var(--ink); background: none; padding: 0; }
+.axis { display: grid; grid-template-columns: var(--lw) minmax(0, 1fr); column-gap: var(--gap); }
+.ticks { position: relative; height: 16px; }
+.ticks span { position: absolute; transform: translateX(-50%); font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+details.tv summary { cursor: pointer; font-size: var(--t-small); color: var(--ink-2); width: max-content; }
+.tv-wrap { overflow-x: auto; margin-top: 10px; }
+.tv table { border-collapse: collapse; font-size: 0.84rem; min-width: 100%; }
+.tv th, .tv td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.tv th { font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+.tv td.n { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tv td.mono { font-family: var(--font-mono); }
+.tip {
+  position: fixed; z-index: 20; pointer-events: none; max-width: 280px; display: grid; gap: 3px;
+  background: var(--ink); color: var(--paper); padding: 9px 11px; border-radius: 6px; font-size: 0.82rem; line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+.tip[hidden] { display: none; }
+.tip strong { font-size: 1rem; font-family: var(--font-mono); font-weight: 400; }
+
+/* Where the speed comes from */
+.mechs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 44px 48px; }
+@media (min-width: 900px) { .mechs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mech { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; min-width: 0; border-top: 3px solid var(--ink); padding-top: 14px; }
+.mech > p { color: var(--ink-2); }
+.chart.mini { gap: 8px; }
+.chart.mini figcaption { display: block; font-size: var(--t-micro); color: var(--ink-2); line-height: 1.5; }
+.chart.mini figcaption .mono { color: var(--ink); }
+.mini .row { min-height: 26px; }
+.mini .track { height: 26px; }
+.mini .bar { top: 8px; height: 10px; }
+.mini .rlab { font-size: 0.8rem; }
+
+/* Compared with C, C++ and Rust */
+.vs { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.vs div { display: grid; grid-template-columns: 5.6rem minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.vs dt { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); white-space: nowrap; }
+.vs dd { margin: 0; font-size: 0.88rem; line-height: 1.45; color: var(--ink-2); }
+.fam .eq { font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.4; color: var(--ink-2); border-top: 1px solid var(--cell-2); padding-top: 8px; margin-top: 4px; }
+.termwrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.tlabel { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+
+/* Around the language */
+.around { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px 48px; }
+@media (min-width: 760px) { .around { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.blk { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-content: start; min-width: 0; border-top: 1px solid var(--ink-2); padding-top: 12px; }
+.blk p { color: var(--ink-2); }
+.two.tight { gap: 20px 36px; }
+
+/* Extras, costs, try */
+.extras { display: grid; grid-template-columns: minmax(0, 1fr); gap: 36px 40px; }
+@media (min-width: 760px) { .extras { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.extra { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; min-width: 0; border-top: 3px solid var(--ink); padding-top: 14px; }
+.extra p { color: var(--ink-2); }
+.costs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px 40px; }
+@media (min-width: 640px) { .costs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 980px) { .costs { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.cost { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; align-content: start; border-top: 1px solid var(--ink-2); padding-top: 12px; }
+.cost p { color: var(--ink-2); font-size: 0.97rem; }
+.steps { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; counter-reset: step; }
+.steps li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; counter-increment: step; padding-left: 40px; position: relative; min-width: 0; }
+.steps li::before {
+  content: counter(step); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 3px;
+  display: grid; place-items: center; font-family: var(--font-mono); font-size: 12px; background: var(--bill); color: var(--on-bill);
+}
+.links { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; align-content: start; }
+.links a { display: grid; gap: 2px; padding: 14px 16px; background: var(--cell); text-decoration: none; }
+.links a:hover { color: inherit; }
+.links a:hover b { text-decoration: underline; text-decoration-color: var(--bill); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.links b { font-weight: 700; }
+.links span { font-size: var(--t-small); color: var(--ink-2); }
+footer { border-top: 1px solid var(--rule); padding-top: 18px; font-size: var(--t-small); color: var(--ink-2); display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+footer p { max-width: 100ch; }
+
+@media (max-width: 560px) {
+  :root { --cw: 22px; }
+  .stackfig { --cw: 20px; column-gap: 12px; }
+  .stackfig .cell { font-size: 9.5px; }
+  .order { --cw: 22px; }
+  .namebytes { --nbw: 30px; }
+  .chart { --gap: 8px; }
+  .chart { --lw: 7.6rem !important; }
+  .chart#vs-rust { --lw: 5.2rem !important; }
+  .row .rlab { font-size: 0.78rem; }
+}
+</style>
+
+<div class="page">
+  <header class="masthead">
+  <div class="topbar">
+    <p class="eyebrow">非官方介绍 · K v2026.3</p>
+    <div class="themes" role="group" aria-label="配色主题">
+      <button type="button" id="theme-auto" data-choice="auto" aria-pressed="true">自动</button>
+      <button type="button" id="theme-light" data-choice="light" aria-pressed="false">浅色</button>
+      <button type="button" id="theme-dark" data-choice="dark" aria-pressed="false">深色</button>
+    </div>
+  </div>
+  <div class="hero">
+    <div class="hero-text">
+      <h1 class="wordmark">K</h1>
+      <div class="namebytes" aria-hidden="true"><span class="cell nb" style="--i:0" title="'G'">47</span><span class="cell nb" style="--i:1" title="'o'">6f</span><span class="cell nb" style="--i:2" title="'o'">6f</span><span class="cell nb" style="--i:3" title="'s'">73</span><span class="cell nb" style="--i:4" title="'e'">65</span><span class="np"><i></i>栈顶</span></div>
+      <p class="lead">一门内存安全的系统编程语言——无堆、无垃圾回收、无生命周期标注。</p>
+      <p class="intro">每个可增长的值都位于少数几个数据栈之一中，数据栈的数量在编译时即可确定。每个栈最多同时容纳一个处于增长中的值，且始终位于栈顶，因此增长只需移动一次指针，绝不会搬迁任何已有数据。离开作用域时，只需一次写入即可释放该作用域构建的全部内容。</p>
+      <pre class="code" aria-label="K 代码"><code><span class="tk">var</span> words: <span class="tt">u8</span>[][&gt;..] = [];
+<span class="tk">for</span> i <span class="tk">in</span> <span class="tn">5</span> { words.<span class="tb">push</span>(<span class="tb">str</span>(<span class="ts">"word"</span>, i)); }</code></pre>
+      <dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C++</dt><dd><code>vector&lt;string&gt;</code> 会为每个元素保存一个 24 到 32 字节的 string 对象。较长的字符串需要单独分配内存，且每个元素都要逐一析构。</dd></div><div><dt>Rust</dt><dd><code>Vec&lt;String&gt;</code> 会为每个字符串保存一个 24 字节的头部，并分别分配每个字符串的内存，因此这五个词总共要分配和释放六块内存。</dd></div></dl>
+    </div>
+    
+<figure class="stackfig" aria-labelledby="stack-cap">
+  <div class="sfree" style="grid-row:1"><span>已保留，未触及</span></div>
+  <p class="snote" style="grid-row:1">每个数据栈会预先保留一段地址空间，但只有当值实际增长进去时才消耗物理内存。</p>
+  <div class="sptr" style="grid-row:2" aria-hidden="true"></div>
+  <p class="snote" style="grid-row:2"><b>栈顶</b>。下一次 push 会写在这里并把栈顶上移。无需容量检查，也不会移动已有数据。</p>
+  <div style="grid-row:3"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x34 &#x27;4&#x27;">4</span></div></div><div style="grid-row:4"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x33 &#x27;3&#x27;">3</span></div></div><div style="grid-row:5"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x32 &#x27;2&#x27;">2</span></div></div><div style="grid-row:6"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x31 &#x27;1&#x27;">1</span></div></div><div style="grid-row:7"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x30 &#x27;0&#x27;">0</span></div></div>
+  <p class="snote bracket" style="grid-row:3 / span 5"><span><code>words</code> 将 5 个字符串连续存放在 45 字节的一整块内存中，没有任何指针。每个字符串由 4 字节长度和文本内容组成。</span></p>
+  <div class="smark" style="grid-row:8" aria-hidden="true"></div>
+  <p class="snote" style="grid-row:8"><b>作用域结束</b>。栈顶回到这个标记处，只需一次写入即可释放全部 45 字节。</p>
+  <div class="solder" style="grid-row:9"><span>外层作用域的值</span></div>
+  <figcaption id="stack-cap" style="grid-row:10">五次 push 后编译器实际排布出的 <code>words</code> 字节布局。深色格为长度字节，其余为文本。</figcaption>
+</figure>
+  </div>
+  </header>
+
+  <section class="kpis" aria-label="基准测试摘要">
+    <div class="kpi"><div class="kv">3.54×</div><div class="kl">快于地道写法 C++</div><div class="kd">MSVC 构建 3.51×</div></div><div class="kpi"><div class="kv">1.26×</div><div class="kl">快于手工调优 C++</div><div class="kd">MSVC 构建 1.24×</div></div><div class="kpi"><div class="kv">1.19×</div><div class="kl">快于最快的 safe Rust</div><div class="kd">MSVC 构建 1.13×</div></div><div class="kpi"><div class="kv">1.25×</div><div class="kl">峰值内存低于该 Rust</div><div class="kd">比地道写法 C++ 少 1.95×</div></div>
+    <p class="kpi-note">以上为 K 仓库中 16 项基准测试在大数据规模下的几何平均值，基于 clang 构建（Rust 同样通过 LLVM 编译），数据来自 2026 年 10 月 16 日在 Ryzen 9 9950X3D 上的运行结果，为项目方自测数据。</p>
+  </section>
+
+  <section class="sec" id="arrays">
+    <div class="sec-head"><h2>数组按其大小的行为方式来选择</h2><a class="ref" href="https://github.com/kense-labs/klang/blob/main/docs/tutorial.md#5-the-array-family">教程 §5</a></div>
+    <p class="sec-lead">K 中没有单一的数组类型。除切片外，下面每一种数组都是“元数据紧跟元素”，内联且紧凑排列，没有指向独立内存块的指针。切片则是对其中任意一种的视图。</p>
+    <div class="family"><div class="fam"><code class="spell">T[k]</code><b>定长数组</b><span>编译期确定大小。完全没有元数据。</span><span class="eq">C T[k] · std::array · Rust [T; N]</span></div><div class="fam"><code class="spell">T[]</code><b>冻结数组</b><span>构建时确定大小，之后长度永不改变。</span><span class="eq">Rust Box&lt;[T]&gt;，但内联存储</span></div><div class="fam"><code class="spell">T[varint]</code><b>紧凑冻结数组</b><span>与前者相同，但长度只占 1 或 2 字节。</span><span class="eq">无标准等价物</span></div><div class="fam"><code class="spell">T[..k]</code><b>有限容量数组</b><span>在 k 个槽位内增减，内联保存在宿主中。</span><span class="eq">Boost static_vector · Rust ArrayVec</span></div><div class="fam"><code class="spell">T[..]</code><b>构建期定容数组</b><span>在创建该值时确定最大容量。</span><span class="eq">无标准等价物</span></div><div class="fam hot"><code class="spell">T[&gt;..]</code><b>只增不减数组</b><span>主力数组类型。增长时指向其中的引用依然有效。</span><span class="eq">std::vector · Rust Vec，但不会重分配</span></div><div class="fam"><code class="spell">T[&gt;..&lt;]</code><b>可增可减数组</b><span>用于栈、队列和堆等结构。</span><span class="eq">std::vector · 用作栈的 Rust Vec</span></div><div class="fam"><code class="spell">T[:]</code><b>切片</b><span>对上述任一类型的视图，不会产生任何拷贝。</span><span class="eq">std::span · Rust &amp;[T]</span></div></div>
+    <p class="figcap">每个卡片最后一行列出了 C、C++ 或 Rust 中最接近的等价类型。</p>
+    <p class="aside">字符串就是 <code>u8</code> 数组。<code>u8[&gt;..]</code> 用于构建字符串，<code>u8[]</code> 存储成品字符串，<code>u8[..16]</code> 把短字符串直接嵌进结构体，<code>u8[:]</code> 则用于查看他人持有的字节序列。</p>
+  </section>
+
+  <section class="sec" id="inline">
+    <div class="sec-head"><h2>嵌套数据保持内联</h2><a class="ref" href="https://github.com/kense-labs/klang/blob/main/docs/tutorial.md#8-nested-data-stays-inline">教程 §8</a></div>
+    <div class="two">
+      <div class="stack14">
+        <p class="sec-lead">包含字符串和列表的记录本身就是一段连续字节。下面这笔订单含有一个客户名和两条明细项，编译器将其排布在 29 字节中，零指针、零堆分配。</p>
+        <pre class="code" aria-label="K 代码"><code><span class="tk">struct</span> <span class="tt">Item</span>  { sku: <span class="tt">u8</span>[<span class="tt">varint</span>], qty: <span class="tt">varint</span>, cents: <span class="tt">varint</span> }
+<span class="tk">struct</span> <span class="tt">Order</span> { id: <span class="tt">varint</span>, customer: <span class="tt">u8</span>[<span class="tt">varint</span>], items: <span class="tt">Item</span>[<span class="tt">varint</span>] }
+
+book.<span class="tb">push</span>(<span class="tt">Order</span> { id: <span class="tn">1001</span>, customer: <span class="ts">"alice"</span>,
+                  items: [<span class="tt">Item</span> { sku: <span class="ts">"SKU-441"</span>, qty: <span class="tn">2</span>, cents: <span class="tn">1999</span> },
+                          <span class="tt">Item</span> { sku: <span class="ts">"SKU-7"</span>, qty: <span class="tn">1</span>, cents: <span class="tn">500</span> }] });</code></pre>
+      </div>
+      
+<figure class="chart" id="order-size" style="--lw:9.5rem">
+  <figcaption><h3>这笔订单在内存中的占用</h3><p class="sub">值本身及其所有分配内存的字节总数（不含分配器头部）。C++ 和 Rust 的大小引自 K 教程，使用 MSVC 与 rustc 测得。</p></figcaption>
+  <div class="plot"><div class="grid" aria-hidden="true"><span style="left:0.000%"></span><span style="left:22.727%"></span><span style="left:45.455%"></span><span style="left:68.182%"></span><span style="left:90.909%"></span></div><div class="row" tabindex="0" data-v="29 B" data-l="K。单一内联记录，零次分配。" aria-label="K · 0 次分配：29 B"><span class="rlab">K · 0 次分配</span><span class="track"><span class="bar klang pos" style="left:0;width:13.182%"></span><span class="val" style="left:calc(13.182% + 6px)">29 B</span></span></div><div class="row" tabindex="0" data-v="153 B" data-l="Rust。String 加 Vec&lt;Item&gt;，每个 sku 各自是一个 String。" aria-label="Rust · 4 次分配：153 B"><span class="rlab">Rust · 4 次分配</span><span class="track"><span class="bar pos" style="left:0;width:69.545%"></span><span class="val" style="left:calc(69.545% + 6px)">153 B</span></span></div><div class="row" tabindex="0" data-v="160 B" data-l="C++。std::string 加 std::vector&lt;Item&gt;，短字符串正好落入小字符串缓冲区。" aria-label="C++ · 1 次分配：160 B"><span class="rlab">C++ · 1 次分配</span><span class="track"><span class="bar pos" style="left:0;width:72.727%"></span><span class="val" style="left:calc(72.727% + 6px)">160 B</span></span></div></div>
+  <div class="axis" aria-hidden="true"><span></span><span class="ticks"><span style="left:0.000%">0</span><span style="left:22.727%">50</span><span style="left:45.455%">100</span><span style="left:68.182%">150</span><span style="left:90.909%">200</span></span></div>
+  <p class="cnote">C++ 之所以只需一次分配，只是因为这几个字符串恰好放得进它的小字符串缓冲区。</p>
+  <details class="tv"><summary>以表格形式查看</summary><div class="tv-wrap"><table><thead><tr><th>语言</th><th>字节数</th><th>分配次数</th></tr></thead><tbody><tr><td class="">K</td><td class="n">29</td><td class="n">0</td></tr><tr><td class="">Rust (String, Vec&lt;Item&gt;)</td><td class="n">153</td><td class="n">4</td></tr><tr><td class="">C++ (std::string, std::vector&lt;Item&gt;)</td><td class="n">160</td><td class="n">1</td></tr></tbody></table></div></details>
+</figure>
+    </div>
+    <figure class="bytes" aria-labelledby="order-cap">
+      <div class="strip-row wrap order"><div class="grp "><div class="cells"><span class="cell h" title="0xd2">d2</span><span class="cell h" title="0x0f">0f</span></div><div class="lab">id 1001</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x05">05</span><span class="cell ch" title="0x61 &#x27;a&#x27;">a</span><span class="cell ch" title="0x6c &#x27;l&#x27;">l</span><span class="cell ch" title="0x69 &#x27;i&#x27;">i</span><span class="cell ch" title="0x63 &#x27;c&#x27;">c</span><span class="cell ch" title="0x65 &#x27;e&#x27;">e</span></div><div class="lab">customer</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x02">02</span></div><div class="lab">2
+items</div></div><div class="igrp"><div class="strip-row"><div class="grp "><div class="cells"><span class="cell h" title="0x07">07</span><span class="cell ch" title="0x53 &#x27;S&#x27;">S</span><span class="cell ch" title="0x4b &#x27;K&#x27;">K</span><span class="cell ch" title="0x55 &#x27;U&#x27;">U</span><span class="cell ch" title="0x2d &#x27;-&#x27;">-</span><span class="cell ch" title="0x34 &#x27;4&#x27;">4</span><span class="cell ch" title="0x34 &#x27;4&#x27;">4</span><span class="cell ch" title="0x31 &#x27;1&#x27;">1</span></div><div class="lab">sku</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x04">04</span></div><div class="lab">qty
+2</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x9e">9e</span><span class="cell h" title="0x1f">1f</span></div><div class="lab">cents
+1999</div></div></div><div class="lab ilab">第 1 项</div></div><div class="igrp"><div class="strip-row"><div class="grp "><div class="cells"><span class="cell h" title="0x05">05</span><span class="cell ch" title="0x53 &#x27;S&#x27;">S</span><span class="cell ch" title="0x4b &#x27;K&#x27;">K</span><span class="cell ch" title="0x55 &#x27;U&#x27;">U</span><span class="cell ch" title="0x2d &#x27;-&#x27;">-</span><span class="cell ch" title="0x37 &#x27;7&#x27;">7</span></div><div class="lab">sku</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x02">02</span></div><div class="lab">qty
+1</div></div><div class="grp "><div class="cells"><span class="cell h" title="0xe8">e8</span><span class="cell h" title="0x07">07</span></div><div class="lab">cents
+500</div></div></div><div class="lab ilab">第 2 项</div></div></div>
+      <p class="sr-only">这 29 个字节的十六进制转储：d2 0f 05 61 6c 69 63 65 02 07 53 4b 55 2d 34 34 31 04 9e 1f 05 53 4b 55 2d 37 02 e8 07</p>
+      <figcaption id="order-cap">由编译器直接回读出的 29 个字节。数值采用 LEB128 变长整数，字段以 zigzag 编码存储，因此 1001 编码为 <code>d2 0f</code>。每个字符串和列表都以其长度开头，文本字节直接显示为字符。</figcaption>
+    </figure>
+  </section>
+
+  <section class="sec" id="safe">
+    <div class="sec-head"><h2>引用始终有效，且由编译器证明</h2><a class="ref" href="https://github.com/kense-labs/klang/blob/main/docs/tutorial.md#4-where-values-live">教程 §4</a></div>
+    <div class="two">
+      <div class="panel">
+        <h3>增长永不移动已有数据</h3>
+        <pre class="code" aria-label="K 代码"><code><span class="tk">var</span> items: <span class="tt">Item</span>[&gt;..] = [];
+<span class="tk">let</span> first .= items.<span class="tb">push</span>(<span class="tt">Item</span> { <span class="tn">1</span>, <span class="tn">0.5</span> });       <span class="tc">// 指向第 0 个元素的引用</span>
+<span class="tk">for</span> i: <span class="tt">i32</span> <span class="tk">in</span> <span class="tn">2</span>..<span class="tn">1000001</span> { items.<span class="tb">push</span>(<span class="tt">Item</span> { i, <span class="tn">0.0</span> }); }
+first.weight = <span class="tn">99.5</span>;                            <span class="tc">// 依然有效</span>
+<span class="tb">print</span>(items.len, <span class="ts">" items, first is "</span>, items[<span class="tn">0</span>]);</code></pre>
+        <pre class="term">1000000 items, first is Item { 1, 99.5 }</pre>
+        <p><code>push</code> 会返回指向新元素的引用。<code>vector</code> 或 <code>Vec</code> 在增长时可能会重新分配内存，因此 C++ 和 Rust 无法做出这种保证。仓库中各基准测试的 Rust 版本都只能改用整数索引。</p>
+        <dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C++</dt><dd>一旦 <code>push_back</code> 触发重分配，指向 <code>vector</code> 内部的引用就会悬垂，属于未定义行为。想安全保留引用，必须提前 <code>reserve()</code> 或改用 <code>deque</code>。</dd></div><div><dt>Rust</dt><dd>借用检查器会拒绝在 <code>v.push()</code> 期间持有 <code>&amp;v[0]</code>（错误 E0502），因此代码只能改存索引。</dd></div></dl>
+      </div>
+      <div class="panel">
+        <h3>无需标注的安全性</h3>
+        <pre class="code" aria-label="K 代码"><code><span class="tk">struct</span> <span class="tt">Node</span> { v: <span class="tt">i64</span>, left: <span class="tt">Node</span>? }
+
+<span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tk">var</span> root = <span class="tt">Node</span> { v: <span class="tn">1</span>, .. };
+    {
+        <span class="tk">var</span> child = <span class="tt">Node</span> { v: <span class="tn">2</span>, .. };
+        root.left .= child;          <span class="tc">// child 到下一个右花括号结束</span>
+    }
+}</code></pre>
+        <pre class="term"><span class="tloc">demo.k:7:</span> <span class="terr">error:</span> storing a reference rooted at child, which does not outlive the destination (§9.2)</pre>
+        <p>没有生命周期语法、没有借用规则，也没有 <code>unsafe</code>。编译器会自动推导每个引用的根源所在，一旦引用可能比宿主活得更久就直接拒绝编译。多个引用同时指向同一对象则完全允许。</p>
+        <dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C / C++</dt><dd>这段代码能够编译通过，而一旦持有 <code>child</code> 的作用域结束，<code>root.left</code> 就会变成悬垂指针。</dd></div><div><dt>Rust</dt><dd>同样会被拒绝，但持有引用的结构体必须写上生命周期参数（例如 <code>struct Node&lt;'a&gt;</code>），而且所有包含它的类型也得跟着标。</dd></div></dl>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>杜绝空指针解引用</h3>
+      <div class="two tight">
+        <div class="stack14"><pre class="code" aria-label="K 代码"><code><span class="tk">struct</span> <span class="tt">Node</span> { key: <span class="tt">i32</span>, left: <span class="tt">Node</span>? }
+
+<span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tk">var</span> a = <span class="tt">Node</span> { key: <span class="tn">1</span>, .. };
+    <span class="tk">let</span> n = a.left;                   <span class="tc">// Node? 可能为空</span>
+    <span class="tk">if</span> n { <span class="tb">print</span>(n.key); }            <span class="tc">// 在 if 内部，n 是 Node&amp;</span>
+    <span class="tb">print</span>(n.key);                     <span class="tc">// 在外部，n 尚未经过检查</span>
+}</code></pre> <pre class="term"><span class="tloc">null.k:7:</span> <span class="terr">error:</span> optional value must be narrowed (if/guard/assert) before use</pre></div>
+        <div class="stack14"><p>除非类型明确声明，否则引用永远不为空。<code>Node?</code> 在使用前必须先经由 <code>if</code>、<code>guard</code> 或 <code>assert</code> 收窄检查，而在检查分支内部它就是普通引用。未经检查直接使用会报编译错误，因此运行时不存在可解引用的空指针。</p><dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C / C++</dt><dd>任何指针都可能为空，解引用空指针属于未定义行为，通常会直接崩溃。</dd></div><div><dt>Rust</dt><dd><code>Option&lt;&amp;T&gt;</code> 思路相同，需要通过 <code>match</code>、<code>if let</code> 或 <code>unwrap()</code> 解包。</dd></div></dl></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>整数行为完全忠于源码</h3>
+      <div class="two tight">
+        <div class="stack14"><pre class="code" aria-label="K 代码"><code><span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tk">let</span> a: <span class="tt">u8</span> = <span class="tn">200</span>;
+    <span class="tk">let</span> b: <span class="tt">u8</span> = <span class="tn">100</span>;
+    <span class="tb">print</span>(a + b);                 <span class="tc">// 8 位加法：回绕为 44</span>
+    <span class="tb">print</span>(-<span class="tn">7</span> % <span class="tn">3</span>);                <span class="tc">// % 为欧几里得取模：2</span>
+    <span class="tk">var</span> big: <span class="tt">i32</span> = <span class="tn">2147483647</span>;
+    big += <span class="tn">1</span>;                     <span class="tc">// 有符号溢出</span>
+    <span class="tb">print</span>(big);
+}</code></pre> <div class="termwrap"><span class="tlabel">发布构建：有符号溢出回绕</span><pre class="term">44
+2
+-2147483648</pre></div> <div class="termwrap"><span class="tlabel">使用 --debug 构建：直接中止</span><pre class="term">44
+2
+klang runtime <span class="terr">error:</span> integer overflow (debug): 2147483647 + 1 at i32 (ints.k:7)</pre></div></div>
+        <div class="stack14">
+          <p>算术运算按操作数自身的位宽执行，因此 <code>u8 + u8</code> 就是 8 位加法。较窄的类型可以自动拓宽，不用 <code>as</code> 就绝不会缩窄，而混用 <code>u32</code> 与 <code>i32</code> 会直接报编译错误，直到你明确写出要转成哪一种。无符号运算按定义回绕；有符号溢出在调试构建中中止、在发布构建中回绕，永远不会成为未定义行为。<code>%</code> 采用欧几里得取模，因此 <code>x % n</code> 永远是长度为 n 的数组的有效索引，而除以零总是中止运行。</p>
+          <pre class="code" aria-label="K 代码"><code><span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tk">let</span> x: <span class="tt">u32</span> = <span class="tn">1</span>;
+    <span class="tk">let</span> y: <span class="tt">i32</span> = <span class="tn">2</span>;
+    <span class="tb">print</span>(x + y);
+}</code></pre> <pre class="term"><span class="tloc">mixed.k:4:</span> <span class="terr">error:</span> operands of + have no common type: u32 and i32 (convert one with `as`)</pre>
+          <dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C / C++</dt><dd>有符号溢出是未定义行为，优化器会假定它永远不会发生。<code>uint8_t</code> 的 200 + 100 会被提升为 <code>int</code> 的 300，有符号与无符号混算会静默转换，而 <code>-7 % 3</code> 等于 -1。</dd></div><div><dt>Rust</dt><dd>溢出在调试构建下 panic、在发布构建下回绕。类型不会自动拓宽，且 <code>-7 % 3</code> 等于 -1，需调用 <code>rem_euclid</code> 才得 2。</dd></div></dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="compact">
+    <div class="sec-head"><h2>按实际所存内容计费的链接与枚举</h2><a class="ref" href="https://github.com/kense-labs/klang/blob/main/docs/tutorial.md#10-linking-things-without-pointers">教程 §9 与 §10</a></div>
+    <div class="two">
+      <div class="panel">
+        <h3>带两个链接的树节点只需 12 字节</h3>
+        <pre class="code" aria-label="K 代码"><code><span class="tk">struct</span> <span class="tt">Node</span> { key: <span class="tt">i32</span>, left: <span class="tt">Node</span>&amp;&lt;<span class="tt">u32</span>&gt;?, right: <span class="tt">Node</span>&amp;&lt;<span class="tt">u32</span>&gt;? }</code></pre>
+        
+<div class="nodes">
+  <div class="nrow">
+    <div class="nname">K</div>
+    <div class="strip-row"><div class="grp "><div class="cells"><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">key</div></div><div class="grp "><div class="cells"><span class="cell g sm"></span><span class="cell g sm"></span><span class="cell g sm"></span><span class="cell g sm"></span></div><div class="lab">left</div></div><div class="grp "><div class="cells"><span class="cell g sm"></span><span class="cell g sm"></span><span class="cell g sm"></span><span class="cell g sm"></span></div><div class="lab">right</div></div></div>
+    <div class="ntot">12 B</div>
+  </div>
+  <div class="nrow">
+    <div class="nname">指针</div>
+    <div class="strip-row"><div class="grp "><div class="cells"><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">key</div></div><div class="grp "><div class="cells"><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span></div><div class="lab">填充</div></div><div class="grp "><div class="cells"><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span></div><div class="lab">left</div></div><div class="grp "><div class="cells"><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span></div><div class="lab">right</div></div></div>
+    <div class="ntot">24 B <span>+ 各自一次分配</span></div>
+  </div>
+</div>
+        <p class="figcap">链接是节点所在数组内部 4 字节的偏移量，0 表示 null。整棵树里没有任何绝对地址，因此保存只需直接写出字节，加载时则会在使用前校验每一条链接。</p>
+        <dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C++</dt><dd>使用 <code>unique_ptr&lt;Node&gt;</code> 的节点本身占 24 字节，且每个节点还要外加一次堆分配和分配器头部开销。</dd></div><div><dt>Rust</dt><dd><code>Box&lt;Node&gt;</code> 同样是 24 字节加一次分配。使用索引 arena 也能做到 4 字节链接，但它们没有类型约束，槽位复用时还会悄无声息地失效。</dd></div></dl>
+      </div>
+      
+<figure class="chart" id="records-mem" style="--lw:9.5rem">
+  <figcaption><h3>1600 万条变体记录的日志</h3><p class="sub">峰值内存（MB），越低越好。K 的运行速度也比 Rust 版本快 2.02×。</p></figcaption>
+  <div class="plot"><div class="grid" aria-hidden="true"><span style="left:0.000%"></span><span style="left:35.714%"></span><span style="left:71.429%"></span></div><div class="row" tabindex="0" data-v="149 MB" data-l="K。每条记录只占自身变体的大小，文本内联存储。" aria-label="K · 变长枚举：149 MB"><span class="rlab">K · 变长枚举</span><span class="track"><span class="bar klang pos" style="left:0;width:10.643%"></span><span class="val" style="left:calc(10.643% + 6px)">149 MB</span></span></div><div class="row" tabindex="0" data-v="593 MB" data-l="Rust。每个元素都按最大变体计费，且字符串需单独分配。" aria-label="Rust · enum + String：593 MB"><span class="rlab">Rust · enum + String</span><span class="track"><span class="bar pos" style="left:0;width:42.386%"></span><span class="val" style="left:calc(42.386% + 6px)">593 MB</span></span></div><div class="row" tabindex="0" data-v="1,103 MB" data-l="C++。std::variant 加 std::string。" aria-label="C++ · variant + string：1,103 MB"><span class="rlab">C++ · variant + string</span><span class="track"><span class="bar pos" style="left:0;width:78.800%"></span><span class="val in" style="right:calc(21.200% + 6px)">1,103 MB</span></span></div></div>
+  <div class="axis" aria-hidden="true"><span></span><span class="ticks"><span style="left:0.000%">0</span><span style="left:35.714%">500</span><span style="left:71.429%">1,000</span></span></div>
+  
+  <details class="tv"><summary>以表格形式查看</summary><div class="tv-wrap"><table><thead><tr><th>实现方式</th><th>峰值 MB</th></tr></thead><tbody><tr><td class="">K，变长枚举</td><td class="n">149.0</td></tr><tr><td class="">Rust，enum + String</td><td class="n">593.4</td></tr><tr><td class="">C++，variant + string</td><td class="n">1,103.2</td></tr></tbody></table></div></details>
+</figure>
+    </div>
+    <div class="panel">
+      <h3>枚举只占各自实际内容的大小</h3>
+      <pre class="code" aria-label="K 代码"><code><span class="tk">enum</span> <span class="tt">Shape</span> { <span class="tt">Circle</span> { r: <span class="tt">f64</span> }, <span class="tt">Rect</span> { w: <span class="tt">f64</span>, h: <span class="tt">f64</span> }, <span class="tt">Dot</span> }</code></pre>
+      
+<div class="enums">
+  <div class="erow">
+    <div class="ehead"><b>定长模式</b> <code>Shape</code><span>每个值都占用最大变体的大小</span><em>51 B</em></div>
+    <div class="strip-row wrap"><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span></div><div class="lab">Circle · 17</div></div><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">Rect · 17</div></div><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span></div><div class="lab">Dot · 17</div></div></div>
+  </div>
+  <div class="erow">
+    <div class="ehead"><b>变长模式</b> <code>Shape..</code><span>每个值只占自身所需大小</span><em>27 B</em></div>
+    <div class="strip-row wrap"><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">Circle · 9</div></div><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">Rect · 17</div></div><div class="grp "><div class="cells"><span class="cell h sm"></span></div><div class="lab">Dot · 1</div></div></div>
+  </div>
+  <div class="ekey"><span><i class="cell h sm"></i> 标签字节</span><span><i class="cell c sm"></i> 载荷</span><span><i class="cell e sm"></i> 未使用</span></div>
+</div>
+      <p class="figcap">定长模式支持随机索引，也能就地覆写成其他变体。变长模式将各值首尾相接紧凑排列，因此数组需顺序遍历而不能直接索引，同时允许你直接指向其中某个载荷。</p>
+      <dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C++</dt><dd><code>std::variant&lt;Circle, Rect, Dot&gt;</code> 每个值占 24 字节，这三个一共 72 字节。</dd></div><div><dt>Rust</dt><dd>对应的 <code>enum</code> 同样是每个值 24 字节。每个元素都要为最大变体加上对齐填充买单。</dd></div></dl>
+    </div>
+  </section>
+
+  <section class="sec" id="speed">
+    <div class="sec-head"><h2>运行速度如何</h2><a class="ref" href="https://github.com/kense-labs/klang/blob/main/bench/results.md">bench/results.md</a></div>
+    <p class="sec-lead">仓库的基准测试套件包含 16 个程序，每个都分别用 K、C++ 和 Rust 实现，并校验输出完全一致。每次计时覆盖完整流程，从生成输入到清理退出。</p>
+    <div class="two">
+      
+<figure class="chart" id="vs-rust" style="--lw:6.5rem">
+  <figcaption><h3>16 项基准中有 14 项领先最快的 safe Rust</h3>
+  <p class="sub">相对于每项基准中最快 safe Rust 版本的速度倍率（clang 构建）。其中 4 项差距在 3% 以内，可视为平手。</p></figcaption>
+  <div class="legend"><span><i class="sw klang"></i>K 更快</span><span><i class="sw rust"></i>Rust 更快</span></div>
+  <div class="plot"><div class="grid" aria-hidden="true"><span class="" style="left:5.882%"></span><span class="base" style="left:17.647%"></span><span class="" style="left:47.059%"></span><span class="" style="left:76.471%"></span></div><div class="row" tabindex="0" data-v="2.02×" data-l="records。K 更快。构建包含 N 条变体记录的日志，并聚合四次。" aria-label="records：最快 safe Rust 速度的 2.02×"><span class="rlab mono">records</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:60.000%"></span><span class="val" style="left:calc(77.647% + 6px)">2.02×</span></span></div><div class="row" tabindex="0" data-v="1.74×" data-l="words。K 更快。统计含 N 个单词文本的词频。" aria-label="words：最快 safe Rust 速度的 1.74×"><span class="rlab mono">words</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:43.529%"></span></span></div><div class="row" tabindex="0" data-v="1.35×" data-l="respond。K 更快。构建并渲染 N 条 JSON 响应，每条均为含名称和明细列表的 DTO。" aria-label="respond：最快 safe Rust 速度的 1.35×"><span class="rlab mono">respond</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:20.588%"></span></span></div><div class="row" tabindex="0" data-v="1.32×" data-l="graph。K 更快。为 V 个顶点和 8V 条边构建邻接表，再从四个起点做 BFS。" aria-label="graph：最快 safe Rust 速度的 1.32×"><span class="rlab mono">graph</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:18.824%"></span></span></div><div class="row" tabindex="0" data-v="1.29×" data-l="interp。K 更快。构建指定深度的表达式树，求值八次。" aria-label="interp：最快 safe Rust 速度的 1.29×"><span class="rlab mono">interp</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:17.059%"></span></span></div><div class="row" tabindex="0" data-v="1.22×" data-l="strlist。K 更快。将文本拆分为 N 个单词，存为列表并扫描四次。" aria-label="strlist：最快 safe Rust 速度的 1.22×"><span class="rlab mono">strlist</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:12.941%"></span></span></div><div class="row" tabindex="0" data-v="1.16×" data-l="sexp。K 更快。生成 N 条 S 表达式，解析为树并遍历四次。" aria-label="sexp：最快 safe Rust 速度的 1.16×"><span class="rlab mono">sexp</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:9.412%"></span></span></div><div class="row" tabindex="0" data-v="1.16×" data-l="bintrees。K 更快。按给定深度反复构建、校验并丢弃大量二叉树。" aria-label="bintrees：最快 safe Rust 速度的 1.16×"><span class="rlab mono">bintrees</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:9.412%"></span></span></div><div class="row" tabindex="0" data-v="1.12×" data-l="blur。K 更快。对 WxW 8 位图像执行 16 趟 3x3 模糊。" aria-label="blur：最快 safe Rust 速度的 1.12×"><span class="rlab mono">blur</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:7.059%"></span></span></div><div class="row" tabindex="0" data-v="1.09×" data-l="lru。K 更快。容量为 N/8 的 LRU 缓存承受 N 次偏态查询。" aria-label="lru：最快 safe Rust 速度的 1.09×"><span class="rlab mono">lru</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:5.294%"></span></span></div><div class="row" tabindex="0" data-v="1.08×" data-l="push。K 更快。推入 N 条记录，同时保留指向每第 64 条记录的指针。" aria-label="push：最快 safe Rust 速度的 1.08×"><span class="rlab mono">push</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:4.706%"></span></span></div><div class="row" tabindex="0" data-v="1.03×" data-l="tree。K 更快。构建指定深度的满二叉树，求和八次。" aria-label="tree：最快 safe Rust 速度的 1.03×"><span class="rlab mono">tree</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:1.765%"></span></span></div><div class="row" tabindex="0" data-v="1.03×" data-l="particles。K 更快。对 N 个粒子执行 200 步 f32 向量数学积分。" aria-label="particles：最快 safe Rust 速度的 1.03×"><span class="rlab mono">particles</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:1.765%"></span></span></div><div class="row" tabindex="0" data-v="1.02×" data-l="scene。K 更快。构建场景图，执行动画并重算 16 帧的世界变换。" aria-label="scene：最快 safe Rust 速度的 1.02×"><span class="rlab mono">scene</span><span class="track"><span class="bar klang pos" style="left:17.647%;width:1.176%"></span></span></div><div class="row" tabindex="0" data-v="0.98×" data-l="sum。Rust 更快。对照组：构建平坦的 i32 数组，然后扫描八次。" aria-label="sum：最快 safe Rust 速度的 0.98×"><span class="rlab mono">sum</span><span class="track"><span class="bar rust neg" style="left:16.471%;width:1.176%"></span><span class="val" style="left:calc(17.647% + 6px)">0.98×</span></span></div><div class="row" tabindex="0" data-v="0.89×" data-l="calc。Rust 更快。生成、解析并求值 N 个小型算术表达式。" aria-label="calc：最快 safe Rust 速度的 0.89×"><span class="rlab mono">calc</span><span class="track"><span class="bar rust neg" style="left:11.176%;width:6.471%"></span><span class="val" style="left:calc(17.647% + 6px)">0.89×</span></span></div></div>
+  <div class="axis" aria-hidden="true"><span></span><span class="ticks"><span style="left:5.882%">0.8×</span><span style="left:17.647%">1×</span><span style="left:47.059%">1.5×</span><span style="left:76.471%">2×</span></span></div>
+  <details class="tv"><summary>以表格形式查看</summary><div class="tv-wrap"><table>
+  <thead><tr><th>基准项目</th><th>相对 Rust 速度 (clang)</th><th>相对 Rust 速度 (MSVC)</th><th>内存优于 Rust 倍数</th><th>测试内容</th></tr></thead>
+  <tbody><tr><td class="mono">records</td><td class="n">2.02×</td><td class="n">2.26×</td><td class="n">3.98×</td><td>构建含 N 条变体记录的日志，并聚合四次。</td></tr><tr><td class="mono">words</td><td class="n">1.74×</td><td class="n">1.30×</td><td class="n">1.32×</td><td>统计含 N 个单词文本的词频。</td></tr><tr><td class="mono">respond</td><td class="n">1.35×</td><td class="n">1.19×</td><td class="n">1.00×</td><td>构建并渲染 N 条 JSON 响应，每条均为含名称和明细列表的 DTO。</td></tr><tr><td class="mono">graph</td><td class="n">1.32×</td><td class="n">1.16×</td><td class="n">1.00×</td><td>为 V 个顶点和 8V 条边构建邻接表，再从四个起点做 BFS。</td></tr><tr><td class="mono">interp</td><td class="n">1.29×</td><td class="n">1.41×</td><td class="n">2.04×</td><td>构建指定深度的表达式树，求值八次。</td></tr><tr><td class="mono">strlist</td><td class="n">1.22×</td><td class="n">1.24×</td><td class="n">1.04×</td><td>将文本拆分为 N 个单词，存为列表并扫描四次。</td></tr><tr><td class="mono">sexp</td><td class="n">1.16×</td><td class="n">1.11×</td><td class="n">2.43×</td><td>生成 N 条 S 表达式，解析为树并遍历四次。</td></tr><tr><td class="mono">bintrees</td><td class="n">1.16×</td><td class="n">1.14×</td><td class="n">0.99×</td><td>按给定深度反复构建、校验并丢弃大量二叉树。</td></tr><tr><td class="mono">blur</td><td class="n">1.12×</td><td class="n">1.00×</td><td class="n">1.00×</td><td>对 WxW 8 位图像执行 16 趟 3x3 模糊。</td></tr><tr><td class="mono">lru</td><td class="n">1.09×</td><td class="n">0.81×</td><td class="n">1.03×</td><td>容量为 N/8 的 LRU 缓存承受 N 次偏态查询。</td></tr><tr><td class="mono">push</td><td class="n">1.08×</td><td class="n">1.08×</td><td class="n">1.00×</td><td>推入 N 条记录，同时保留指向每第 64 条记录的指针。</td></tr><tr><td class="mono">tree</td><td class="n">1.03×</td><td class="n">1.09×</td><td class="n">1.00×</td><td>构建指定深度的满二叉树，求和八次。</td></tr><tr><td class="mono">particles</td><td class="n">1.03×</td><td class="n">1.00×</td><td class="n">1.00×</td><td>对 N 个粒子执行 200 步 f32 向量数学积分。</td></tr><tr><td class="mono">scene</td><td class="n">1.02×</td><td class="n">0.82×</td><td class="n">1.35×</td><td>构建场景图，执行动画并重算 16 帧的世界变换。</td></tr><tr><td class="mono">sum</td><td class="n">0.98×</td><td class="n">1.05×</td><td class="n">1.00×</td><td>对照组：构建平坦的 i32 数组，然后扫描八次。</td></tr><tr><td class="mono">calc</td><td class="n">0.89×</td><td class="n">0.91×</td><td class="n">1.00×</td><td>生成、解析并求值 N 个小型算术表达式。</td></tr></tbody></table></div></details>
+</figure>
+      
+<figure class="chart" id="bintrees" style="--lw:9.5rem">
+  <figcaption><h3>二叉树的构建与丢弃</h3><p class="sub">深度 19 下的耗时（毫秒），越低越好。K 的树住在局部内存池中，只需一次写入即可整体释放；Box 和 new/delete 则须逐节点释放。</p></figcaption>
+  <div class="plot"><div class="grid" aria-hidden="true"><span style="left:0.000%"></span><span style="left:28.571%"></span><span style="left:57.143%"></span><span style="left:85.714%"></span></div><div class="row" tabindex="0" data-v="204 ms" data-l="K。每棵树使用局部内存池，通过重置栈顶一次释放。" aria-label="K · 每棵树独立池：204 ms"><span class="rlab">K · 每棵树独立池</span><span class="track"><span class="bar klang pos" style="left:0;width:5.823%"></span><span class="val" style="left:calc(5.823% + 6px)">204 ms</span></span></div><div class="row" tabindex="0" data-v="235 ms" data-l="Rust。由整数索引链接的节点 arena。" aria-label="Rust · Vec arena：235 ms"><span class="rlab">Rust · Vec arena</span><span class="track"><span class="bar pos" style="left:0;width:6.726%"></span><span class="val" style="left:calc(6.726% + 6px)">235 ms</span></span></div><div class="row" tabindex="0" data-v="407 ms" data-l="C++。预留容量的 vector arena 加索引。" aria-label="C++ · vector arena：407 ms"><span class="rlab">C++ · vector arena</span><span class="track"><span class="bar pos" style="left:0;width:11.626%"></span><span class="val" style="left:calc(11.626% + 6px)">407 ms</span></span></div><div class="row" tabindex="0" data-v="3,103 ms" data-l="Rust。每个节点一次 Box 分配。" aria-label="Rust · 逐节点 Box：3,103 ms"><span class="rlab">Rust · 逐节点 Box</span><span class="track"><span class="bar pos" style="left:0;width:88.643%"></span><span class="val in" style="right:calc(11.357% + 6px)">3,103 ms</span></span></div><div class="row" tabindex="0" data-v="3,224 ms" data-l="C++。每个节点一次 new 与一次 delete。" aria-label="C++ · new/delete：3,224 ms"><span class="rlab">C++ · new/delete</span><span class="track"><span class="bar pos" style="left:0;width:92.106%"></span><span class="val in" style="right:calc(7.894% + 6px)">3,224 ms</span></span></div></div>
+  <div class="axis" aria-hidden="true"><span></span><span class="ticks"><span style="left:0.000%">0</span><span style="left:28.571%">1,000</span><span style="left:57.143%">2,000</span><span style="left:85.714%">3,000</span></span></div>
+  <p class="cnote">与公平对照组 arena 相比，K 比 Rust 快 1.16×，比 C++ 快 2.0×。</p>
+  <details class="tv"><summary>以表格形式查看</summary><div class="tv-wrap"><table><thead><tr><th>实现方式</th><th>毫秒 (clang 构建)</th></tr></thead><tbody><tr><td class="">K，每棵树独立局部池</td><td class="n">203.8</td></tr><tr><td class="">Rust，Vec arena</td><td class="n">235.4</td></tr><tr><td class="">C++，vector arena</td><td class="n">406.9</td></tr><tr><td class="">Rust，Box</td><td class="n">3,102.5</td></tr><tr><td class="">C++，new/delete</td><td class="n">3,223.7</td></tr></tbody></table></div></details>
+</figure>
+    </div>
+  </section>
+
+  <section class="sec" id="why-fast">
+    <div class="sec-head"><h2>速度从何而来</h2><a class="ref" href="https://github.com/kense-labs/klang/blob/main/docs/tutorial.md#17-about-the-speed">教程 §17</a></div>
+    <p class="sec-lead">K 会编译成 C，因此 C 程序员手工也能写出这些布局。区别在于 K 把这些紧凑布局设为默认选择，并由编译器校验安全。即便面对已经使用 arena 和平坦偏移的 C++，K 仍保持 1.26× 的领先。</p>
+    <div class="mechs"><article class="mech"><h3>增长只是指针递增</h3><p>没有 malloc、没有容量检查，也没有增长时的搬迁拷贝，因此指向增长中数组的引用始终有效。</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">push</span> · 推入 6400 万条记录，并保留每第 64 条的引用。单位 ms，越低越好。</figcaption><div class="plot"><div class="row" tabindex="0" data-v="162 ms" data-l="K，类型化引用。push：推入 6400 万条记录，保留每第 64 条的引用。" aria-label="K · 类型化引用：162 ms"><span class="rlab">K · 类型化引用</span><span class="track"><span class="bar klang pos" style="left:0;width:8.693%"></span><span class="val" style="left:calc(8.693% + 6px)">162 ms</span></span></div><div class="row" tabindex="0" data-v="174 ms" data-l="Rust，Vec，预留容量加索引。push：推入 6400 万条记录，保留每第 64 条的引用。" aria-label="Rust · Vec 预留容量 + 索引：174 ms"><span class="rlab">Rust · Vec 预留容量 + 索引</span><span class="track"><span class="bar pos" style="left:0;width:9.353%"></span><span class="val" style="left:calc(9.353% + 6px)">174 ms</span></span></div><div class="row" tabindex="0" data-v="499 ms" data-l="C++，vector 加索引。push：推入 6400 万条记录，保留每第 64 条的引用。" aria-label="C++ · vector + 索引：499 ms"><span class="rlab">C++ · vector + 索引</span><span class="track"><span class="bar pos" style="left:0;width:26.783%"></span><span class="val" style="left:calc(26.783% + 6px)">499 ms</span></span></div><div class="row" tabindex="0" data-v="1,864 ms" data-l="C++，deque 加指针。push：推入 6400 万条记录，保留每第 64 条的引用。" aria-label="C++ · deque + 指针：1,864 ms"><span class="rlab">C++ · deque + 指针</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">1,864 ms</span></span></div></div></figure></article><article class="mech"><h3>释放只需一次写入</h3><p>作用域结束时不运行任何析构函数。无论结构里有多少节点，只需把栈顶指针退回原位。</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">tree</span> · 深度 24 的满二叉树，求和八次。单位 ms，越低越好。</figcaption><div class="plot"><div class="row" tabindex="0" data-v="658 ms" data-l="K，内存池，4 字节链接。tree：深度 24 的满二叉树，求和八次。" aria-label="K · 内存池，4 字节链接：658 ms"><span class="rlab">K · 内存池，4 字节链接</span><span class="track"><span class="bar klang pos" style="left:0;width:22.853%"></span><span class="val" style="left:calc(22.853% + 6px)">658 ms</span></span></div><div class="row" tabindex="0" data-v="676 ms" data-l="Rust，arena 加索引。tree：深度 24 的满二叉树，求和八次。" aria-label="Rust · arena + 索引：676 ms"><span class="rlab">Rust · arena + 索引</span><span class="track"><span class="bar pos" style="left:0;width:23.460%"></span><span class="val" style="left:calc(23.460% + 6px)">676 ms</span></span></div><div class="row" tabindex="0" data-v="2,778 ms" data-l="Rust，逐节点 Box。tree：深度 24 的满二叉树，求和八次。" aria-label="Rust · 逐节点 Box：2,778 ms"><span class="rlab">Rust · 逐节点 Box</span><span class="track"><span class="bar pos" style="left:0;width:96.431%"></span><span class="val in" style="right:calc(3.569% + 6px)">2,778 ms</span></span></div><div class="row" tabindex="0" data-v="2,881 ms" data-l="C++，unique_ptr。tree：深度 24 的满二叉树，求和八次。" aria-label="C++ · unique_ptr：2,881 ms"><span class="rlab">C++ · unique_ptr</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">2,881 ms</span></span></div></div></figure></article><article class="mech"><h3>记录是一整块连续内存</h3><p>字符串、列表和记录全部内联嵌套，中间没有指针跳转，扫描时直接顺序流过内存。</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">strlist</span> · 800 万个持有所有权的单词，扫描四次。单位 ms，越低越好。</figcaption><div class="plot"><div class="row" tabindex="0" data-v="266 ms" data-l="K，内联字符串。strlist：800 万个持有所有权的单词，扫描四次。" aria-label="K · 内联字符串：266 ms"><span class="rlab">K · 内联字符串</span><span class="track"><span class="bar klang pos" style="left:0;width:30.626%"></span><span class="val" style="left:calc(30.626% + 6px)">266 ms</span></span></div><div class="row" tabindex="0" data-v="778 ms" data-l="Rust，Vec&lt;String&gt;。strlist：800 万个持有所有权的单词，扫描四次。" aria-label="Rust · Vec&lt;String&gt;：778 ms"><span class="rlab">Rust · Vec&lt;String&gt;</span><span class="track"><span class="bar pos" style="left:0;width:89.630%"></span><span class="val in" style="right:calc(10.370% + 6px)">778 ms</span></span></div><div class="row" tabindex="0" data-v="868 ms" data-l="C++，vector&lt;string&gt;。strlist：800 万个持有所有权的单词，扫描四次。" aria-label="C++ · vector&lt;string&gt;：868 ms"><span class="rlab">C++ · vector&lt;string&gt;</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">868 ms</span></span></div></div></figure></article><article class="mech"><h3>值直接在落脚处构造</h3><p>无论调用栈有多深，值都直接在最终目标位置构造，因此按值返回一个可增长数组没有任何拷贝开销。</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">respond</span> · 构建并渲染 160 万条 JSON 响应。单位 ms，越低越好。</figcaption><div class="plot"><div class="row" tabindex="0" data-v="491 ms" data-l="K，内联 DTO。respond：构建并渲染 160 万条 JSON 响应。" aria-label="K · 内联 DTO：491 ms"><span class="rlab">K · 内联 DTO</span><span class="track"><span class="bar klang pos" style="left:0;width:36.694%"></span><span class="val" style="left:calc(36.694% + 6px)">491 ms</span></span></div><div class="row" tabindex="0" data-v="540 ms" data-l="Rust，流式写入，无 DTO。respond：构建并渲染 160 万条 JSON 响应。" aria-label="Rust · 流式无 DTO：540 ms"><span class="rlab">Rust · 流式无 DTO</span><span class="track"><span class="bar pos" style="left:0;width:40.386%"></span><span class="val" style="left:calc(40.386% + 6px)">540 ms</span></span></div><div class="row" tabindex="0" data-v="833 ms" data-l="C++，DTO + string。respond：构建并渲染 160 万条 JSON 响应。" aria-label="C++ · DTO + string：833 ms"><span class="rlab">C++ · DTO + string</span><span class="track"><span class="bar pos" style="left:0;width:62.230%"></span><span class="val" style="left:calc(62.230% + 6px)">833 ms</span></span></div><div class="row" tabindex="0" data-v="1,338 ms" data-l="Rust，DTO + String。respond：构建并渲染 160 万条 JSON 响应。" aria-label="Rust · DTO + String：1,338 ms"><span class="rlab">Rust · DTO + String</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">1,338 ms</span></span></div></div></figure></article><article class="mech"><h3>枚举只占各自实际内容的大小</h3><p>叶节点和分支节点各自只占自身所需大小，case 函数则根据标签字节通过跳转表分发。</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">interp</span> · 深度 24 的表达式树，求值八次。单位 ms，越低越好。</figcaption><div class="plot"><div class="row" tabindex="0" data-v="68 ms" data-l="K，case 函数。interp：深度 24 的表达式树，求值八次。" aria-label="K · case 函数：68 ms"><span class="rlab">K · case 函数</span><span class="track"><span class="bar klang pos" style="left:0;width:14.927%"></span><span class="val" style="left:calc(14.927% + 6px)">68 ms</span></span></div><div class="row" tabindex="0" data-v="88 ms" data-l="Rust，enum + arena。interp：深度 24 的表达式树，求值八次。" aria-label="Rust · enum + arena：88 ms"><span class="rlab">Rust · enum + arena</span><span class="track"><span class="bar pos" style="left:0;width:19.265%"></span><span class="val" style="left:calc(19.265% + 6px)">88 ms</span></span></div><div class="row" tabindex="0" data-v="96 ms" data-l="C++，variant + arena。interp：深度 24 的表达式树，求值八次。" aria-label="C++ · variant + arena：96 ms"><span class="rlab">C++ · variant + arena</span><span class="track"><span class="bar pos" style="left:0;width:21.202%"></span><span class="val" style="left:calc(21.202% + 6px)">96 ms</span></span></div><div class="row" tabindex="0" data-v="454 ms" data-l="Rust，enum + Box。interp：深度 24 的表达式树，求值八次。" aria-label="Rust · enum + Box：454 ms"><span class="rlab">Rust · enum + Box</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">454 ms</span></span></div></div></figure></article><article class="mech"><h3>1、2 或 4 字节的链接</h3><p>相对引用将带类型的链接存成小偏移量而非 8 字节指针，让更多结构能塞进缓存。</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">sexp</span> · 将 30 万条 S 表达式解析为树，统计峰值内存。单位 MB，越低越好。</figcaption><div class="plot"><div class="row" tabindex="0" data-v="376 MB" data-l="K，4 字节链接。sexp：将 30 万条 S 表达式解析为树，统计峰值内存。" aria-label="K · 4 字节链接：376 MB"><span class="rlab">K · 4 字节链接</span><span class="track"><span class="bar klang pos" style="left:0;width:19.846%"></span><span class="val" style="left:calc(19.846% + 6px)">376 MB</span></span></div><div class="row" tabindex="0" data-v="914 MB" data-l="Rust，arena + &amp;str。sexp：将 30 万条 S 表达式解析为树，统计峰值内存。" aria-label="Rust · arena + &amp;str：914 MB"><span class="rlab">Rust · arena + &amp;str</span><span class="track"><span class="bar pos" style="left:0;width:48.196%"></span><span class="val" style="left:calc(48.196% + 6px)">914 MB</span></span></div><div class="row" tabindex="0" data-v="968 MB" data-l="C++，arena + string_view。sexp：将 30 万条 S 表达式解析为树，统计峰值内存。" aria-label="C++ · arena + string_view：968 MB"><span class="rlab">C++ · arena + string_view</span><span class="track"><span class="bar pos" style="left:0;width:51.092%"></span><span class="val" style="left:calc(51.092% + 6px)">968 MB</span></span></div><div class="row" tabindex="0" data-v="1,896 MB" data-l="C++，unique_ptr + string。sexp：将 30 万条 S 表达式解析为树，统计峰值内存。" aria-label="C++ · unique_ptr + string：1,896 MB"><span class="rlab">C++ · unique_ptr + string</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">1,896 MB</span></span></div></div></figure></article><article class="mech"><h3>由编译器证明消去边界检查</h3><p>每次索引访问都会做边界检查，除非编译器能证明其安全。像 <code>u32 in dist</code> 这样的索引类型只在存入时校验一次，而 <code>checkfree</code> 会拒绝仍残留边界检查的循环。</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">graph</span> · 对 200 万个顶点执行广度优先搜索，CSR 布局。单位 ms，越低越好。</figcaption><div class="plot"><div class="row" tabindex="0" data-v="616 ms" data-l="K，checkfree。graph：对 200 万个顶点执行广度优先搜索，CSR 布局。" aria-label="K · checkfree：616 ms"><span class="rlab">K · checkfree</span><span class="track"><span class="bar klang pos" style="left:0;width:76.027%"></span><span class="val in" style="right:calc(23.973% + 6px)">616 ms</span></span></div><div class="row" tabindex="0" data-v="761 ms" data-l="C++，CSR。graph：对 200 万个顶点执行广度优先搜索，CSR 布局。" aria-label="C++ · CSR：761 ms"><span class="rlab">C++ · CSR</span><span class="track"><span class="bar pos" style="left:0;width:93.859%"></span><span class="val in" style="right:calc(6.141% + 6px)">761 ms</span></span></div><div class="row" tabindex="0" data-v="811 ms" data-l="Rust，CSR。graph：对 200 万个顶点执行广度优先搜索，CSR 布局。" aria-label="Rust · CSR：811 ms"><span class="rlab">Rust · CSR</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">811 ms</span></span></div></div></figure></article><article class="mech"><h3>直接调用，按需内联</h3><p>函数值仅存在于编译期，因此每一次调用都是直接调用，高阶代码也会直接编译成它看起来的那样循环。<code>inline fn</code> 会无视体积在每处调用点强制内联，并在 K 自己无法展开时请求 C 编译器内联。<code>simd fn</code> 则会额外生成 AVX2 和 AVX-512 版本，并在运行时选用 CPU 支持的最宽版本。</p><pre class="code" aria-label="K 代码"><code><span class="tk">let</span> evens = xs.filter() { it % <span class="tn">2</span> == <span class="tn">0</span> };     <span class="tc">// 单个循环，直接写入 evens</span>
+<span class="tk">inline</span> <span class="tk">fn</span> <span class="td">lerp</span>(a: <span class="tt">f64</span>, b: <span class="tt">f64</span>, t: <span class="tt">f64</span>) -&gt; <span class="tt">f64</span> { a + (b - a) * t }
+<span class="tk">simd</span> <span class="tk">fn</span> <span class="td">encode</span>(out: <span class="tt">u8</span>[&gt;..]&amp;, src: <span class="tt">u8</span>[:]) { ... }</code></pre><dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C / C++</dt><dd><code>inline</code> 主要控制链接属性。要强制内联得用 <code>__forceinline</code> 或 <code>always_inline</code>（各编译器写法不同），而且 <code>std::function</code> 与虚函数调用依然是间接调用。</dd></div><div><dt>Rust</dt><dd><code>#[inline(always)]</code> 最为接近。作为泛型传入的闭包也能以同样方式内联，但 <code>Box&lt;dyn Fn&gt;</code> 仍是间接调用。</dd></div></dl></article></div>
+    <details class="tv"><summary>以表格形式查看本节所有数据</summary><div class="tv-wrap"><table><thead><tr><th>机制</th><th>基准项目</th><th>实现方式</th><th>结果</th></tr></thead><tbody><tr><td>增长只是指针递增</td><td class="mono">push</td><td>K · 类型化引用</td><td class="n">162.0 ms</td></tr><tr><td>增长只是指针递增</td><td class="mono">push</td><td>Rust · Vec 预留容量 + 索引</td><td class="n">174.3 ms</td></tr><tr><td>增长只是指针递增</td><td class="mono">push</td><td>C++ · vector + 索引</td><td class="n">499.1 ms</td></tr><tr><td>增长只是指针递增</td><td class="mono">push</td><td>C++ · deque + 指针</td><td class="n">1,863.5 ms</td></tr><tr><td>释放只需一次写入</td><td class="mono">tree</td><td>K · 内存池，4 字节链接</td><td class="n">658.3 ms</td></tr><tr><td>释放只需一次写入</td><td class="mono">tree</td><td>Rust · arena + 索引</td><td class="n">675.8 ms</td></tr><tr><td>释放只需一次写入</td><td class="mono">tree</td><td>Rust · 逐节点 Box</td><td class="n">2,777.8 ms</td></tr><tr><td>释放只需一次写入</td><td class="mono">tree</td><td>C++ · unique_ptr</td><td class="n">2,880.6 ms</td></tr><tr><td>记录是一整块连续内存</td><td class="mono">strlist</td><td>K · 内联字符串</td><td class="n">265.8 ms</td></tr><tr><td>记录是一整块连续内存</td><td class="mono">strlist</td><td>Rust · Vec&lt;String&gt;</td><td class="n">777.9 ms</td></tr><tr><td>记录是一整块连续内存</td><td class="mono">strlist</td><td>C++ · vector&lt;string&gt;</td><td class="n">867.9 ms</td></tr><tr><td>值直接在落脚处构造</td><td class="mono">respond</td><td>K · 内联 DTO</td><td class="n">491.0 ms</td></tr><tr><td>值直接在落脚处构造</td><td class="mono">respond</td><td>Rust · 流式无 DTO</td><td class="n">540.4 ms</td></tr><tr><td>值直接在落脚处构造</td><td class="mono">respond</td><td>C++ · DTO + string</td><td class="n">832.7 ms</td></tr><tr><td>值直接在落脚处构造</td><td class="mono">respond</td><td>Rust · DTO + String</td><td class="n">1,338.1 ms</td></tr><tr><td>枚举只占各自实际内容的大小</td><td class="mono">interp</td><td>K · case 函数</td><td class="n">67.8 ms</td></tr><tr><td>枚举只占各自实际内容的大小</td><td class="mono">interp</td><td>Rust · enum + arena</td><td class="n">87.5 ms</td></tr><tr><td>枚举只占各自实际内容的大小</td><td class="mono">interp</td><td>C++ · variant + arena</td><td class="n">96.3 ms</td></tr><tr><td>枚举只占各自实际内容的大小</td><td class="mono">interp</td><td>Rust · enum + Box</td><td class="n">454.2 ms</td></tr><tr><td>1、2 或 4 字节的链接</td><td class="mono">sexp</td><td>K · 4 字节链接</td><td class="n">376.2 MB</td></tr><tr><td>1、2 或 4 字节的链接</td><td class="mono">sexp</td><td>Rust · arena + &amp;str</td><td class="n">913.6 MB</td></tr><tr><td>1、2 或 4 字节的链接</td><td class="mono">sexp</td><td>C++ · arena + string_view</td><td class="n">968.5 MB</td></tr><tr><td>1、2 或 4 字节的链接</td><td class="mono">sexp</td><td>C++ · unique_ptr + string</td><td class="n">1,895.6 MB</td></tr><tr><td>由编译器证明消去边界检查</td><td class="mono">graph</td><td>K · checkfree</td><td class="n">616.5 ms</td></tr><tr><td>由编译器证明消去边界检查</td><td class="mono">graph</td><td>C++ · CSR</td><td class="n">761.1 ms</td></tr><tr><td>由编译器证明消去边界检查</td><td class="mono">graph</td><td>Rust · CSR</td><td class="n">810.9 ms</td></tr></tbody></table></div></details>
+  </section>
+
+  <section class="sec" id="extras">
+    <div class="sec-head"><h2>开箱即得的特性</h2><a class="ref" href="https://github.com/kense-labs/klang/blob/main/docs/tutorial.md">教程 §12 至 §16</a></div>
+    <div class="extras"><article class="extra"><h3>可跨层返回的错误</h3><pre class="code" aria-label="K 代码"><code><span class="tk">guard</span> ok <span class="tk">else</span> { <span class="tk">return</span> [], <span class="tb">str</span>(<span class="ts">"bad age: "</span>, line) <span class="tk">from</span> load; }</code></pre><p>无论嵌套多少层调用，都能直接从 <code>load</code> 返回。编译器会检查每一处用法，因此无需栈展开器、无需异常机制，也无需 <code>Result</code> 类型。</p><dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C++</dt><dd>异常需要栈展开器与展开表，且任何调用都可能抛出异常。</dd></div><div><dt>Rust</dt><dd>需要靠 <code>Result</code> 沿着中间每一层调用用 <code>?</code> 逐级向上传递。</dd></div></dl></article><article class="extra"><h3>互不共享的线程</h3><pre class="code" aria-label="K 代码"><code><span class="tk">thread_fn</span> worker() {
+    <span class="tk">let</span> job = <span class="tb">qget</span>&lt;<span class="tt">Job</span>&gt;();      <span class="tc">// 在 Job 队列上阻塞等待</span>
+}</code></pre><p>每个工作线程都会被编译成一个独立的小程序，拥有各自的内存空间。值通过带类型的队列以 memcpy 传递，因此根本不存在数据竞争、锁与原子操作。即便某个受控工作线程中止，也只会独自退出，主程序照常运行。</p><dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C++</dt><dd>线程共享内存，因此正确性完全依赖于锁、原子操作与内存序。</dd></div><div><dt>Rust</dt><dd>通过 <code>Send</code>、<code>Sync</code> 与 <code>Mutex</code> 检查共享安全性，但本质上仍是共享内存。</dd></div></dl></article><article class="extra"><h3>用于非嵌套生命周期的内存池</h3><pre class="code" aria-label="K 代码"><code><span class="tk">reusable</span> <span class="tk">var</span> pool: <span class="tt">Item</span>[&gt;..] = [];
+<span class="tk">let</span> s0 = pool.alloc_index(<span class="tt">Item</span> { <span class="tn">10</span>, <span class="tn">1.0</span> });
+pool.free(s0);                                  <span class="tc">// 槽位进入空闲链表</span>
+<span class="tk">let</span> s1 = pool.alloc_index(<span class="tt">Item</span> { <span class="tn">11</span>, <span class="tn">2.0</span> });    <span class="tc">// 随后被再次分配出去</span></code></pre><p>缓存、图结构以及任何按任意顺序删除的对象，都可以存放在可复用内存池中，由池负责分发与回收槽位。陈旧的槽位句柄最多只会读到同一类型的另一个有效值，绝不会读到已释放的内存。</p><dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C / C++</dt><dd>指向已回收槽位的陈旧指针属于未定义行为，可能读到其他类型的数据或已释放内存。</dd></div><div><dt>Rust</dt><dd><code>slotmap</code> crate 通过代数计数器捕获陈旧键；K 则将这部分交由你自行决定。</dd></div></dl></article><article class="extra"><h3>保存即写入字节</h3><pre class="code" aria-label="K 代码"><code><span class="tk">var</span> image: <span class="tt">u8</span>[&gt;..] = tree.to_bytes();
+<span class="tk">var</span> loaded, ok = from_bytes&lt;<span class="tt">Node</span>[&gt;..]&gt;(image);   <span class="tc">// 先校验每一条链接</span></code></pre><p>由相对引用链接起来的结构在任何内存地址下含义都完全一致。保存时直接写出它的字节即可，加载时则会逐一校验每个标签、长度与链接，因此损坏的文件只会得到 <code>false</code>，绝不会产生野引用。</p><dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C++ · Rust</dt><dd>指针写到磁盘上毫无意义，因此数据必须经过 protobuf、serde 等序列化器，或使用不安全的类型强转。</dd></div></dl></article><article class="extra"><h3>按字段或变体生成代码</h3><pre class="code" aria-label="K 代码"><code><span class="tk">fn</span> <span class="td">visit_fields</span>&lt;<span class="tt">T</span>, <span class="tt">F</span>&gt;(value: <span class="tt">T</span>&amp;) {
+    <span class="tk">const</span> <span class="tk">for</span> &lt;<span class="tt">N</span>, <span class="tt">A</span>&gt; <span class="tk">in</span> fields&lt;<span class="tt">T</span>&gt; { <span class="tt">F</span>(<span class="tt">N</span>, &amp;value.<span class="tt">A</span>); }
+}</code></pre><p><code>const for</code> 会在编译期为结构体的每个字段、枚举的每个变体或列出的每个类型重复生成代码。序列化器与访问器无需任何运行时反射。</p><dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>Rust</dt><dd>由派生宏实现同样的功能，需要单独编写过程宏 crate。</dd></div><div><dt>C++</dt><dd>通常依赖宏或手写访问器。</dd></div></dl></article><article class="extra"><h3>纯正的 C 进，纯正的 C 出</h3><pre class="code" aria-label="K 代码"><code><span class="tc">// 从 K 调用 C</span>
+<span class="tk">extern</span> <span class="tk">fn</span> <span class="td">hypot</span>(x: <span class="tt">f64</span>, y: <span class="tt">f64</span>) -&gt; <span class="tt">f64</span>;
+<span class="tc">// 从 C 调用 K</span>
+<span class="tk">export</span> <span class="ts">"c_add"</span> <span class="tk">fn</span> <span class="td">add</span>(a: <span class="tt">i32</span>, b: <span class="tt">i32</span>) -&gt; <span class="tt">i32</span> { a + b }</code></pre><p>整个程序会编译成单个 C 文件，并直接调用 C 函数。<code>export fn</code> 则反过来让 K 可以作为库嵌入 C 或 C++ 程序。内置的 TinyCC 还能免去构建步骤直接在进程内运行程序。</p><dl class="vs" aria-label="与 C、C++ 和 Rust 的对比"><div><dt>C++</dt><dd>双向都使用 <code>extern "C"</code>。</dd></div><div><dt>Rust</dt><dd>调用 C 需要 <code>unsafe extern</code> 块，导出则需同时标注 <code>no_mangle</code> 与 <code>extern "C"</code>。</dd></div></dl></article></div>
+  </section>
+
+  <section class="sec" id="around">
+    <div class="sec-head"><h2>语言周边生态</h2><a class="ref" href="https://github.com/kense-labs/klang/blob/main/docs/packages.md">docs/packages.md</a></div>
+    <div class="around">
+      <div class="blk">
+        <h3>包含十五个模块的标准库</h3>
+        <p>涵盖 <code>std</code>、<code>dictionary</code>、<code>math</code> 到 <code>json</code>、<code>csv</code>、<code>regex</code> 和 <code>base64</code>。基于 SDL3 GPU API 的图形、音频、Box3D 物理引擎以及 Nuklear UI 以包的形式提供，首次导入时由编译器自动拉取。</p>
+      </div>
+      <div class="blk">
+        <h3>31 个示例程序</h3>
+        <p>从素数筛、数独求解器、霍夫曼编码，到光线追踪器、JSON 解析器、多线程曼德勃罗集、旋转的 GPU 立方体、物理下落箱体、待办应用、迷你 Minecraft 和迷你 Doom。</p>
+      </div>
+      <div class="blk">
+        <h3>工具链</h3>
+        <p><code>k build</code> 会调用找到的任意 C 编译器生成可执行文件。包通过指定 tag 或 commit 从 git 拉取。<code>k lsp</code> 是支持 VS Code、Neovim、Helix 和 Emacs 的语言服务器，提供悬停提示、跳转定义、重命名和内联提示，<code>--debug</code> 则会开启溢出与范围检查。</p>
+        <pre class="code" aria-label="K 代码"><code><span class="tk">import</span> mylib <span class="tk">from</span> <span class="ts">"joe/mylib@v2"</span>;      <span class="tc">// 从 GitHub 拉取 tag v2</span></code></pre>
+      </div>
+      <div class="blk">
+        <h3>关于项目</h3>
+        <p>采用 Apache 2.0 许可证。由 Lobster 语言的作者 Wouter van Oortmerssen 设计。README 中提到，这个约 30,000 行 C++ 的编译器几乎完全由 Claude Fable 根据他的设计写成。CI 在 Windows、macOS 和 Linux 上运行测试套件，并配有 sanitizer 检查任务。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="costs">
+    <div class="sec-head"><h2>它对你的要求</h2><a class="ref" href="https://github.com/kense-labs/klang/blob/main/docs/tutorial.md#18-limitations">教程 §18</a></div>
+    <div class="costs"><div class="cost"><h3>由你决定数据住在哪里</h3><p>通常谁构建值，就由谁拥有它。当生命周期不再呈现嵌套关系时，改用可复用内存池。</p></div><div class="cost"><h3>递归需将存储作为参数传入</h3><p>递归函数无法跨递归调用保留可增长数据，因此需要把内存池或构建器作为参数传进去。</p></div><div class="cost"><h3>变长元素需遍历而非索引</h3><p>变长记录数组是顺序存储的，除非你在旁边额外维护一张引用索引。</p></div><div class="cost"><h3>没有可逃逸的闭包或函数指针</h3><p>函数值只存在于编译期，多态分发依靠枚举标签，整个程序须一次性全量编译。</p></div><div class="cost"><h3>已释放的池槽位可能变陈旧</h3><p>归还某个槽位后若仍继续引用，只会读到后来复用它的新值。这是需要避免的逻辑错误，但绝不会导致内存破坏。</p></div><div class="cost"><h3>语言仍很年轻</h3><p>语言规范仍处于草稿阶段，几乎每周都在演进。预编译发行版自 2026 年 10 月起开始发布。</p></div></div>
+  </section>
+
+  <section class="sec" id="try">
+    <div class="sec-head"><h2>动手试试</h2><a class="ref" href="https://github.com/kense-labs/klang/releases">发行版</a></div>
+    <div class="two">
+      <ol class="steps">
+        <li><span>按<a href="https://github.com/kense-labs/klang#build-from-source">构建说明</a><b>编译</b> <code>klang</code>。</span></li>
+        <li><span>将下面这段代码<b>保存</b>为 <code>hello.k</code>。</span><pre class="code" aria-label="K 代码"><code><span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tb">print</span>(<span class="ts">"hello, klang"</span>);
+}</code></pre></li>
+        <li><span>在进程内直接<b>运行</b>，或构建原生可执行文件。</span><pre class="code"><code>k run hello.k
+k build hello.k</code></pre></li>
+      </ol>
+      <nav class="links" aria-label="延伸阅读">
+        <a href="https://github.com/kense-labs/klang/blob/main/docs/tutorial.md"><b>教程</b><span>通过实例带你轻松入门。</span></a>
+        <a href="https://github.com/kense-labs/klang/blob/main/docs/reference.md"><b>语言参考</b><span>每条规则都附有示例。</span></a>
+        <a href="https://github.com/kense-labs/klang/tree/main/samples"><b>31 个示例程序</b><span>从语言导览到 JSON 解析器与迷你 Doom。</span></a>
+        <a href="https://github.com/kense-labs/klang/blob/main/docs/k_spec.md"><b>语言规范</b><span>精确规则，排查编译不通过时的参考。</span></a>
+      </nav>
+    </div>
+  </section>
+
+  <footer>
+    <p>本文为非官方导读，与 K 项目本身无隶属关系。数据均取自 K 仓库 v2026.3 版本：包括 README、教程、语言规范，以及 2026 年 10 月 16 日在 Windows 11、Ryzen 9 9950X3D 上运行得到的 <code>bench/results.md</code>。</p>
+    <p>本页面上的每一个字节布局均由 K 编译器实际输出。</p>
+  </footer>
+</div>
+
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<script>
+(() => {
+  const root = document.documentElement;
+  const buttons = document.querySelectorAll(".themes button");
+  let host = root.getAttribute("data-theme");
+  let choice = "auto";
+  try { choice = localStorage.getItem("klang-poster-theme") || "auto"; } catch (e) {}
+  function apply() {
+    if (choice === "auto") {
+      if (host) root.setAttribute("data-theme", host); else root.removeAttribute("data-theme");
+    } else if (root.getAttribute("data-theme") !== choice) {
+      root.setAttribute("data-theme", choice);
+    }
+    buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.choice === choice)));
+  }
+  new MutationObserver(() => {
+    const cur = root.getAttribute("data-theme");
+    if (choice === "auto") { host = cur; return; }
+    if (cur !== choice) { host = cur; root.setAttribute("data-theme", choice); }
+  }).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+  buttons.forEach((b) => b.addEventListener("click", () => {
+    choice = b.dataset.choice;
+    try { localStorage.setItem("klang-poster-theme", choice); } catch (e) {}
+    apply();
+  }));
+  apply();
+})();
+(() => {
+  const tip = document.getElementById("tip");
+  function place(x, y) {
+    const r = tip.getBoundingClientRect();
+    let left = x + 14, top = y + 16;
+    if (left + r.width > window.innerWidth - 8) left = x - r.width - 14;
+    if (top + r.height > window.innerHeight - 8) top = y - r.height - 12;
+    tip.style.left = Math.max(8, left) + "px";
+    tip.style.top = Math.max(8, top) + "px";
+  }
+  function show(el) {
+    const v = document.createElement("strong");
+    v.textContent = el.dataset.v;
+    const l = document.createElement("span");
+    l.textContent = el.dataset.l;
+    tip.replaceChildren(v, l);
+    tip.hidden = false;
+  }
+  document.querySelectorAll(".row[data-v]").forEach((el) => {
+    el.addEventListener("pointerenter", (e) => { show(el); place(e.clientX, e.clientY); });
+    el.addEventListener("pointermove", (e) => place(e.clientX, e.clientY));
+    el.addEventListener("pointerleave", () => { tip.hidden = true; });
+    el.addEventListener("focus", () => {
+      show(el);
+      const r = el.getBoundingClientRect();
+      place(r.left + r.width * 0.6, r.top + r.height);
+    });
+    el.addEventListener("blur", () => { tip.hidden = true; });
+  });
+})();
+</script>
+
+</body></html>

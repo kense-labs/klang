@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Build the bilingual (EN / 简体中文) K documentation site in KUI style.
+"""Build the fully bilingual (EN / 简体中文) K documentation site in KUI style.
 
-The site keeps the repository's layout: README.md becomes index.html,
-README.zh-CN.md becomes README.zh-CN.html, docs/*.md becomes docs/*.html,
-docs/zh/*.md becomes docs/zh/*.html, samples/README.md becomes
-samples/index.html, and so on. Every relative link resolves cleanly after
-links.lua rewrites `.md` -> `.html` and `.k` -> `.k.html`.
+The site keeps the repository's layout for English docs (`README.md` ->
+`index.html`, `docs/*.md` -> `docs/*.html`, `bench/*.md` -> `bench/*.html`)
+and publishes full 1:1 Simplified Chinese mirrors under `README.zh-CN.html` and
+`docs/zh/**/*.html` plus `docs/diagrams/svg/zh/*.svg`.
 
     python docs/site/build.py --out build/site --check
 """
@@ -19,7 +18,7 @@ import shutil
 import subprocess
 import sys
 from html.parser import HTMLParser
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 SITE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(SITE))
@@ -36,6 +35,12 @@ for src in sorted(glob.glob(os.path.join(ROOT, "docs", "*.md"))):
 for src in sorted(glob.glob(os.path.join(ROOT, "docs", "zh", "*.md"))):
     name = os.path.basename(src)
     PAGES.append(("docs/zh/" + name, "docs/zh/" + name[:-3] + ".html"))
+for src in sorted(glob.glob(os.path.join(ROOT, "docs", "zh", "design", "*.md"))):
+    name = os.path.basename(src)
+    PAGES.append(("docs/zh/design/" + name, "docs/zh/design/" + name[:-3] + ".html"))
+for src in sorted(glob.glob(os.path.join(ROOT, "docs", "zh", "bench", "*.md"))):
+    name = os.path.basename(src)
+    PAGES.append(("docs/zh/bench/" + name, "docs/zh/bench/" + name[:-3] + ".html"))
 for src in sorted(glob.glob(os.path.join(ROOT, "docs", "design", "*.md"))):
     name = os.path.basename(src)
     PAGES.append(("docs/design/" + name, "docs/design/" + name[:-3] + ".html"))
@@ -65,35 +70,54 @@ COPIES += sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
 
 ASSET_ARGS = []
 
-# Explicit 1:1 EN <-> ZH document pairs
+# Full 1:1 EN <-> ZH document pairs across the entire site
 EN_TO_ZH = {
     "index.html": "README.zh-CN.html",
     "docs/index.html": "docs/zh/index.html",
-    "docs/diagrams.html": "docs/zh/diagrams.html",
-    "docs/architecture.html": "docs/zh/architecture.html",
-    "docs/tutorial.html": "docs/zh/quickstart.html",
-    "bench/summary.html": "docs/zh/benchmarks.html",
+    "docs/K for C++ and Rust Programmers Translating Common Patterns.html": "docs/zh/cpp_rust_guide.html",
+    "samples/index.html": "docs/zh/samples.html",
+    "vscode/index.html": "docs/zh/vscode.html",
+    "test/k_in_k/index.html": "docs/zh/k_in_k.html",
+    "docs/site/index.html": "docs/zh/site.html",
 }
-ZH_TO_EN = {v: k for k, v in EN_TO_ZH.items()}
+for src in sorted(glob.glob(os.path.join(ROOT, "docs", "*.md"))):
+    stem = os.path.basename(src)[:-3]
+    if stem not in ("index", "K for C++ and Rust Programmers Translating Common Patterns"):
+        if os.path.exists(os.path.join(ROOT, "docs", "zh", stem + ".md")):
+            EN_TO_ZH[f"docs/{stem}.html"] = f"docs/zh/{stem}.html"
+for src in sorted(glob.glob(os.path.join(ROOT, "docs", "design", "*.md"))):
+    stem = os.path.basename(src)[:-3]
+    if os.path.exists(os.path.join(ROOT, "docs", "zh", "design", stem + ".md")):
+        EN_TO_ZH[f"docs/design/{stem}.html"] = f"docs/zh/design/{stem}.html"
+for src in sorted(glob.glob(os.path.join(ROOT, "bench", "*.md"))):
+    stem = os.path.basename(src)[:-3]
+    if os.path.exists(os.path.join(ROOT, "docs", "zh", "bench", stem + ".md")):
+        EN_TO_ZH[f"bench/{stem}.html"] = f"docs/zh/bench/{stem}.html"
 
-# Top navigation: (en_label, zh_label, en_target, zh_target, active_urls)
+ZH_TO_EN = {v: k for k, v in EN_TO_ZH.items()}
+ZH_TO_EN["docs/zh/quickstart.html"] = "docs/tutorial.html"
+
 TOPNAV_ITEMS = [
     ("Overview", "概览", "index.html", "README.zh-CN.html",
-     {"index.html", "README.zh-CN.html", "docs/architecture.html", "docs/zh/architecture.html", "docs/roadmap.html"}),
+     {"index.html", "README.zh-CN.html", "docs/architecture.html", "docs/zh/architecture.html", "docs/roadmap.html", "docs/zh/roadmap.html"}),
     ("Docs", "文档", "docs/index.html", "docs/zh/index.html",
-     {"docs/index.html", "docs/zh/index.html", "docs/site/index.html",
-      "docs/command_line.html", "docs/packages.html", "docs/editors.html",
-      "docs/testing.html", "vscode/index.html", "test/k_in_k/index.html"}),
-    ("Tutorial", "快速上手", "docs/tutorial.html", "docs/zh/quickstart.html",
-     {"docs/tutorial.html", "docs/zh/quickstart.html", "docs/stdlib.html"}),
-    ("Reference", "语言参考", "docs/reference.html", "docs/reference.html",
-     {"docs/reference.html", "docs/k_spec.html"}),
+     {"docs/index.html", "docs/zh/index.html", "docs/site/index.html", "docs/zh/site.html",
+      "docs/command_line.html", "docs/zh/command_line.html", "docs/packages.html", "docs/zh/packages.html",
+      "docs/editors.html", "docs/zh/editors.html", "docs/testing.html", "docs/zh/testing.html",
+      "vscode/index.html", "docs/zh/vscode.html", "test/k_in_k/index.html", "docs/zh/k_in_k.html"}),
+    ("Tutorial", "教程", "docs/tutorial.html", "docs/zh/tutorial.html",
+     {"docs/tutorial.html", "docs/zh/tutorial.html", "docs/zh/quickstart.html",
+      "docs/stdlib.html", "docs/zh/stdlib.html",
+      "docs/K for C++ and Rust Programmers Translating Common Patterns.html", "docs/zh/cpp_rust_guide.html"}),
+    ("Reference", "语言参考", "docs/reference.html", "docs/zh/reference.html",
+     {"docs/reference.html", "docs/zh/reference.html", "docs/k_spec.html", "docs/zh/k_spec.html"}),
     ("Diagrams", "架构图解", "docs/diagrams.html", "docs/zh/diagrams.html",
-     {"docs/diagrams.html", "docs/zh/diagrams.html", "docs/implementation.html"}),
-    ("Samples", "示例", "samples/index.html", "samples/index.html",
-     {"samples/index.html"}),
-    ("Benchmarks", "性能基准", "bench/summary.html", "docs/zh/benchmarks.html",
-     {"bench/summary.html", "docs/zh/benchmarks.html", "bench/results.html", "bench/design.html"}),
+     {"docs/diagrams.html", "docs/zh/diagrams.html", "docs/implementation.html", "docs/zh/implementation.html"}),
+    ("Samples", "示例", "samples/index.html", "docs/zh/samples.html",
+     {"samples/index.html", "docs/zh/samples.html"}),
+    ("Benchmarks", "性能基准", "bench/summary.html", "docs/zh/bench/summary.html",
+     {"bench/summary.html", "docs/zh/bench/summary.html", "bench/results.html", "docs/zh/bench/results.html",
+      "bench/design.html", "docs/zh/bench/design.html"}),
 ]
 
 
@@ -110,40 +134,54 @@ def title_of(md_text, fallback):
     return fallback
 
 
-def label_pair(en_url, fallback_title):
-    """Return (en_label, zh_label, en_only_flag) for sidebar entries."""
-    known = {
-        "index.html": ("Overview", "项目概览", False),
-        "docs/index.html": ("Documentation Index", "文档总览", False),
-        "docs/diagrams.html": ("Architecture & Diagrams", "Kense OS 图解中心", False),
-        "docs/architecture.html": ("K Architecture", "K 语言架构设计", False),
-        "docs/roadmap.html": ("Roadmap", "发展路线图", True),
-        "docs/tutorial.html": ("Tutorial", "快速上手 / 教程", False),
-        "docs/reference.html": ("Language Reference", "语言参考手册", True),
-        "docs/k_spec.html": ("Specification", "形式化语言规范", True),
-        "docs/stdlib.html": ("Standard Library", "标准库指南", True),
-        "docs/html/K,%20Byte%20by%20Byte.html": ("K, Byte by Byte", "图解内存字节布局", True),
-        "docs/command_line.html": ("Command Line (k)", "命令行工具 (k)", True),
-        "docs/packages.html": ("Packages & Builds", "包管理与构建", True),
-        "docs/editors.html": ("Editors & LSP", "编辑器与 LSP", True),
-        "vscode/index.html": ("VS Code Extension", "VS Code 扩展", True),
-        "docs/implementation.html": ("Compiler Implementation", "编译器实现笔记", True),
-        "docs/testing.html": ("Testing", "测试套件", True),
-        "test/k_in_k/index.html": ("Self-Hosting (k_in_k)", "自举测试 (k_in_k)", True),
-        "docs/site/index.html": ("Site Generator", "文档站生成器", True),
-        "bench/summary.html": ("Benchmark Summary", "基准总结报告", False),
-        "bench/results.html": ("Full Results", "完整基准数据", True),
-        "bench/design.html": ("Benchmark Design", "基准设计原则", True),
-        "samples/index.html": ("Samples Index", "示例程序总览", True),
-        "LICENSE.html": ("MIT License", "MIT 开源协议", True),
+def url_quote_rel(rel_path):
+    return "/".join(quote(seg, safe="-._~()") for seg in rel_path.split("/"))
+
+
+def label_pair(en_url, page_titles):
+    """Return (en_label, zh_label, en_only_flag) using real headings."""
+    zh_url = EN_TO_ZH.get(en_url)
+    custom = {
+        "index.html": ("Overview", "项目概览"),
+        "docs/index.html": ("Documentation Index", "文档总览"),
+        "docs/diagrams.html": ("Architecture & Diagrams", "Kense OS 图解中心"),
+        "docs/architecture.html": ("K Architecture", "K 语言架构设计"),
+        "docs/roadmap.html": ("Roadmap", "发展路线图"),
+        "docs/tutorial.html": ("Tutorial", "完整教程 (Tutorial)"),
+        "docs/reference.html": ("Language Reference", "语言参考手册"),
+        "docs/k_spec.html": ("Specification", "形式化语言规范"),
+        "docs/stdlib.html": ("Standard Library", "标准库指南"),
+        "docs/K for C++ and Rust Programmers Translating Common Patterns.html": ("C++ & Rust Guide", "C++ 与 Rust 迁移指南"),
+        "docs/command_line.html": ("Command Line (k)", "命令行工具 (k)"),
+        "docs/packages.html": ("Packages & Builds", "包管理与多目标构建"),
+        "docs/editors.html": ("Editors & LSP", "编辑器与 LSP"),
+        "vscode/index.html": ("VS Code Extension", "VS Code 扩展"),
+        "docs/implementation.html": ("Compiler Implementation", "编译器实现笔记"),
+        "docs/testing.html": ("Testing", "测试套件指南"),
+        "test/k_in_k/index.html": ("Self-Hosting (k_in_k)", "自举前端测试 (k_in_k)"),
+        "docs/site/index.html": ("Site Generator", "文档站生成器"),
+        "bench/summary.html": ("Benchmark Summary", "基准总结报告"),
+        "bench/results.html": ("Full Results", "完整基准数值"),
+        "bench/design.html": ("Benchmark Design", "基准设计原则"),
+        "bench/notes.md": ("Diagnostic Notes", "诊断实验记录"),
+        "bench/notes.html": ("Diagnostic Notes", "诊断实验记录"),
+        "bench/adoption.html": ("Adoption Analysis", "迁移与采用评估"),
+        "bench/plan.html": ("Optimization Plan", "性能优化计划"),
+        "bench/pool_workloads.html": ("Pool Workloads", "存储池基准负载"),
+        "bench/slice_pool.html": ("Slice Pool", "Slice Pool 设计"),
+        "bench/slot_pool.html": ("Slot Pool", "Slot Pool 设计"),
+        "samples/index.html": ("Samples Index", "31 个实战示例"),
+        "LICENSE.html": ("MIT License", "MIT 开源协议"),
     }
-    if en_url in known:
-        return known[en_url]
-    return (fallback_title, fallback_title, True)
+    if en_url in custom:
+        return custom[en_url][0], custom[en_url][1], False
+    en_t = page_titles.get(en_url, os.path.basename(en_url))
+    zh_t = page_titles.get(zh_url, en_t) if zh_url else en_t
+    return en_t, zh_t, (zh_url is None)
 
 
 def build_sidebar_groups():
-    """Organize unified EN/ZH sidebar groups mapped cleanly to paired URLs."""
+    """Organize unified EN/ZH sidebar groups mapped cleanly to 1:1 paired URLs."""
     page_titles = {}
     built_urls = set()
     for src_rel, out_url in PAGES:
@@ -165,6 +203,7 @@ def build_sidebar_groups():
         "docs/reference.html",
         "docs/k_spec.html",
         "docs/stdlib.html",
+        "docs/K for C++ and Rust Programmers Translating Common Patterns.html",
     ]
     toolchain_order = [
         "docs/command_line.html",
@@ -180,6 +219,12 @@ def build_sidebar_groups():
         "bench/summary.html",
         "bench/results.html",
         "bench/design.html",
+        "bench/notes.html",
+        "bench/adoption.html",
+        "bench/plan.html",
+        "bench/pool_workloads.html",
+        "bench/slice_pool.html",
+        "bench/slot_pool.html",
     ]
 
     groups = []
@@ -190,12 +235,15 @@ def build_sidebar_groups():
             if en_u not in built_urls:
                 continue
             zh_u = EN_TO_ZH.get(en_u, en_u)
-            en_t, zh_t, en_only = label_pair(en_u, page_titles[en_u])
-            items.append((en_u, zh_u, en_t, zh_t, en_only))
-        if key == "language" and os.path.exists(os.path.join(ROOT, "docs", "html", "K, Byte by Byte.html")):
-            u = "docs/html/K,%20Byte%20by%20Byte.html"
-            en_t, zh_t, en_only = label_pair(u, "K, Byte by Byte")
-            items.append((u, u, en_t, zh_t, en_only))
+            en_t, zh_t, en_only = label_pair(en_u, page_titles)
+            items.append((url_quote_rel(en_u), url_quote_rel(zh_u), en_t, zh_t, en_only))
+        if key == "language":
+            if os.path.exists(os.path.join(ROOT, "docs", "zh", "quickstart.md")):
+                items.insert(0, ("docs/tutorial.html", "docs/zh/quickstart.html", "Quick Start", "10 分钟快速上手", False))
+            if os.path.exists(os.path.join(ROOT, "docs", "html", "K, Byte by Byte.html")):
+                en_html = "docs/html/K,%20Byte%20by%20Byte.html"
+                zh_html = "docs/html/K,%20Byte%20by%20Byte%20(zh).html" if os.path.exists(os.path.join(ROOT, "docs", "html", "K, Byte by Byte (zh).html")) else en_html
+                items.append((en_html, zh_html, "K, Byte by Byte", "图解内存字节布局", False))
         if items:
             groups.append((key, en_label, zh_label, items, default_open))
 
@@ -205,21 +253,23 @@ def build_sidebar_groups():
     add_group("benchmarks", "Benchmarks", "性能基准", bench_order, True)
 
     design_items = []
-    for u in sorted(u for u in built_urls if u.startswith("docs/design/")):
-        t = page_titles[u]
-        design_items.append((u, u, t, t, True))
+    for en_u in sorted(u for u in built_urls if u.startswith("docs/design/")):
+        zh_u = EN_TO_ZH.get(en_u, en_u)
+        en_t = page_titles.get(en_u, os.path.basename(en_u))
+        zh_t = page_titles.get(zh_u, en_t)
+        design_items.append((en_u, zh_u, en_t, zh_t, zh_u not in built_urls))
     if design_items:
-        groups.append(("design", "Design Notes", "设计笔记 (EN)", design_items, False))
+        groups.append(("design", "Design Notes", "设计笔记", design_items, False))
 
     sample_items = []
     if "samples/index.html" in built_urls:
-        en_t, zh_t, en_only = label_pair("samples/index.html", "Samples Index")
-        sample_items.append(("samples/index.html", "samples/index.html", en_t, zh_t, en_only))
+        zh_s = EN_TO_ZH.get("samples/index.html", "samples/index.html")
+        sample_items.append(("samples/index.html", zh_s, "Samples Index", "31 个实战示例", False))
     for s in SOURCES:
         u = s + ".html"
         t = "MIT License" if s == "LICENSE" else os.path.basename(s)
-        sample_items.append((u, u, t, t, s == "LICENSE"))
-    groups.append(("samples", "Samples", "示例程序", sample_items, False))
+        sample_items.append((u, u, t, "MIT 开源协议" if s == "LICENSE" else t, False))
+    groups.append(("samples", "Samples", "示例源码", sample_items, False))
 
     return groups
 
@@ -231,7 +281,9 @@ def render_topnav(root, out_url):
         is_cur = out_url in active_set
         if en_lbl == "Samples" and out_url.startswith("samples/"):
             is_cur = True
-        elif en_lbl == "Diagrams" and out_url.startswith("docs/design/"):
+        elif en_lbl == "Diagrams" and (out_url.startswith("docs/design/") or out_url.startswith("docs/zh/design/")):
+            is_cur = True
+        elif en_lbl == "Benchmarks" and (out_url.startswith("bench/") or out_url.startswith("docs/zh/bench/")):
             is_cur = True
         cur_attr = ' aria-current="true"' if is_cur else ""
         href = zh_tgt if zh_mode else en_tgt
@@ -245,15 +297,16 @@ def render_topnav(root, out_url):
 
 def render_sidebar(root, out_url, groups):
     zh_mode = is_zh_page(out_url)
-    en_equiv = ZH_TO_EN.get(out_url, out_url)
+    quoted_out = url_quote_rel(out_url)
+    quoted_equiv = url_quote_rel(ZH_TO_EN.get(out_url, out_url))
     parts = []
     chevron = '<svg class="sb-group-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg>'
     for key, en_g, zh_g, items, default_open in groups:
-        contains_active = any(en_u == out_url or zh_u == out_url for en_u, zh_u, _, _, _ in items)
+        contains_active = any(en_u == quoted_out or zh_u == quoted_out for en_u, zh_u, _, _, _ in items)
         open_attr = " open" if (default_open or contains_active) else ""
         rows = []
         for en_u, zh_u, en_t, zh_t, en_only in items:
-            is_active = (out_url == en_u or out_url == zh_u or en_equiv == en_u)
+            is_active = (quoted_out == en_u or quoted_out == zh_u or (quoted_equiv == en_u and out_url != "docs/zh/quickstart.html"))
             cur = ' aria-current="page"' if is_active else ""
             href = zh_u if zh_mode else en_u
             txt = zh_t if zh_mode else en_t
@@ -280,8 +333,8 @@ def render_sidebar(root, out_url, groups):
 def render_lang_dropdown(root, out_url):
     zh_mode = is_zh_page(out_url)
     has_pair = (out_url in EN_TO_ZH) or (out_url in ZH_TO_EN)
-    en_href = root + ZH_TO_EN[out_url] if out_url in ZH_TO_EN else (root + out_url if not zh_mode else root + "index.html")
-    zh_href = root + EN_TO_ZH[out_url] if out_url in EN_TO_ZH else (root + out_url if zh_mode else root + "docs/zh/index.html")
+    en_href = root + url_quote_rel(ZH_TO_EN[out_url]) if out_url in ZH_TO_EN else (root + url_quote_rel(out_url) if not zh_mode else root + "index.html")
+    zh_href = root + url_quote_rel(EN_TO_ZH[out_url]) if out_url in EN_TO_ZH else (root + url_quote_rel(out_url) if zh_mode else root + "docs/zh/index.html")
     cur_label = "简体中文" if zh_mode else "English"
     en_sel = "false" if zh_mode else "true"
     zh_sel = "true" if zh_mode else "false"
@@ -310,6 +363,8 @@ def render_hero(root, is_zh):
         cta_tut = ("快速上手", f"{root}docs/zh/quickstart.html")
         cta_diag = ("Kense OS 图解中心", f"{root}docs/zh/diagrams.html")
         tab_labels = [
+            ("core", "系统核心架构", f"{root}docs/diagrams/svg/zh/core-architecture.svg",
+             "统一前端驱动原生 C/LTO 构建、WASI 命令模块与进程内 TinyCC JIT。", "K 核心架构图"),
             ("stacks", "数据栈与生命周期", f"{root}docs/diagrams/svg/zh/data-stacks-memory.svg",
              "地址稳定数据栈与作用域退出回退机制：零 GC 停顿、零逐对象释放。", "数据栈与生命周期图解"),
             ("bce", "优化与 BCE", f"{root}docs/diagrams/svg/zh/optimization-bce-pipeline.svg",
@@ -318,8 +373,6 @@ def render_hero(root, is_zh):
              "词法任务作用域约束协作式 async fn，原生线程仅通过类型化队列通信。", "结构化异步与隔离线程图解"),
             ("bench", "性能与内存基准", f"{root}docs/diagrams/svg/zh/benchmark-architecture.svg",
              "16 项大型基准几何平均：速度最高 1.19x 安全 Rust、内存占用降低 1.25x。", "性能与内存基准图解"),
-            ("core", "系统核心架构", f"{root}docs/diagrams/svg/core-architecture.svg",
-             "单一前端驱动原生 C/LTO 构建、WASI 命令模块与进程内 TinyCC JIT。", "K 核心架构图"),
         ]
         install_unix_lbl = "macOS / Linux"
         install_win_lbl = "Windows"
@@ -333,10 +386,10 @@ def render_hero(root, is_zh):
             ("0", "运行时 GC 停顿"),
         ]
         cards = [
-            ("快速上手与核心特性", "中文指南", f"{root}docs/zh/quickstart.html", "一分钟了解 K 的数据栈、数组族、受检引用、checkfree 与隔离工作线程。"),
-            ("Kense OS 图解中心", "18 张矢量图", f"{root}docs/zh/diagrams.html", "高清浏览中英文 Kense OS 架构图解，支持全屏放大与 SVG 原图查看。"),
-            ("K 语言架构设计", "架构说明", f"{root}docs/zh/architecture.md".replace(".md", ".html"), "深入理解编译器限界上下文、资源模型与 Cordis 组件微内核热替换。"),
-            ("性能与内存基准报告", "16 项基准", f"{root}docs/zh/benchmarks.html", "查看 2026 年 10 月完整测速数据与峰值内存对比（对比 C++ 与安全 Rust）。"),
+            ("完整中文教程", "Tutorial", f"{root}docs/zh/tutorial.html", "系统学习 K 的数据栈、数组族、受检引用、变长 enum 与隔离工作线程。"),
+            ("Kense OS 图解中心", "18 张中文图解", f"{root}docs/zh/diagrams.html", "全套 18 张中文 Kense OS 架构矢量图解，支持全屏放大与 SVG 检视。"),
+            ("语言参考与规范", "完整中文版", f"{root}docs/zh/reference.html", "逐主题查阅完整语言参考手册与形式化语言规范，含可编译代码例程。"),
+            ("性能与内存基准报告", "16 项基准", f"{root}docs/zh/bench/summary.html", "查看 2026 年 10 月完整测速数据与峰值内存对比（对比 C++ 与安全 Rust）。"),
         ]
     else:
         eyebrow = "K Programming Language · Kense OS"
@@ -445,29 +498,24 @@ def render_hero(root, is_zh):
 
 def render_doc_head(root, out_url, src_rel, groups):
     zh_mode = is_zh_page(out_url)
-    en_equiv = ZH_TO_EN.get(out_url, out_url)
+    quoted_out = url_quote_rel(out_url)
+    quoted_equiv = url_quote_rel(ZH_TO_EN.get(out_url, out_url))
     en_group, zh_group = "Docs", "文档"
     for _, eg, zg, items, _ in groups:
-        if any(eu == en_equiv or zu == out_url for eu, zu, _, _, _ in items):
+        if any(eu == quoted_equiv or zu == quoted_out for eu, zu, _, _, _ in items):
             en_group, zh_group = eg, zg
             break
     pill = f'<span class="doc-source-pill">{html.escape(src_rel)}</span>' if src_rel else ""
-    crumb = (
+    return (
         f'<div class="doc-crumb">'
         f'<span data-en="{html.escape(en_group)}" data-zh="{html.escape(zh_group)}">{html.escape(zh_group if zh_mode else en_group)}</span>'
         f'<span>/</span>{pill}</div>'
     )
-    if not zh_mode and out_url not in EN_TO_ZH:
-        crumb += (
-            f'<div class="zh-fallback-note">'
-            f'<span>当前章节正文为英文原版（与编译器实现保持同步），站点界面与导航已切换为简体中文。可前往 <a href="{root}docs/zh/index.html">中文文档总览</a> 查看核心中文指南。</span>'
-            f'</div>'
-        )
-    return crumb
 
 
 def render_pager(root, out_url, groups):
     zh_mode = is_zh_page(out_url)
+    quoted_out = url_quote_rel(out_url)
     en_order = []
     zh_order = []
     for _, _, _, items, _ in groups:
@@ -476,13 +524,13 @@ def render_pager(root, out_url, groups):
                 en_order.append((en_u, en_t, zh_t))
         for en_u, zh_u, en_t, zh_t, _ in items:
             if not zh_u.startswith("docs/html/"):
-                if not zh_order or zh_order[-1][0] != zh_u:
+                if not any(x[0] == zh_u for x in zh_order):
                     zh_order.append((zh_u, en_t, zh_t))
 
     order = zh_order if zh_mode else en_order
     idx = None
     for i, (u, _, _) in enumerate(order):
-        if u == out_url:
+        if u == quoted_out:
             idx = i
             break
     if idx is None:
@@ -513,6 +561,21 @@ def render_pager(root, out_url, groups):
     return f'<nav class="doc-pager" aria-label="Pagination">{prev_html}{next_html}</nav>'
 
 
+def localize_zh_home_body(raw):
+    """Switch README.zh-CN.html inline diagram assets and doc links to Chinese versions."""
+    raw = re.sub(r'src="docs/diagrams/([a-z0-9-]+)\.png"', r'src="docs/diagrams/svg/zh/\1.svg"', raw)
+    raw = re.sub(r'href="docs/diagrams/svg/([a-z0-9-]+)\.svg"', r'href="docs/diagrams/svg/zh/\1.svg"', raw)
+
+    def map_home_link(m):
+        href = m.group(1)
+        target, sep, frag = href.partition("#")
+        if target in EN_TO_ZH:
+            return f'href="{url_quote_rel(EN_TO_ZH[target])}{sep}{frag}"'
+        return m.group(0)
+
+    return re.sub(r'href="(docs/[^"#]+\.html(?:#[^"]+)?|samples/index\.html(?:#[^"]+)?|bench/[^"#]+\.html(?:#[^"]+)?|vscode/index\.html(?:#[^"]+)?)"', map_home_link, raw)
+
+
 def apply_kui_chrome(out_path, root, out_url, src_rel, groups):
     raw = open(out_path, encoding="utf-8").read()
     is_home = out_url in ("index.html", "README.zh-CN.html")
@@ -524,6 +587,8 @@ def apply_kui_chrome(out_path, root, out_url, src_rel, groups):
     raw = raw.replace("<!--KUI_DOC_HEAD-->", "" if is_home else render_doc_head(root, out_url, src_rel, groups))
     raw = raw.replace("<!--KUI_BODY_CLASS-->", " home-readme-body" if is_home else "")
     raw = raw.replace("<!--KUI_PAGER-->", "" if is_home else render_pager(root, out_url, groups))
+    if out_url == "README.zh-CN.html":
+        raw = localize_zh_home_body(raw)
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(raw)
 
@@ -557,11 +622,11 @@ def locale_vars(root, out_rel):
         "--variable", "pagelang=" + pagelang,
     ]
     if out_rel in EN_TO_ZH:
-        vars_list += ["--variable", "alt-zh=" + root + EN_TO_ZH[out_rel]]
-        vars_list += ["--variable", "alt-en=" + root + out_rel]
+        vars_list += ["--variable", "alt-zh=" + root + url_quote_rel(EN_TO_ZH[out_rel])]
+        vars_list += ["--variable", "alt-en=" + root + url_quote_rel(out_rel)]
     elif out_rel in ZH_TO_EN:
-        vars_list += ["--variable", "alt-en=" + root + ZH_TO_EN[out_rel]]
-        vars_list += ["--variable", "alt-zh=" + root + out_rel]
+        vars_list += ["--variable", "alt-en=" + root + url_quote_rel(ZH_TO_EN[out_rel])]
+        vars_list += ["--variable", "alt-zh=" + root + url_quote_rel(out_rel)]
     return vars_list
 
 

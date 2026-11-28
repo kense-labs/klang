@@ -1,7 +1,9 @@
+<a id="k-architecture"></a>
 # K 语言架构设计
 
-Cordis 微内核是贯穿 K 语言整体架构的组织原则：编译器内核负责语言语法与资源生命周期契约，共享的组件微内核则允许不同项目按目标环境按需装配服务。当前编译器已经具备 C 后端、受检引用、地址稳定数据栈、隔离工作线程以及原生 / TinyCC / WASI 多条执行路径，语言服务器本身也已托管首个 Cordis 诊断服务。参见 [编译器实现笔记](../implementation.md) 与 [Cordis 诊断设计](../design/cordis_microkernel.md#native-diagnostics-in-the-language-server)。
+Cordis 微内核是贯穿 K 语言整体架构的组织原则：编译器内核负责语言语法与资源生命周期契约，共享的组件微内核则允许不同项目按目标环境按需装配服务。当前编译器已经具备 C 后端、受检引用、地址稳定数据栈、隔离工作线程以及原生 / TinyCC / WASI 多条执行路径，语言服务器本身也已托管首个 Cordis 诊断服务。参见 [编译器实现笔记](implementation.md) 与 [Cordis 诊断设计](design/cordis_microkernel.md#native-diagnostics-in-the-language-server)。
 
+<a id="domain-boundaries-in-the-code"></a>
 ## 代码中的领域边界
 
 采用领域驱动设计（DDD）的限界上下文划分编译器职责：
@@ -17,12 +19,14 @@ Cordis 微内核是贯穿 K 语言整体架构的组织原则：编译器内核�
 
 CLI 与编辑器共用同一套程序加载器，编辑器按分析粒度始终采用离线解析模式，缺包直接在 `import` 位置报错。
 
+<a id="start-with-the-resource"></a>
 ## 从资源出发
 
 无论是内核驱动操作页框，还是 AI 推理网关持有设备缓冲区，都需要回答四个根本问题：**谁拥有资源、谁可以使用、必须存活多久、达到配额上限如何处理？**
 
 K 将可在编译期静态证明的规则留在类型与引用系统中（例如常规调用、闭包捕获、`await` 挂起与跨线程移动）；将依赖于运行时状态的策略（访问授权、配额计数、GPU/异步设备完成信号与存储容量）交由宿主与组件契约执行。
 
+<a id="kernel-and-component-boundaries"></a>
 ## 内核与组件分层
 
 | 层级 | 职责范围 | 扩展接口 |
@@ -32,13 +36,15 @@ K 将可在编译期静态证明的规则留在类型与引用系统中（例如
 | **Cordis component kernel（组件微内核）** | 上下文树、服务解析、激活与原子热替换 | 版本化服务接口：裸机目标静态注册，托管目标可动态加载。 |
 | **Providers（服务提供者）** | 诊断分析、I/O 网络、追踪指标、设备与脚本后端 | 明确所有权与能力的版本化 C ABI 或隔离服务协议。 |
 
+<a id="composition-and-execution"></a>
 ## 组合与热替换生命周期
 
 1. **解析（Resolve）**：按项目选择目标平台、组件与所需服务接口，生成锁定版本与内容摘要的锁文件；缺少兼容提供者直接在解析阶段失败。
 2. **构建（Build）**：基于锁定依赖图完成编译，按源码、目标平台、工具链和启用组件计算缓存键。
 3. **激活（Activate）**：在向请求暴露服务之前校验提供者 ABI 与配置；原生进程内组件共享宿主权限，隔离组件通过进程或 Wasm 边界施加资源限制。
-4. **替换（Replace）**：先拉起并就绪新版本提供者再切换全局图。新请求使用新世代，进行中的请求（含异步回调与设备缓冲）继续锚定启动时的旧世代直至安全排空；若替换失败，当前运行世代不受任何影响。参见 [Cordis 微内核设计](../design/cordis_microkernel.md)。
+4. **替换（Replace）**：先拉起并就绪新版本提供者再切换全局图。新请求使用新世代，进行中的请求（含异步回调与设备缓冲）继续锚定启动时的旧世代直至安全排空；若替换失败，当前运行世代不受任何影响。参见 [Cordis 微内核设计](design/cordis_microkernel.md)。
 
+<a id="target-configurations"></a>
 ## 多目标配置矩阵
 
 | 目标配置 | 典型程序场景 | 运行时装配形态 |
@@ -46,9 +52,10 @@ K 将可在编译期静态证明的规则留在类型与引用系统中（例如
 | **Freestanding（裸机）** | 启动 RISC-V QEMU 镜像、串口输出与定时器中断 | 静态链接组件、固定启动内存块、显式内存布局。 |
 | **Hosted native（托管原生）** | 有界 I/O 推理网关，可切换 CPU / GPU 后端 | 事件循环、有界队列与背压、可沙箱化扩展。 |
 | **Hosted TypeScript** | 兼容现有 TypeScript ESM / Node.js 工作流 | 可选 Cordis 配置组合 TS 转换、QuickJS 与宿主能力。 |
-| **WASI Preview 1** | 将 K 编译为 `.wasm` 命令行模块运行 | 32 位线性内存上的固定数据栈、协作任务与 WASI 资源。参见 [WASI 设计](../design/wasm.md#wasi-command-target)。 |
+| **WASI Preview 1** | 将 K 编译为 `.wasm` 命令行模块运行 | 32 位线性内存上的固定数据栈、协作任务与 WASI 资源。参见 [WASI 设计](design/wasm.md#wasi-command-target)。 |
 
+<a id="foreign-code"></a>
 ## 外部代码与客座语言集成
 
 - **C ABI 直接集成**：通过 `extern` 与 `export fn` 显式标定布局、对齐与句柄借用/所有权；若外部异步调用需要跨越当前栈帧保留 K 值，必须使用显式句柄或长生命周期池存储。
-- **可选客座语言块（`using "language"`）**：由 `k-cordis-source` 驱动基于项目锁加载语言适配器，将嵌入块降级为普通 K 代码与源码映射后交由核心编译器校验，核心语言文法始终保持纯粹与独立。参见 [嵌入式语言设计](../design/embedded_languages.md)。
+- **可选客座语言块（`using "language"`）**：由 `k-cordis-source` 驱动基于项目锁加载语言适配器，将嵌入块降级为普通 K 代码与源码映射后交由核心编译器校验，核心语言文法始终保持纯粹与独立。参见 [嵌入式语言设计](design/embedded_languages.md)。

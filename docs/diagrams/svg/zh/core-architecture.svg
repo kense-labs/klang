@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="736" viewBox="0 0 1000 736" role="img" aria-labelledby="title description">
+  <title id="title">K · 核心架构</title>
+  <desc id="description">K 编译器面向原生可执行文件、WASI Preview 1 命令模块及 TinyCC 生成 C 代码，各路径均采用对应目标的 K 运行时，Cordis 则依据项目锁文件选配可选服务。</desc>
+  <rect width="1000" height="736" rx="14" fill="#F8F6F0"/>
+  <g font-family='"PingFang SC", "Noto Sans SC", "Hiragino Sans GB", "Microsoft YaHei", Menlo, monospace'>
+    <rect x="36" y="24" width="928" height="42" rx="8" fill="#141413" stroke="none" stroke-width="1.15"/>
+    <text x="54" y="51" fill="#FDFCF9" font-size="20" text-anchor="start" font-weight="700">K · 核心架构</text>
+    <text x="36" y="92" fill="#645F56" font-size="15" text-anchor="start">语言语义、目标运行时与 Cordis 组合机制</text>
+    <g>
+    <rect x="36" y="115" width="296" height="72" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="184.0" y="145.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">程序输入</text>
+    <text x="184.0" y="167.0" fill="#645F56" font-size="14.5" text-anchor="middle">.k 文件 · 导入 · 标准库</text>
+    </g>
+    <g>
+    <rect x="352" y="115" width="296" height="72" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="500.0" y="145.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">工具链入口</text>
+    <text x="500.0" y="167.0" fill="#645F56" font-size="14.5" text-anchor="middle">k CLI · 编辑器 / LSP</text>
+    </g>
+    <g>
+    <rect x="668" y="115" width="296" height="72" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="816.0" y="145.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">项目选配</text>
+    <text x="816.0" y="167.0" fill="#645F56" font-size="14.5" text-anchor="middle">清单 · 锁文件 · 输入摘要</text>
+    </g>
+    <path d="M184 187V222" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="180,215 184,222 188,215" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M500 187V222" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="496,215 500,222 504,215" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M816 187V222" fill="none" stroke="#394DF2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+    <polyline points="812,215 816,222 820,215" fill="none" stroke="#394DF2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="36" y="222" width="596" height="208" rx="8" fill="#FDFCF9" stroke="#141413" stroke-width="1.15"/>
+    <rect x="660" y="222" width="304" height="208" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="54" y="253" fill="#141413" font-size="17" text-anchor="start" font-weight="700">K 编译器核心</text>
+    <text x="678" y="253" fill="#141413" font-size="17" text-anchor="start" font-weight="700">CORDIS 微内核</text>
+    <g>
+    <rect x="53" y="277" width="170" height="98" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="138.0" y="309.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">加载与解析</text>
+    <text x="138.0" y="331.0" fill="#645F56" font-size="14" text-anchor="middle">源码依赖图</text>
+    <text x="138.0" y="353.0" fill="#645F56" font-size="14" text-anchor="middle">词法 · AST</text>
+    </g>
+    <g>
+    <rect x="249" y="277" width="170" height="98" rx="8" fill="#141413" stroke="#141413" stroke-width="1.15"/>
+    <text x="334.0" y="309.0" fill="#FDFCF9" font-size="15" text-anchor="middle" font-weight="700">语义检查</text>
+    <text x="334.0" y="331.0" fill="#FDFCF9" font-size="14" text-anchor="middle">类型 · 所有权</text>
+    <text x="334.0" y="353.0" fill="#FDFCF9" font-size="14" text-anchor="middle">生命周期 · 异步</text>
+    </g>
+    <g>
+    <rect x="445" y="277" width="170" height="98" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="530.0" y="309.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">生成 C 代码</text>
+    <text x="530.0" y="331.0" fill="#645F56" font-size="14" text-anchor="middle">优化 · BCE</text>
+    <text x="530.0" y="353.0" fill="#645F56" font-size="14" text-anchor="middle">布局 · 代码生成</text>
+    </g>
+    <path d="M223 326H245" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="238,330 245,326 238,322" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M419 326H441" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="434,330 441,326 434,322" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="334" y="403" fill="#645F56" font-size="14" text-anchor="middle">共享 K 前端 · 面向目标的布局与静态检查</text>
+    <g>
+    <rect x="677" y="277" width="270" height="98" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="812.0" y="309.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">解析 · 校验 · 激活</text>
+    <text x="812.0" y="331.0" fill="#645F56" font-size="14" text-anchor="middle">ABI · 依赖 · 授权</text>
+    <text x="812.0" y="353.0" fill="#645F56" font-size="14" text-anchor="middle">锁定提供方代际版本</text>
+    </g>
+    <text x="812" y="403" fill="#645F56" font-size="14" text-anchor="middle">项目级服务契约</text>
+    <path d="M334 430V458M132 458H536" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M132 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="128,479 132,486 136,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M132 568V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="128,585 132,592 136,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M334 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="330,479 334,486 338,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M334 568V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="330,585 334,592 338,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M536 458V486" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="532,479 536,486 540,479" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M536 568V592" fill="none" stroke="#141413" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <polyline points="532,585 536,592 540,585" fill="none" stroke="#141413" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M812 430V486" fill="none" stroke="#394DF2" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="7 5"/>
+    <polyline points="808,479 812,486 816,479" fill="none" stroke="#394DF2" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g>
+    <rect x="36" y="486" width="192" height="82" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="132.0" y="510.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">原生 C 工具链</text>
+    <text x="132.0" y="532.0" fill="#645F56" font-size="13" text-anchor="middle">k build</text>
+    <text x="132.0" y="554.0" fill="#645F56" font-size="13" text-anchor="middle">原生可执行文件</text>
+    </g>
+    <g>
+    <rect x="238" y="486" width="192" height="82" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="334.0" y="510.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">WASI SDK Clang</text>
+    <text x="334.0" y="532.0" fill="#645F56" font-size="13" text-anchor="middle">k build → .wasm</text>
+    <text x="334.0" y="554.0" fill="#645F56" font-size="13" text-anchor="middle">Preview 1 命令模块</text>
+    </g>
+    <g>
+    <rect x="440" y="486" width="192" height="82" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="536.0" y="510.0" fill="#141413" font-size="15" text-anchor="middle" font-weight="700">TinyCC / libtcc</text>
+    <text x="536.0" y="532.0" fill="#645F56" font-size="13" text-anchor="middle">k run</text>
+    <text x="536.0" y="554.0" fill="#645F56" font-size="13" text-anchor="middle">进程内即时执行</text>
+    </g>
+    <g>
+    <rect x="36" y="592" width="596" height="80" rx="8" fill="#FDFCF9" stroke="#D4CDC0" stroke-width="1.15"/>
+    <text x="334.0" y="615.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">K 目标运行时</text>
+    <text x="334.0" y="637.0" fill="#645F56" font-size="14.5" text-anchor="middle">数据栈 · 任务帧 · C ABI</text>
+    <text x="334.0" y="659.0" fill="#645F56" font-size="14.5" text-anchor="middle">WASI 校验栈增长 · 原生目标支持工作线程</text>
+    </g>
+    <g>
+    <rect x="660" y="486" width="304" height="186" rx="8" fill="#FDFCF9" stroke="#394DF2" stroke-width="1.15"/>
+    <text x="812.0" y="540.0" fill="#141413" font-size="17" text-anchor="middle" font-weight="700">可选服务提供方</text>
+    <text x="812.0" y="562.0" fill="#645F56" font-size="14" text-anchor="middle">LSP / 构建诊断</text>
+    <text x="812.0" y="584.0" fill="#645F56" font-size="14" text-anchor="middle">Python / TypeScript 客体</text>
+    <text x="812.0" y="606.0" fill="#645F56" font-size="14" text-anchor="middle">TS 项目 · Node.js 路线图</text>
+    <text x="812.0" y="628.0" fill="#645F56" font-size="14" text-anchor="middle">TCP 流 · ONNX 网关</text>
+    </g>
+    <rect x="36" y="684" width="928" height="38" rx="8" fill="#394DF2" stroke="none" stroke-width="1.15"/>
+    <text x="500.0" y="708" fill="#FDFCF9" font-size="14" text-anchor="middle">K 负责校验程序，Cordis 负责为宿主组合所选服务。</text>
+  </g>
+</svg>

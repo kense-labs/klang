@@ -19,6 +19,12 @@ for src in sorted(glob.glob(os.path.join(ROOT, "docs", "*.md"))):
 for src in sorted(glob.glob(os.path.join(ROOT, "docs", "zh", "*.md"))):
     name = os.path.basename(src)
     pages.append(("docs/zh/" + name, "docs/zh/" + name[:-3] + ".html"))
+for src in sorted(glob.glob(os.path.join(ROOT, "docs", "zh", "design", "*.md"))):
+    name = os.path.basename(src)
+    pages.append(("docs/zh/design/" + name, "docs/zh/design/" + name[:-3] + ".html"))
+for src in sorted(glob.glob(os.path.join(ROOT, "docs", "zh", "bench", "*.md"))):
+    name = os.path.basename(src)
+    pages.append(("docs/zh/bench/" + name, "docs/zh/bench/" + name[:-3] + ".html"))
 for src in sorted(glob.glob(os.path.join(ROOT, "docs", "design", "*.md"))):
     name = os.path.basename(src)
     pages.append(("docs/design/" + name, "docs/design/" + name[:-3] + ".html"))
