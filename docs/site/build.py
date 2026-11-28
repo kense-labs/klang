@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 from urllib.parse import quote, unquote
 
@@ -24,7 +25,13 @@ SITE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(SITE))
 if SITE not in sys.path:
     sys.path.insert(0, SITE)
-from landing import render_landing, render_landing_footer, render_spec_close, render_spec_open
+from landing import (
+    render_guide_bot,
+    render_landing,
+    render_landing_footer,
+    render_spec_close,
+    render_spec_open,
+)
 
 # Markdown pages, as (source relative to the repository, output page).
 PAGES = []
@@ -242,7 +249,7 @@ def build_sidebar_groups():
             items.append((url_quote_rel(en_u), url_quote_rel(zh_u), en_t, zh_t, en_only))
         if key == "language":
             if os.path.exists(os.path.join(ROOT, "docs", "zh", "quickstart.md")):
-                items.insert(0, ("docs/tutorial.html", "docs/zh/quickstart.html", "Quick Start", "10 分钟快速上手", False))
+                items.insert(0, ("docs/tutorial.html#2-running-something", "docs/zh/quickstart.html", "Quick Start", "10 分钟快速上手", False))
             if os.path.exists(os.path.join(ROOT, "docs", "html", "K, Byte by Byte.html")):
                 en_html = "docs/html/K,%20Byte%20by%20Byte.html"
                 zh_html = "docs/html/K,%20Byte%20by%20Byte%20(zh).html" if os.path.exists(os.path.join(ROOT, "docs", "html", "K, Byte by Byte (zh).html")) else en_html
@@ -309,7 +316,8 @@ def render_sidebar(root, out_url, groups):
         open_attr = " open" if (default_open or contains_active) else ""
         rows = []
         for en_u, zh_u, en_t, zh_t, en_only in items:
-            is_active = (quoted_out == en_u or quoted_out == zh_u or (quoted_equiv == en_u and out_url != "docs/zh/quickstart.html"))
+            target_u = zh_u if zh_mode else en_u
+            is_active = (quoted_out == target_u) or (zh_mode and target_u == en_u and quoted_equiv == en_u)
             cur = ' aria-current="page"' if is_active else ""
             href = zh_u if zh_mode else en_u
             txt = zh_t if zh_mode else en_t
@@ -523,10 +531,10 @@ def render_pager(root, out_url, groups):
     zh_order = []
     for _, _, _, items, _ in groups:
         for en_u, zh_u, en_t, zh_t, _ in items:
-            if not en_u.startswith("docs/html/"):
+            if not en_u.startswith("docs/html/") and "#" not in en_u:
                 en_order.append((en_u, en_t, zh_t))
         for en_u, zh_u, en_t, zh_t, _ in items:
-            if not zh_u.startswith("docs/html/"):
+            if not zh_u.startswith("docs/html/") and "#" not in zh_u:
                 if not any(x[0] == zh_u for x in zh_order):
                     zh_order.append((zh_u, en_t, zh_t))
 
@@ -564,9 +572,35 @@ def render_pager(root, out_url, groups):
     return f'<nav class="doc-pager" aria-label="Pagination">{prev_html}{next_html}</nav>'
 
 
+def upgrade_inline_diagrams(raw, zh_mode):
+    """Upgrade raster diagram PNG embeds to crisp vector SVGs and strip duplicate inline markdown TOCs."""
+    svg_sub = "svg/zh" if zh_mode else "svg"
+
+    def repl_img(m):
+        prefix, stem = m.group(1), m.group(2)
+        svg_disk = os.path.join(ROOT, "docs", "diagrams", svg_sub, stem + ".svg")
+        if os.path.exists(svg_disk):
+            return f'src="{prefix}diagrams/{svg_sub}/{stem}.svg"'
+        fallback_disk = os.path.join(ROOT, "docs", "diagrams", "svg", stem + ".svg")
+        if os.path.exists(fallback_disk):
+            return f'src="{prefix}diagrams/svg/{stem}.svg"'
+        return m.group(0)
+
+    raw = re.sub(r'src="((?:\.\./|docs/)*)diagrams/([a-z0-9-]+)\.png"', repl_img, raw)
+    # Strip redundant inline markdown <details><summary>目录 / Table of contents</summary>...</details>
+    # because template.html already provides the unified KUI TOC drawer & right sticky outline.
+    raw = re.sub(
+        r"<details>\s*<summary>\s*(?:目录|Table of contents|Contents)\s*</summary>.*?</details>",
+        "",
+        raw,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return raw
+
+
 def localize_zh_home_body(raw):
     """Switch README.zh-CN.html inline diagram assets and doc links to Chinese versions."""
-    raw = re.sub(r'src="docs/diagrams/([a-z0-9-]+)\.png"', r'src="docs/diagrams/svg/zh/\1.svg"', raw)
     raw = re.sub(r'href="docs/diagrams/svg/([a-z0-9-]+)\.svg"', r'href="docs/diagrams/svg/zh/\1.svg"', raw)
 
     def map_home_link(m):
@@ -577,6 +611,73 @@ def localize_zh_home_body(raw):
         return m.group(0)
 
     return re.sub(r'href="(docs/[^"#]+\.html(?:#[^"]+)?|samples/index\.html(?:#[^"]+)?|bench/[^"#]+\.html(?:#[^"]+)?|vscode/index\.html(?:#[^"]+)?)"', map_home_link, raw)
+
+
+def generate_dark_svgs(out_dir):
+    """Emit crisp native dark-mode SVGs under svg/dark/ and svg/zh/dark/ (zero CSS invert mud)."""
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    for sub in ("svg", "svg/zh"):
+        src_dir = os.path.join(ROOT, "docs", "diagrams", sub)
+        dst_dir = os.path.join(out_dir, "docs", "diagrams", sub, "dark")
+        if not os.path.isdir(src_dir):
+            continue
+        os.makedirs(dst_dir, exist_ok=True)
+        for src_path in sorted(glob.glob(os.path.join(src_dir, "*.svg"))):
+            tree = ET.parse(src_path)
+            root_el = tree.getroot()
+            for el in root_el.iter():
+                tag = el.tag.split("}")[-1]
+                fill = el.attrib.get("fill")
+                stroke = el.attrib.get("stroke")
+                f_up = fill.upper() if fill else None
+                s_up = stroke.upper() if stroke else None
+
+                if tag == "rect":
+                    if f_up == "#F8F6F0":
+                        if s_up == "#D4CDC0":
+                            el.set("fill", "#11131a")
+                            el.set("stroke", "#2a2f3d")
+                        else:
+                            el.set("fill", "#0c0d11")
+                    elif f_up == "#F0ECE3":
+                        el.set("fill", "#1c202c")
+                    elif f_up == "#FDFCF9":
+                        el.set("fill", "#151821")
+                        if s_up == "#D4CDC0":
+                            el.set("stroke", "#2b303f")
+                        elif s_up == "#141413":
+                            el.set("stroke", "#4f566d")
+                        elif s_up == "#394DF2":
+                            el.set("stroke", "#6e80ff")
+                    elif f_up in ("#141413", "#232321"):
+                        el.set("fill", "#242a3d")
+                        if s_up == "#141413":
+                            el.set("stroke", "#7888ff")
+                        elif s_up == "#645F56":
+                            el.set("stroke", "#424960")
+                    elif f_up == "#394DF2":
+                        el.set("fill", "#4356f6")
+                elif tag in ("path", "polyline"):
+                    if s_up == "#141413":
+                        el.set("stroke", "#d6d9e2")
+                    elif s_up == "#394DF2":
+                        el.set("stroke", "#8292ff")
+                    elif s_up == "#645F56":
+                        el.set("stroke", "#8e95a8")
+                elif tag == "text":
+                    if f_up == "#141413":
+                        el.set("fill", "#f4f5f8")
+                    elif f_up == "#FDFCF9":
+                        el.set("fill", "#ffffff")
+                    elif f_up == "#645F56":
+                        el.set("fill", "#9ea5b8")
+                    elif f_up == "#B5B0A6":
+                        el.set("fill", "#c7ccd9")
+                    elif f_up == "#394DF2":
+                        el.set("fill", "#8c9bff")
+
+            dst_path = os.path.join(dst_dir, os.path.basename(src_path))
+            tree.write(dst_path, encoding="utf-8", xml_declaration=True)
 
 
 def apply_kui_chrome(out_path, root, out_url, src_rel, groups):
@@ -600,6 +701,7 @@ def apply_kui_chrome(out_path, root, out_url, src_rel, groups):
     raw = raw.replace("<!--KUI_LANG_DROPDOWN-->", render_lang_dropdown(root, out_url))
     raw = raw.replace("<!--KUI_SIDEBAR-->", render_sidebar(root, out_url, groups))
     raw = raw.replace("<!--KUI_LANDING-->", render_landing(root, zh_mode) if is_home else "")
+    raw = raw.replace("<!--KUI_GUIDE_BOT-->", render_guide_bot(root, zh_mode, is_home=is_home))
     raw = raw.replace("<!--KUI_HERO-->", "")
     raw = raw.replace("<!--KUI_DOC_HEAD-->", "" if is_home else render_doc_head(root, out_url, src_rel, groups))
     raw = raw.replace("<!--KUI_SPEC_OPEN-->", render_spec_open(zh_mode) if is_home else "")
@@ -607,6 +709,7 @@ def apply_kui_chrome(out_path, root, out_url, src_rel, groups):
     raw = raw.replace("<!--KUI_BODY_CLASS-->", " home-readme-body" if is_home else "")
     raw = raw.replace("<!--KUI_PAGER-->", "" if is_home else render_pager(root, out_url, groups))
     raw = raw.replace("<!--KUI_FOOTER-->", render_landing_footer(root, zh_mode, src_rel) if is_home else doc_footer)
+    raw = upgrade_inline_diagrams(raw, zh_mode)
     if out_url == "README.zh-CN.html":
         raw = localize_zh_home_body(raw)
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
@@ -777,6 +880,7 @@ def main():
         dst = os.path.join(out_dir, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         shutil.copy(os.path.join(ROOT, rel), dst)
+    generate_dark_svgs(out_dir)
     open(os.path.join(out_dir, ".nojekyll"), "w").close()
     print("built %d pages and %d source pages into %s" % (len(PAGES), len(SOURCES), out_dir))
     if a.check and not check(out_dir):

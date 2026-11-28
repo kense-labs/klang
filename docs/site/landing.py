@@ -72,37 +72,39 @@ def _reel(zh):
     )
 
 
-def _guide_bot(root, zh):
+def render_guide_bot(root, zh, is_home=True):
     open_lbl = _t(zh, "打开 K 语言向导", "Open K guide")
     close_lbl = _t(zh, "收起 K 语言向导", "Close K guide")
     name = _t(zh, "K 语言向导", "K Guide")
     kense_home = "https://kense-labs.github.io/" if zh else "https://kense-labs.github.io/en/"
+    studio_href = "#k-live-studio" if is_home else (f"{root}README.zh-CN.html#k-live-studio" if zh else f"{root}index.html#k-live-studio")
     items = [
-        (f"{root}docs/zh/quickstart.html" if zh else f"{root}docs/tutorial.html", _t(zh, "10 分钟快速上手", "Start Tutorial"), "Start"),
-        ("#k-live-studio", _t(zh, "实时推演数据栈与 BCE", "Live Compiler Studio"), "Live"),
-        (f"{root}docs/zh/reference.html" if zh else f"{root}docs/reference.html", _t(zh, "查阅语言参考手册", "Language Reference"), "Spec"),
-        (f"{root}docs/zh/bench/summary.html" if zh else f"{root}bench/summary.html", _t(zh, "16 项性能与内存基准", "16-Suite Benchmarks"), "1.19x"),
-        (kense_home, _t(zh, "返回 Kense 官网首页", "Back to Kense Home"), "Kense"),
+        (f"{root}docs/zh/quickstart.html" if zh else f"{root}docs/tutorial.html", "Start Tutorial", "10 分钟快速上手", "Start"),
+        (studio_href, "Live Compiler Studio", "实时推演数据栈与 BCE", "Live"),
+        (f"{root}docs/zh/reference.html" if zh else f"{root}docs/reference.html", "Language Reference", "查阅语言参考手册", "Spec"),
+        (f"{root}docs/zh/bench/summary.html" if zh else f"{root}bench/summary.html", "16-Suite Benchmarks", "16 项性能与内存基准", "1.19x"),
+        (kense_home, "Back to Kense Home", "返回 Kense 官网首页", "Kense"),
     ]
     links = "".join(
         f'<a href="{href}" style="--choice-delay:{65 + idx * 24}ms">'
         f'<span class="k-choice-bracket" aria-hidden="true">&gt;</span>'
-        f'<span class="k-choice-text">{html.escape(lbl)}</span>'
+        f'<span class="k-choice-text" data-en="{html.escape(en_lbl)}" data-zh="{html.escape(zh_lbl)}">{html.escape(zh_lbl if zh else en_lbl)}</span>'
         f'<span class="k-choice-tag">{html.escape(tag)}</span></a>'
-        for idx, (href, lbl, tag) in enumerate(items)
+        for idx, (href, en_lbl, zh_lbl, tag) in enumerate(items)
     )
-    return f"""<div class="k-guide" id="k-guide" data-copy-msg="{_t(zh, "命令已复制 · 可直接粘贴至终端运行", "Copied · ready in your terminal")}">
-  <div class="k-guide-shell">
+    return f"""<canvas class="k-guide-trail" id="k-guide-trail" aria-hidden="true"></canvas>
+<div class="k-guide" id="k-guide" data-copy-msg="{_t(zh, "命令已复制 · 可直接粘贴至终端运行", "Copied · ready in your terminal")}">
+  <div class="k-guide-shell" id="k-guide-shell">
     <svg class="k-guide-ink" aria-hidden="true" focusable="false">
       <rect width="100%" height="100%" rx="10" fill="currentColor"/>
       <rect class="k-guide-rim" x="0.5" y="0.5" width="calc(100% - 1px)" height="calc(100% - 1px)" rx="9.5" fill="none"/>
-      <svg x="49%" y="100%" width="1" height="1" overflow="visible">
+      <svg class="k-guide-tail-anchor" x="49%" y="100%" width="1" height="1" overflow="visible">
         <path class="k-guide-tail" fill="currentColor" d="M-7-1H10v1H9q-1.3 0-2.4 1.1l-11 10.4q-2.1 1.9-1.7-1.3l1.2-8.8Q-4.7 0-6.3 0H-7Z"/>
       </svg>
     </svg>
     <button type="button" class="k-guide-trigger" id="k-guide-trigger" aria-expanded="false" aria-controls="k-guide-choices" aria-label="{open_lbl}" data-open-label="{open_lbl}" data-close-label="{close_lbl}">
       <span class="k-guide-gaze" aria-hidden="true"><span class="k-guide-eyes"><i></i><i></i></span></span>
-      <span class="k-guide-name" aria-hidden="true">{name}</span>
+      <span class="k-guide-name" aria-hidden="true" data-en="K Guide" data-zh="K 语言向导">{name}</span>
       <svg class="k-guide-cross" width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"/></svg>
     </button>
     <div class="k-guide-speech" id="k-guide-speech" hidden><strong class="k-speech-title" id="k-speech-title"></strong></div>
@@ -112,7 +114,7 @@ def _guide_bot(root, zh):
 
 
 def render_landing(root, zh):
-    unix_cmd = "curl -fsSL https://raw.githubusercontent.com/kense-labs/klang/main/scripts/install.sh | sh"
+    unix_cmd = "curl -fsSL https://raw.githubusercontent.com/kense-labs/klang/main/scripts/install.sh | bash"
     win_cmd = "irm https://raw.githubusercontent.com/kense-labs/klang/main/scripts/install.ps1 | iex"
     wasi_cmd = "k build --target wasm32-wasip1 hello.k -o build/hello.wasm && wasmtime run build/hello.wasm"
     agent_prompt = _t(
@@ -194,8 +196,7 @@ def render_landing(root, zh):
     </div>
 
     <div class="k-agent-row">
-      <div class="k-guide-dock" data-k-guide-home aria-hidden="true"></div>
-      <div class="k-cmd-dock" role="region" aria-label="{_t(zh, "快速安装与编译命令", "Quick install and build commands")}">
+      <div class="k-cmd-dock" data-k-dock="cmd" role="region" aria-label="{_t(zh, "快速安装与编译命令", "Quick install and build commands")}">
         <div class="k-cmd-tabs" role="tablist">
           <button type="button" class="k-cmd-tab" aria-selected="true" data-cmd-target="native" data-cmd="{html.escape(unix_cmd)}">macOS / Linux</button>
           <button type="button" class="k-cmd-tab" aria-selected="false" data-cmd-target="native" data-cmd="{html.escape(win_cmd)}">Windows</button>
@@ -238,8 +239,6 @@ def render_landing(root, zh):
     </div>
   </section>
 
-  {_guide_bot(root, zh)}
-
   <!-- 01: LIVE COMPILER & MEMORY STUDIO -->
   <section class="k-section k-bounds" id="k-live-studio" aria-labelledby="k-studio-heading">
     <p class="k-section-label">01 <i></i> LIVE COMPILER &amp; DATA STACK</p>
@@ -262,7 +261,7 @@ def render_landing(root, zh):
       <span class="k-live-runtime"><i aria-hidden="true"></i>{_t(zh, "交互式语义与内存推演台", "Interactive Semantic & Memory Workbench")}</span>
     </div>
 
-    <div class="k-live-shell" id="k-studio-shell">
+    <div class="k-live-shell" id="k-studio-shell" data-k-dock="studio">
       <!-- Applet 1: Data Stack O(1) Rewind -->
       <div class="k-studio-pane" data-studio-pane="stack">
         <div class="k-pane-head">
@@ -280,15 +279,15 @@ def render_landing(root, zh):
         </div>
         <div class="k-studio-split">
           <div class="k-code-card">
-            <div class="k-code-card-bar"><span>request_batch.k</span><span class="k-code-tag" id="k-stack-line-tag">line 4 · frame #0</span></div>
+            <div class="k-code-card-bar"><span>request_batch.k</span><span class="k-code-tag" id="k-stack-line-tag">line 2 · frame #0</span></div>
             <div class="k-sim-lines" id="k-stack-code">
-              <div class="k-sim-line" data-line="0"><i>1</i><span><b class="kw">fn</b> <b>serve_batch</b>(packets: <em class="ty">Packet</em>[]) -&gt; <em class="ty">Summary</em> {{</span></div>
-              <div class="k-sim-line is-active" data-line="0"><i>2</i><span>    <b class="kw">var</b> out: <em class="ty">Summary</em> = Summary::new(); <em class="cm">// frame #0 (8 KB)</em></span></div>
-              <div class="k-sim-line" data-line="1"><i>3</i><span>    <b class="kw">for</b> pkt <b class="kw">in</b> packets {{ <em class="cm">// 进入内层数据栈作用域</em></span></div>
-              <div class="k-sim-line" data-line="1"><i>4</i><span>        <b class="kw">var</b> tokens: <em class="ty">Token</em>[] = parse_arena(pkt); <em class="cm">// 24 KB 连续分配</em></span></div>
-              <div class="k-sim-line" data-line="2"><i>5</i><span>        tokens.push_all(expand_macros(pkt)); <em class="cm">// 地址稳定原位增长</em></span></div>
-              <div class="k-sim-line" data-line="2"><i>6</i><span>        out.commit(tokens.len()); <em class="cm">// 仅提交值，不逃逸内部引用</em></span></div>
-              <div class="k-sim-line" data-line="3"><i>7</i><span>    }} <em class="cm">// ← 作用域退出：SP 单指令回退至 0x02000，0 次 free()！</em></span></div>
+              <div class="k-sim-line" data-line="0"><i>1</i><span><b class="kw">fn</b> <b>serve_batch</b>(packets: <b class="kw">const</b> <em class="ty">Packet</em>[:]) -&gt; <em class="ty">Summary</em> {{</span></div>
+              <div class="k-sim-line is-active" data-line="0"><i>2</i><span>    <b class="kw">var</b> out = <em class="ty">Summary</em> {{ count: 0, bytes: 0 }}; <em class="cm">// {_t(zh, "根帧 #0 (固定 8 KB)", "frame #0 (8 KB base)")}</em></span></div>
+              <div class="k-sim-line" data-line="1"><i>3</i><span>    <b class="kw">for</b> pkt <b class="kw">in</b> packets {{ <em class="cm">// {_t(zh, "进入内层数据栈作用域", "enter lexical datastack scope")}</em></span></div>
+              <div class="k-sim-line" data-line="1"><i>4</i><span>        <b class="kw">var</b> tokens: <em class="ty">Token</em>[&gt;..] = parse_batch(pkt); <em class="cm">// {_t(zh, "24 KB 连续推进分配", "24 KB contiguous bump")}</em></span></div>
+              <div class="k-sim-line" data-line="2"><i>5</i><span>        expand_macros(tokens, pkt); <em class="cm">// {_t(zh, "地址稳定原位增长", "address-stable in-place grow")}</em></span></div>
+              <div class="k-sim-line" data-line="2"><i>6</i><span>        out.bytes += tokens.len; <em class="cm">// {_t(zh, "仅提交纯值，不逃逸内部引用", "commits value, 0 escaped refs")}</em></span></div>
+              <div class="k-sim-line" data-line="3"><i>7</i><span>    }} <em class="cm">// {_t(zh, "← 作用域退出：SP 单指令回退至 0x02000，0 次 free()！", "← scope exit: SP rewinds to 0x02000 in 1 insn, 0 free()!")}</em></span></div>
               <div class="k-sim-line" data-line="0"><i>8</i><span>    <b class="kw">return</b> out;</span></div>
               <div class="k-sim-line" data-line="0"><i>9</i><span>}}</span></div>
             </div>
@@ -301,10 +300,10 @@ def render_landing(root, zh):
                 <span class="k-sp-badge" id="k-sp-readout">SP = 0x02000 · 8 KB</span>
               </div>
               <div class="k-stack-bar" id="k-stack-bar">
-                <div class="k-stack-seg k-stack-seg--root" style="width:16%"><span>#0 out · 8K</span></div>
+                <div class="k-stack-seg k-stack-seg--root" style="width:20%"><span>#0 out · 8K</span></div>
                 <div class="k-stack-seg k-stack-seg--scope" id="k-seg-scope" style="width:0%"><span>#1 tokens · 24K</span></div>
                 <div class="k-stack-seg k-stack-seg--grow" id="k-seg-grow" style="width:0%"><span id="k-seg-grow-lbl">+16K grow</span></div>
-                <div class="k-sp-cursor" id="k-sp-cursor" style="left:16%"><i>SP</i></div>
+                <div class="k-sp-cursor" id="k-sp-cursor" style="left:20.5%"><i>SP</i></div>
               </div>
               <div class="k-mem-stats">
                 <div><span>{_t(zh, "堆分配 malloc/free", "Heap malloc/free")}</span><strong>0 / 0</strong></div>
@@ -457,7 +456,7 @@ def render_landing(root, zh):
       </div>
     </div>
 
-    <div class="k-bench-explorer">
+    <div class="k-bench-explorer" data-k-dock="bench">
       <div class="k-bench-bar-head">
         <div class="k-pill-tabs" data-k-pill-bar="bench">
           <span class="k-pill-indicator" aria-hidden="true"></span>
@@ -565,7 +564,7 @@ def render_landing(root, zh):
       </div>
     </div>
 
-    <div class="k-atlas-frame">
+    <div class="k-atlas-frame" data-k-dock="atlas">
       <img id="k-atlas-img" class="k-atlas-img" src="{atlas_tabs[0][2]}" alt="{html.escape(atlas_tabs[0][1])}">
       <div class="k-atlas-foot">
         <span id="k-atlas-caption">{html.escape(atlas_tabs[0][3])}</span>
@@ -593,7 +592,7 @@ def render_spec_open(zh):
     )
     return (
         '<section class="k-spec-section k-bounds" aria-label="Full technical specification">'
-        '<details class="k-full-spec" id="k-full-spec">'
+        '<details class="k-full-spec" id="k-full-spec" data-k-dock="spec">'
         '<summary class="k-full-spec-summary">'
         '<div class="k-full-spec-copy">'
         '<span class="k-serial">05 / COMPLETE TECHNICAL SPECIFICATION &amp; MANUAL</span>'

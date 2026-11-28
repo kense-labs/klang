@@ -144,14 +144,12 @@ header.topbar {
   top: 0;
   z-index: 40;
   border-bottom: 1px solid var(--border-subtle);
-  background: color-mix(in oklab, var(--bg) 92%, transparent);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
+  background: var(--bg);
 }
 
 .topbar-inner {
   height: var(--topbar-h);
-  width: min(1280px, 100%);
+  width: min(1380px, 100%);
   margin-inline: auto;
   padding-inline: 1.25rem;
   display: flex;
@@ -382,12 +380,12 @@ html[data-theme="dark"] .theme-icon-sun { display: block; }
   border: 1px solid rgb(128 128 128 / 0.3);
 }
 
-/* ---------- 2-Column KUI Docs Frame ---------- */
+/* ---------- 3-Column KUI Docs Frame ---------- */
 .docs-frame {
   display: flex;
   flex: 1;
   align-items: stretch;
-  width: min(1280px, 100%);
+  width: min(1380px, 100%);
   min-height: calc(100dvh - var(--topbar-h));
   margin-inline: auto;
   border-inline: 1px solid var(--hairline);
@@ -396,7 +394,7 @@ html[data-theme="dark"] .theme-icon-sun { display: block; }
 
 /* ---------- Left Sidebar ---------- */
 aside.aside {
-  width: 15.75rem;
+  width: 15.5rem;
   flex-shrink: 0;
   position: sticky;
   top: var(--topbar-h);
@@ -425,6 +423,12 @@ aside.aside {
   flex-shrink: 0;
   transition: border-color var(--duration-fast) var(--ease-standard),
               color var(--duration-fast) var(--ease-standard);
+}
+
+@media (min-width: 901px) {
+  .aside .search-trigger {
+    display: none;
+  }
 }
 
 .aside .search-trigger:hover {
@@ -676,6 +680,85 @@ article.doc {
   color: var(--ink);
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* Sticky Right-Side "On This Page" Outline (Desktop Docs) */
+aside.doc-outline {
+  display: none;
+}
+
+@media (min-width: 1280px) {
+  html[data-layout="docs"] .toc-drawer {
+    display: none;
+  }
+
+  html[data-layout="docs"] aside.doc-outline {
+    display: block;
+    width: 14.75rem;
+    flex-shrink: 0;
+    position: sticky;
+    top: var(--topbar-h);
+    height: calc(100dvh - var(--topbar-h));
+    padding: 2.25rem 1rem 2rem 1.1rem;
+    border-left: 1px solid var(--border-subtle);
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  html[data-layout="docs"] aside.doc-outline::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.doc-outline-title {
+  margin: 0 0 0.65rem;
+  font: 600 0.72rem/1.3 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.doc-outline-body ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doc-outline-body > ul {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.doc-outline-body ul ul {
+  padding-left: 0.75rem;
+}
+
+.doc-outline-body li {
+  margin: 0;
+}
+
+.doc-outline-body a {
+  display: block;
+  margin-left: -1px;
+  padding: 0.26rem 0.4rem 0.26rem 0.75rem;
+  border-left: 2px solid transparent;
+  font-size: 0.775rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.doc-outline-body a:hover {
+  color: var(--ink);
+}
+
+.doc-outline-body a.is-active {
+  color: var(--ink);
+  font-weight: 560;
+  border-left-color: var(--accent);
 }
 
 /* ---------- Editorial Hero & KUI Showcase Stage (Home Pages) ---------- */
@@ -1787,9 +1870,9 @@ html[data-pointer-focus] :is(a, button, summary, [tabindex]):focus {
   outline-offset: 2px;
 }
 
-/* Dark-mode adaptation for all Kense OS technical SVGs & PNG diagrams */
-html[data-theme="dark"] :is(.k-atlas-img, .doc-body img[src*="diagrams/"], .kui-lightbox-body img) {
-  filter: invert(0.928) hue-rotate(180deg) saturate(1.12) contrast(1.03);
+/* Native dark SVGs handle .svg blueprints cleanly; invert fallback applies only to legacy raster PNGs */
+html[data-theme="dark"] .doc-body img[src$=".png"][src*="diagrams/"] {
+  filter: invert(0.928) hue-rotate(180deg) saturate(1.08);
 }
 
 /* Upgraded Topbar Lockup, Sliding Pill Nav & Search Chip */
@@ -2244,13 +2327,13 @@ html[data-lang="en"] .k-reel {
 
 .k-aperture {
   position: absolute;
-  inset: -95% -20% -95%;
+  inset: -42% -10% -42%;
   display: grid;
   place-items: center;
   pointer-events: none;
   perspective: 680px;
-  -webkit-mask-image: linear-gradient(transparent 0%, rgb(0 0 0 / 0.45) 14%, #000 34%, #000 66%, rgb(0 0 0 / 0.45) 86%, transparent);
-  mask-image: linear-gradient(transparent 0%, rgb(0 0 0 / 0.45) 14%, #000 34%, #000 66%, rgb(0 0 0 / 0.45) 86%, transparent);
+  -webkit-mask-image: linear-gradient(transparent 0%, rgb(0 0 0 / 0.18) 20%, #000 34%, #000 66%, rgb(0 0 0 / 0.18) 80%, transparent 100%);
+  mask-image: linear-gradient(transparent 0%, rgb(0 0 0 / 0.18) 20%, #000 34%, #000 66%, rgb(0 0 0 / 0.18) 80%, transparent 100%);
 }
 
 .k-ticket {
@@ -2269,11 +2352,11 @@ html[data-lang="en"] .k-reel {
   white-space: nowrap;
   border-radius: 999px;
   color: var(--domain-ink);
-  border: 1px solid color-mix(in srgb, var(--domain-ink) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--domain-rim) 28%, transparent);
   background: var(--domain-bg);
   box-shadow:
     inset 0 1px 1px rgb(255 255 255 / 0.72),
-    0 4px 12px -3px rgb(0 0 0 / 0.16);
+    0 4px 12px -3px rgb(0 0 0 / 0.14);
   transition:
     transform 420ms cubic-bezier(0.2, 0.9, 0.24, 1),
     opacity 320ms ease;
@@ -2282,35 +2365,36 @@ html[data-lang="en"] .k-reel {
 }
 
 .k-ticket--wasi {
-  --domain-bg: #e6f8f5;
-  --domain-ink: #0b4a43;
+  --domain-bg: #ecfdf5;
+  --domain-ink: #065f46;
   --domain-rim: #14b8a6;
 }
 
 .k-ticket--jit {
-  --domain-bg: #eef0ff;
-  --domain-ink: #2b2482;
+  --domain-bg: #eef2ff;
+  --domain-ink: #312e81;
   --domain-rim: #6366f1;
 }
 
 html[data-theme="dark"] .k-ticket {
-  --domain-bg: #36131e;
-  --domain-ink: #fecdd3;
+  --domain-bg: #171115;
+  --domain-ink: #ffe4e6;
   --domain-rim: #fb7185;
+  border-color: color-mix(in srgb, var(--domain-rim) 38%, rgb(255 255 255 / 0.08));
   box-shadow:
-    inset 0 1px 1px rgb(255 255 255 / 0.15),
-    0 6px 16px -3px rgb(0 0 0 / 0.56);
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    0 8px 22px -6px rgb(0 0 0 / 0.65);
 }
 
 html[data-theme="dark"] .k-ticket--wasi {
-  --domain-bg: #102d2a;
-  --domain-ink: #99f6e4;
+  --domain-bg: #0e1918;
+  --domain-ink: #ccfbf1;
   --domain-rim: #2dd4bf;
 }
 
 html[data-theme="dark"] .k-ticket--jit {
-  --domain-bg: #1c1f44;
-  --domain-ink: #c7d2fe;
+  --domain-bg: #121526;
+  --domain-ink: #e0e7ff;
   --domain-rim: #818cf8;
 }
 
@@ -2321,11 +2405,7 @@ html[data-theme="dark"] .k-ticket--jit {
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--domain-bg) 76%, #ffffff) 0%,
-    color-mix(in srgb, var(--domain-bg) 72%, var(--domain-rim)) 100%
-  );
+  background: color-mix(in srgb, var(--domain-rim) 22%, var(--domain-bg));
   color: var(--domain-ink);
 }
 
@@ -2340,13 +2420,13 @@ html[data-theme="dark"] .k-ticket--jit {
 }
 
 .k-ticket[data-slot="1"] {
-  transform: translate3d(0, 106%, 0) scale(0.88) rotateX(-16deg);
-  opacity: 0.16;
+  transform: translate3d(0, 78%, 0) scale(0.84) rotateX(-22deg);
+  opacity: 0.07;
 }
 
 .k-ticket[data-slot="-1"] {
-  transform: translate3d(0, -106%, 0) scale(0.88) rotateX(16deg);
-  opacity: 0.16;
+  transform: translate3d(0, -78%, 0) scale(0.84) rotateX(22deg);
+  opacity: 0.07;
 }
 
 .k-lead {
@@ -2424,21 +2504,15 @@ html[data-theme="dark"] .k-ticket--jit {
   position: relative;
   display: grid;
   justify-items: center;
-  width: min(94%, 52rem);
-  margin: clamp(1.1rem, 2.6vh, 1.9rem) auto auto;
-}
-
-.k-guide-dock {
-  width: 100%;
-  height: 50px;
-  margin-bottom: 6px;
+  width: min(95%, 58rem);
+  margin: clamp(1.5rem, 3.2vh, 2.25rem) auto auto;
 }
 
 .k-cmd-dock {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   box-shadow: var(--shadow-resting);
@@ -2493,7 +2567,7 @@ html[data-theme="dark"] .k-ticket--jit {
   overflow-x: auto;
   white-space: nowrap;
   scrollbar-width: none;
-  font: 450 0.8rem/1.4 var(--mono);
+  font: 450 0.77rem/1.4 var(--mono);
   color: var(--ink);
 }
 
@@ -2578,8 +2652,9 @@ html[data-theme="dark"] .k-ticket--jit {
   bottom: 2px;
   width: calc((100% - 4px) / 3);
   border-radius: 6px;
+  border: 1px solid var(--border-subtle);
   background: var(--surface);
-  box-shadow: var(--shadow-resting);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
   transition: transform 240ms var(--ease-standard);
   pointer-events: none;
 }
@@ -2636,6 +2711,15 @@ html[data-theme="dark"] .k-ticket--jit {
 }
 
 /* ---------- KUI Skewed Companion Guide Bot (#k-guide) ---------- */
+.k-guide-trail {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 48;
+  pointer-events: none;
+}
+
 .k-guide {
   --guide-paper: #171717;
   --guide-ink: #ffffff;
@@ -2650,7 +2734,8 @@ html[data-theme="dark"] .k-ticket--jit {
   pointer-events: none;
   visibility: hidden;
   opacity: 0;
-  transition: transform 420ms cubic-bezier(0.2, 0.85, 0.24, 1);
+  transition: opacity 180ms ease;
+  will-change: transform, opacity;
 }
 
 html[data-theme="dark"] .k-guide {
@@ -2664,7 +2749,9 @@ html[data-theme="dark"] .k-guide {
   opacity: 1;
 }
 
-body[data-k-intro-active] .k-guide {
+.k-guide[data-concealed],
+body[data-k-intro-active] .k-guide,
+body[data-k-intro-active] .k-guide-trail {
   opacity: 0 !important;
   pointer-events: none !important;
 }
@@ -2684,13 +2771,19 @@ body[data-k-intro-active] .k-guide {
   transform: translateX(-50%);
   transform-origin: 50% 100%;
   transition:
-    width 280ms cubic-bezier(0.22, 1, 0.36, 1),
-    height 280ms cubic-bezier(0.22, 1, 0.36, 1);
+    width 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.k-guide[data-below] .k-guide-shell {
+  bottom: auto;
+  top: -36px;
+  transform-origin: 50% 0%;
 }
 
 .k-guide[data-open] .k-guide-shell {
-  width: min(286px, calc(100vw - 32px));
-  height: 248px;
+  width: min(292px, calc(100vw - 28px));
+  height: 256px;
 }
 
 .k-guide-ink {
@@ -2702,15 +2795,16 @@ body[data-k-intro-active] .k-guide {
   overflow: visible;
   pointer-events: none;
   color: var(--guide-paper);
-  transform: skewX(-6deg);
-  filter: drop-shadow(0 14px 32px rgb(0 0 0 / 0.28));
-  transition: transform 180ms ease, left 180ms ease, width 180ms ease;
+  transform: skewX(-6deg) var(--flight-pose, matrix(1, 0, 0, 1, 0, 0));
+  transform-origin: 50% 100%;
+  filter: drop-shadow(0 12px 28px rgb(0 0 0 / 0.26));
+  transition: left 180ms ease, width 180ms ease;
 }
 
 .k-guide:is([data-hint], [data-open]) .k-guide-ink {
   left: 0;
   width: 100%;
-  transform: none;
+  transform: var(--flight-pose, matrix(1, 0, 0, 1, 0, 0));
 }
 
 .k-guide-rim {
@@ -2720,6 +2814,10 @@ body[data-k-intro-active] .k-guide {
 
 .k-guide[data-open] .k-guide-tail {
   opacity: 0;
+}
+
+.k-guide[data-below] .k-guide-tail-anchor {
+  display: none;
 }
 
 .k-guide-trigger {
@@ -2799,7 +2897,9 @@ body[data-k-intro-active] .k-guide {
 .k-guide-speech {
   position: relative;
   z-index: 1;
-  padding: 10px 14px 10px 44px;
+  width: max-content;
+  max-width: min(500px, calc(100vw - 32px));
+  padding: 10px 16px 10px 44px;
   font-size: 0.78rem;
   line-height: 1.35;
 }
@@ -2810,6 +2910,24 @@ body[data-k-intro-active] .k-guide {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.speech-char {
+  display: inline-block;
+  white-space: pre;
+  animation: k-speech-char-in 180ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: var(--char-delay, 0ms);
+}
+
+@keyframes k-speech-char-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .k-guide-choices {
@@ -3190,7 +3308,8 @@ html[data-theme="light"] .k-sp-badge {
   border: 1px dashed var(--border-strong);
   background: var(--surface-muted);
   padding: 4px;
-  gap: 4px;
+  gap: 0;
+  margin-top: 1.35rem;
   margin-bottom: 0.95rem;
 }
 
@@ -3199,11 +3318,16 @@ html[data-theme="light"] .k-sp-badge {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 0 8px;
   overflow: hidden;
   border-radius: 6px;
   font: 550 11px/1 var(--mono);
   white-space: nowrap;
   transition: width 320ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease;
+}
+
+.k-stack-seg + .k-stack-seg:not([style*="width:0%"]):not([style*="width: 0%"]) {
+  margin-left: 4px;
 }
 
 .k-stack-seg--root {
@@ -3226,6 +3350,7 @@ html[data-theme="light"] .k-sp-badge {
 
 .k-stack-seg[style*="width:0%"],
 .k-stack-seg[style*="width: 0%"] {
+  padding-inline: 0;
   border-width: 0;
   opacity: 0;
 }
