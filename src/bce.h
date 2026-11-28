@@ -290,7 +290,7 @@ struct BCE {
     // ------------------------------------------------------------------
     // Bases, facts, terms.
 
-    enum BaseKind : uint8_t { BK_ZERO, BK_VAR, BK_LEN, BK_TMP };
+    enum BaseKind : uint8_t { BK_ZERO, BK_VAR, BK_LEN, BK_TMP, BK_FIELD };
 
     struct Base {
         uint8_t kind = BK_ZERO;
@@ -353,7 +353,7 @@ struct BCE {
     // (ShiftCore), so the operands move with the facts, path by path.
     struct Flow {
         vector<Fact> facts;
-        Gens vgen, pgen;   // By var id / place id.
+        Gens vgen, pgen, fgen;   // By var id / place id / local scalar field id.
         small_vector<Lin, 4> lins;
         // Sorted var ids whose current value a write has placed against a
         // re-bindable place's length since its last rebind (LeLenHolds).
@@ -398,6 +398,98 @@ struct BCE {
         varid[v] = id;
         varof.push_back(v);
         return id;
+    }
+    // Local non-addressed struct scalar field interning.
+    struct FieldKey {
+        VarDef *v = nullptr;
+        int idx = -1;
+        bool operator<(const FieldKey &o) const { return v != o.v ? v < o.v : idx < o.idx; }
+    };
+    struct FieldEntry { VarDef *v = nullptr; int idx = -1; TypeExpr *type = nullptr; };
+    struct FieldInv { bool has = false; bool ge0 = true; bool has_ub = true; int64_t ub = 0; };
+    map<FieldKey, int> fieldid;
+    vector<FieldEntry> fieldof;
+    unordered_map<VarDef *, vector<int>> structfields;
+    vector<FieldInv> fieldinvs;
+    int FieldId(VarDef *v, int idx, TypeExpr *t) {
+        FieldKey k { v, idx };
+        auto it = fieldid.find(k);
+        if (it != fieldid.end()) return it->second;
+        auto id = (int)fieldof.size();
+        fieldid[k] = id;
+        fieldof.push_back({ v, idx, t });
+        fieldinvs.resize(fieldof.size());
+        structfields[v].push_back(id);
+        return id;
+    }
+    bool TrackField(Dot *d, VarDef *&vout, int &idxout, TypeExpr *&tout) const {
+        if (!d || !d->IsField() || d->fieldidx < 0 || !MachineInt(d->exprtype)) return false;
+        auto id = Is<Ident>(d->obj);
+        auto v = id ? id->vdef : nullptr;
+        if (!v || v->isparam || v->captured || v->isglobal || addrof.count(v)) return false;
+        if (!v->type || v->type->kind != TY_STRUCT) return false;
+        vout = v;
+        idxout = d->fieldidx;
+        tout = d->exprtype;
+        return true;
+    }
+    Base FieldBase(VarDef *v, int idx, TypeExpr *t) {
+        auto id = FieldId(v, idx, t);
+        return Base { BK_FIELD, id, flow.fgen.Get(id) };
+    }
+    void BumpField(int fid) {
+        auto v = fieldof[fid].v;
+        if (!freshvars || !freshvars->count(v)) anybump = true;
+        flow.fgen.Set(fid, ++nextgen);
+    }
+    void InvalidateStructFields(VarDef *v) {
+        auto it = structfields.find(v);
+        if (it == structfields.end()) return;
+        for (auto fid : it->second) {
+            if (mode == M_RECORD && (size_t)fid < fieldinvs.size()) {
+                fieldinvs[fid].has = true;
+                fieldinvs[fid].ge0 = false;
+                fieldinvs[fid].has_ub = false;
+            }
+            BumpField(fid);
+        }
+    }
+    void RecordFieldSet(int fid, const Term &t, bool isdecl) {
+        if (mode != M_RECORD || (size_t)fid >= fieldinvs.size()) return;
+        auto &inv = fieldinvs[fid];
+        auto exact = NoWrap(t, fieldof[fid].type->intstorage);
+        if (!inv.has) {
+            if (!isdecl) {
+                inv.has = true;
+                inv.ge0 = false;
+                inv.has_ub = false;
+                return;
+            }
+            inv.has = true;
+            inv.ge0 = exact && Query(Zero(), t.b, t.off);
+            auto d = exact ? Dist(t.b, Zero()) : INF;
+            auto ub = d == INF ? INF : SatAdd(d, t.off);
+            inv.has_ub = ub != INF && ub >= 0 && ub < LENMAX;
+            inv.ub = inv.has_ub ? ub : 0;
+            return;
+        }
+        inv.ge0 = inv.ge0 && exact && Query(Zero(), t.b, t.off);
+        auto d = exact ? Dist(t.b, Zero()) : INF;
+        auto ub = d == INF ? INF : SatAdd(d, t.off);
+        if (ub == INF || ub >= LENMAX) inv.has_ub = false;
+        else if (inv.has_ub) inv.ub = std::max(inv.ub, ub);
+    }
+    void SetFieldWrite(VarDef *v, int idx, TypeExpr *ft, Node *rhs, bool isdecl) {
+        auto fid = FieldId(v, idx, ft);
+        auto t = mode == M_KILLS ? Term {} : TermOf(rhs);
+        if (mode == M_RECORD) RecordFieldSet(fid, t, isdecl);
+        if (mode == M_KILLS) { BumpField(fid); return; }
+        BumpField(fid);
+        if (NoWrap(t, ft->intstorage)) {
+            auto nb = Base { BK_FIELD, fid, flow.fgen.Get(fid) };
+            AddFactB(nb, t.b, t.off);
+            AddFactB(t.b, nb, SatSub(0, t.off));
+        }
     }
     static Base Zero() { return Base { BK_ZERO, 0, 0 }; }
     // An anonymous base for one evaluation of an expression whose value range
@@ -948,6 +1040,17 @@ struct BCE {
                         auto li = idx(LenBase(pid));
                         if (li >= 0) edges.push_back({ (int)i, li, c });
                     }
+            } else if (b.kind == BK_FIELD) {
+                auto &fe = fieldof[b.id];
+                if (fe.type && IntBits(fe.type->intstorage) < 64) {
+                    auto [lo, hi] = IntRange(fe.type->intstorage);
+                    edges.push_back({ 0, (int)i, -lo });
+                    edges.push_back({ (int)i, 0, hi });
+                }
+                if (mode == M_JUDGE && (size_t)b.id < fieldinvs.size() && fieldinvs[b.id].has) {
+                    if (fieldinvs[b.id].ge0) edges.push_back({ 0, (int)i, 0 });
+                    if (fieldinvs[b.id].has_ub) edges.push_back({ (int)i, 0, fieldinvs[b.id].ub });
+                }
             }
         }
         // Index and bound types: v <= len(P) + slack.
@@ -1278,6 +1381,12 @@ struct BCE {
             return Term { true, VarBase(id->vdef), 0 };
         }
         if (auto d = Is<Dot>(n); d && d->member == B_LEN) return LenTermOf(d->obj);
+        if (auto d = Is<Dot>(n)) {
+            VarDef *sv = nullptr;
+            int fi = -1;
+            TypeExpr *ft = nullptr;
+            if (TrackField(d, sv, fi, ft)) return Term { true, FieldBase(sv, fi, ft), 0 };
+        }
         if (auto b = Is<Binary>(n); b && (b->op == T_PLUS || b->op == T_MINUS)) {
             auto t = OpType(b);
             if (!MachineInt(t)) return {};
@@ -3329,6 +3438,7 @@ struct BCE {
                 }
         r.vgen = Gens::Max(a.vgen, b.vgen);
         r.pgen = Gens::Max(a.pgen, b.pgen);
+        r.fgen = Gens::Max(a.fgen, b.fgen);
         std::set_intersection(a.lestated.begin(), a.lestated.end(), b.lestated.begin(),
                               b.lestated.end(), std::back_inserter(r.lestated));
         if (mode == M_KILLS) return r;
@@ -3346,6 +3456,12 @@ struct BCE {
             if (ga.gen != gb.gen && IntBaseVar(varof[g.id]) && named(a, ga) && named(b, gb))
                 phis.push_back({ Base { BK_VAR, g.id, g.gen }, { true, ga, 0 }, { true, gb, 0 } });
         }
+        for (auto &g : r.fgen.gens) {
+            auto ga = Base { BK_FIELD, g.id, a.fgen.Get(g.id) };
+            auto gb = Base { BK_FIELD, g.id, b.fgen.Get(g.id) };
+            if (ga.gen != gb.gen && named(a, ga) && named(b, gb))
+                phis.push_back({ Base { BK_FIELD, g.id, g.gen }, { true, ga, 0 }, { true, gb, 0 } });
+        }
         if (phis.empty()) return r;
         // The bases the joined flow still names: zero, lengths and variables
         // at their joined generations, and the phis. A temporary or an older
@@ -3356,6 +3472,7 @@ struct BCE {
                 case BK_ZERO: return true;
                 case BK_LEN: return x.gen == r.pgen.Get(x.id);
                 case BK_VAR: return x.gen == r.vgen.Get(x.id);
+                case BK_FIELD: return x.gen == r.fgen.Get(x.id);
                 default: return false;
             }
         };
@@ -3432,6 +3549,10 @@ struct BCE {
         placeids.clear();
         addrof.clear();
         intvars.clear();
+        fieldid.clear();
+        fieldof.clear();
+        structfields.clear();
+        fieldinvs.clear();
         wdecl.clear();
         wbad.clear();
         wkinds.clear();
@@ -4269,7 +4390,252 @@ inline bool EarlyBlock::BceWalk(BCE &b) {
     return true;
 }
 
+struct BoundedAccLoop {
+    bool ok = false;
+    VarDef *acc = nullptr;
+    int64_t hi = 0;
+};
+
+inline Node *StripIntCasts(Node *n) {
+    while (auto ac = Is<AsCast>(n)) n = ac->child;
+    return n;
+}
+
+inline bool SamePureExpr(Node *a, Node *b) {
+    a = StripIntCasts(a);
+    b = StripIntCasts(b);
+    if (!a || !b || a->nkind != b->nkind) return false;
+    if (auto ia = Is<Ident>(a)) return ia->vdef && ia->vdef == ((Ident *)b)->vdef;
+    if (auto xa = Is<Index>(a)) {
+        auto xb = (Index *)b;
+        return SamePureExpr(xa->obj, xb->obj) && SamePureExpr(xa->idx, xb->idx);
+    }
+    if (auto la = Is<IntLit>(a)) {
+        auto lb = (IntLit *)b;
+        return !la->uns && !lb->uns && la->val == lb->val;
+    }
+    return false;
+}
+
+inline int CountVarWrites(Node *n, VarDef *v) {
+    if (!n || !v) return 0;
+    int count = 0;
+    if (auto a = Is<Assign>(n)) {
+        if (auto id = Is<Ident>(a->lval); id && id->vdef == v) count++;
+    } else if (auto inc = Is<IncDec>(n)) {
+        if (auto id = Is<Ident>(inc->lval); id && id->vdef == v) count++;
+    } else if (auto vd = Is<VarDecl>(n)) {
+        for (auto d : vd->defs) if (d == v) count++;
+    }
+    n->Children([&](Node *ch) { count += CountVarWrites(ch, v); });
+    return count;
+}
+
+inline bool AlwaysExitsNode(Node *n) {
+    if (!n) return false;
+    if (Is<Return>(n) || Is<Break>(n) || Is<Continue>(n)) return true;
+    if (auto bl = Is<Block>(n)) {
+        for (auto st : bl->stmts) if (AlwaysExitsNode(st)) return true;
+        return AlwaysExitsNode(bl->tail);
+    }
+    return false;
+}
+
+inline Node *PureInlineReturnExpr(InlineBlock *ib, unordered_map<VarDef *, Node *> &bindings) {
+    if (!ib || !ib->body) return nullptr;
+    auto *bd = ib->body;
+    for (auto st : bd->stmts) if (Is<Defer>(st)) return nullptr;
+    auto last = !bd->tail && !bd->stmts.empty() ? Is<Return>(bd->stmts.back()) : nullptr;
+    for (auto st : bd->stmts) {
+        if (st == last) continue;
+        if (ReturnsTo(st, ib->sf)) return nullptr;
+        auto vd = Is<VarDecl>(st);
+        if (!vd || !vd->inline_arg || vd->defs.size() != 1 || vd->inits.size() != 1 || !vd->defs[0])
+            return nullptr;
+        bindings[vd->defs[0]] = vd->inits[0];
+    }
+    if (last && last->target == ib->sf && last->vals.size() == 1) {
+        for (auto v : last->vals) if (ReturnsTo(v, ib->sf)) return nullptr;
+        return last->vals[0];
+    }
+    return ReturnsTo(bd->tail, ib->sf) ? nullptr : bd->tail;
+}
+
+inline void CollectCondElemRange(Node *cond, Node *elem,
+                                 const unordered_map<VarDef *, Node *> &bindings,
+                                 bool &has_lo, int64_t &lo, bool &has_hi, int64_t &hi) {
+    if (!cond) return;
+    if (auto ib = Is<InlineBlock>(cond)) {
+        unordered_map<VarDef *, Node *> inner = bindings;
+        if (auto ret = PureInlineReturnExpr(ib, inner))
+            CollectCondElemRange(ret, elem, inner, has_lo, lo, has_hi, hi);
+        return;
+    }
+    auto b = Is<Binary>(cond);
+    if (!b) return;
+    if (b->op == T_ANDAND) {
+        CollectCondElemRange(b->left, elem, bindings, has_lo, lo, has_hi, hi);
+        CollectCondElemRange(b->right, elem, bindings, has_lo, lo, has_hi, hi);
+        return;
+    }
+    if (b->op != T_LT && b->op != T_LTEQ && b->op != T_GT && b->op != T_GTEQ) return;
+    auto match_side = [&](Node *side) {
+        auto s = StripIntCasts(side);
+        if (SamePureExpr(s, elem)) return true;
+        if (auto id = Is<Ident>(s); id && id->vdef) {
+            auto it = bindings.find(id->vdef);
+            if (it != bindings.end() && SamePureExpr(it->second, elem)) return true;
+        }
+        return false;
+    };
+    auto update_lo = [&](int64_t v) { has_lo = true; lo = std::max(lo, v); };
+    auto update_hi = [&](int64_t v) { has_hi = true; hi = std::min(hi, v); };
+    auto rl = Is<IntLit>(StripIntCasts(b->right));
+    auto ll = Is<IntLit>(StripIntCasts(b->left));
+    if (match_side(b->left) && rl && !rl->uns) {
+        if (b->op == T_GTEQ) update_lo(rl->val);
+        else if (b->op == T_GT) update_lo(rl->val + 1);
+        else if (b->op == T_LTEQ) update_hi(rl->val);
+        else if (b->op == T_LT) update_hi(rl->val - 1);
+    } else if (match_side(b->right) && ll && !ll->uns) {
+        if (b->op == T_LTEQ) update_lo(ll->val);
+        else if (b->op == T_LT) update_lo(ll->val + 1);
+        else if (b->op == T_GTEQ) update_hi(ll->val);
+        else if (b->op == T_GT) update_hi(ll->val - 1);
+    }
+}
+
+inline bool PureNoSideEffects(Node *n, VarDef *allowed_read1 = nullptr, VarDef *allowed_read2 = nullptr) {
+    if (!n) return true;
+    if (Is<Assign>(n) || Is<IncDec>(n) || Is<Call>(n) || Is<Defer>(n)) return false;
+    (void)allowed_read1; (void)allowed_read2;
+    auto ok = true;
+    n->Children([&](Node *ch) { ok = ok && PureNoSideEffects(ch); });
+    return ok;
+}
+
+inline BoundedAccLoop MatchBoundedAccLoop(BCE &b, While *w) {
+    if (b.mode == BCE::M_KILLS) return {};
+    auto bd = Is<Block>(w->body);
+    if (!bd || bd->tail || bd->stmts.size() < 3 || b.HasJumps(bd, false, true)) return {};
+    // Locate top-level exit guard: `if step - base == K { return/break }` (or >= K).
+    VarDef *stepv = nullptr, *basev = nullptr;
+    int64_t maxk = 0;
+    size_t gi = 0;
+    for (; gi < bd->stmts.size(); gi++) {
+        auto ie = Is<IfExpr>(bd->stmts[gi]);
+        if (!ie || ie->elseb || !AlwaysExitsNode(ie->thenb)) continue;
+        auto cmp = Is<Binary>(ie->cond);
+        if (!cmp || (cmp->op != T_EQ && cmp->op != T_GTEQ && cmp->op != T_LTEQ)) continue;
+        Node *diffnode = nullptr;
+        IntLit *klit = nullptr;
+        if (auto lit = Is<IntLit>(StripIntCasts(cmp->right)); lit && !lit->uns &&
+            (cmp->op == T_EQ || cmp->op == T_GTEQ)) {
+            diffnode = cmp->left;
+            klit = lit;
+        } else if (auto lit = Is<IntLit>(StripIntCasts(cmp->left)); lit && !lit->uns &&
+                   (cmp->op == T_EQ || cmp->op == T_LTEQ)) {
+            diffnode = cmp->right;
+            klit = lit;
+        }
+        auto sub = Is<Binary>(StripIntCasts(diffnode));
+        if (!sub || sub->op != T_MINUS || !klit || klit->val < 1 || klit->val > 18) continue;
+        auto si = Is<Ident>(StripIntCasts(sub->left));
+        auto bi = Is<Ident>(StripIntCasts(sub->right));
+        if (!si || !bi || !si->vdef || !bi->vdef || si->vdef == bi->vdef) continue;
+        stepv = si->vdef;
+        basev = bi->vdef;
+        maxk = klit->val;
+        break;
+    }
+    if (!stepv || gi >= bd->stmts.size()) return {};
+    auto plain_i64 = [&](VarDef *v) {
+        return v && BCE::IntBaseVar(v) && !v->isparam && !v->captured &&
+               !v->isglobal && !b.addrof.count(v) && v->type && v->type->intstorage == IS_I64;
+    };
+    if (!plain_i64(stepv) || !plain_i64(basev)) return {};
+    if (CountVarWrites(w->cond, stepv) != 0 || CountVarWrites(bd, stepv) != 1 ||
+        CountVarWrites(w->cond, basev) != 0 || CountVarWrites(bd, basev) != 0)
+        return {};
+    auto sb = b.VarBase(stepv), bb = b.VarBase(basev);
+    if (!b.Query(sb, bb, 0) || !b.Query(bb, sb, 0)) return {};
+    // Must have stepv++ or stepv += 1 unconditionally at top level after guard.
+    bool step_ok = false;
+    for (size_t k = gi + 1; k < bd->stmts.size(); k++) {
+        if (auto inc = Is<IncDec>(bd->stmts[k]); inc && inc->op == T_INC) {
+            if (auto id = Is<Ident>(inc->lval); id && id->vdef == stepv) { step_ok = true; break; }
+        } else if (auto as = Is<Assign>(bd->stmts[k]); as && as->op == T_PLUSEQ) {
+            auto id = Is<Ident>(as->lval);
+            auto one = Is<IntLit>(as->rhs);
+            if (id && id->vdef == stepv && one && !one->uns && one->val == 1) { step_ok = true; break; }
+        }
+    }
+    if (!step_ok) return {};
+    // Before guard: no side effects/calls/mutations.
+    for (size_t k = 0; k < gi; k++) if (!PureNoSideEffects(bd->stmts[k])) return {};
+    // Find `acc = acc * M + addend` at top level after guard.
+    VarDef *accv = nullptr;
+    int64_t radix = 0;
+    Node *addend = nullptr;
+    for (size_t ai = gi + 1; ai < bd->stmts.size(); ai++) {
+        auto as = Is<Assign>(bd->stmts[ai]);
+        if (!as || as->op != T_ASSIGN) continue;
+        auto lhs = Is<Ident>(as->lval);
+        auto sum = Is<Binary>(as->rhs);
+        if (!lhs || !lhs->vdef || !sum || sum->op != T_PLUS) continue;
+        auto cand_acc = lhs->vdef;
+        auto match_mul = [&](Node *mnode, Node *add) {
+            auto mul = Is<Binary>(mnode);
+            if (!mul || mul->op != T_MUL) return false;
+            auto ml = Is<Ident>(StripIntCasts(mul->left));
+            auto mr = Is<IntLit>(StripIntCasts(mul->right));
+            if (ml && ml->vdef == cand_acc && mr && !mr->uns && mr->val >= 2 && mr->val <= 16) {
+                accv = cand_acc; radix = mr->val; addend = add; return true;
+            }
+            ml = Is<Ident>(StripIntCasts(mul->right));
+            mr = Is<IntLit>(StripIntCasts(mul->left));
+            if (ml && ml->vdef == cand_acc && mr && !mr->uns && mr->val >= 2 && mr->val <= 16) {
+                accv = cand_acc; radix = mr->val; addend = add; return true;
+            }
+            return false;
+        };
+        if (match_mul(sum->left, sum->right) || match_mul(sum->right, sum->left)) break;
+        if (!PureNoSideEffects(bd->stmts[ai])) return {};
+    }
+    if (!accv || !plain_i64(accv) || accv == stepv || accv == basev) return {};
+    if (CountVarWrites(w->cond, accv) != 0 || CountVarWrites(bd, accv) != 1) return {};
+    auto ab = b.VarBase(accv);
+    if (!b.Query(BCE::Zero(), ab, 0)) return {};
+    auto acc_hi0 = b.Dist(ab, BCE::Zero());
+    if (acc_hi0 == BCE::INF || acc_hi0 < 0 || acc_hi0 >= BCE::LENMAX) return {};
+    if (!PureNoSideEffects(addend)) return {};
+    // Decompose addend = elem - bias (or elem) and bound elem via cond.
+    Node *unwrapped = StripIntCasts(addend);
+    Node *elem = unwrapped;
+    int64_t bias = 0;
+    if (auto sub = Is<Binary>(unwrapped); sub && sub->op == T_MINUS) {
+        auto bl = Is<IntLit>(StripIntCasts(sub->right));
+        if (!bl || bl->uns) return {};
+        elem = StripIntCasts(sub->left);
+        bias = bl->val;
+    }
+    bool has_lo = false, has_hi = false;
+    int64_t elo = INT64_MIN, ehi = INT64_MAX;
+    unordered_map<VarDef *, Node *> empty_bindings;
+    CollectCondElemRange(w->cond, elem, empty_bindings, has_lo, elo, has_hi, ehi);
+    if (!has_lo || !has_hi || elo < bias) return {};
+    int64_t maxd = ehi - bias;
+    if (maxd < 0 || maxd > 255) return {};
+    int64_t hi = acc_hi0;
+    for (int64_t t = 0; t < maxk; t++) {
+        if (hi > (BCE::LENMAX - maxd) / radix) return {};
+        hi = hi * radix + maxd;
+    }
+    return { true, accv, hi };
+}
+
 inline bool While::BceWalk(BCE &b) {
+    auto acc = MatchBoundedAccLoop(b, this);
     b.loopdepth++;
     if (b.mode == BCE::M_KILLS) {
         b.Walk(cond);
@@ -4301,6 +4667,11 @@ inline bool While::BceWalk(BCE &b) {
         else if (killfree) b.CondFacts(cond, false);
     }
     b.loopdepth--;
+    if (acc.ok) {
+        auto ab = b.VarBase(acc.acc);
+        b.AddFactB(BCE::Zero(), ab, 0);
+        b.AddFactB(ab, BCE::Zero(), acc.hi);
+    }
     return true;
 }
 
@@ -4585,6 +4956,20 @@ inline bool VarDecl::BceWalk(BCE &b) {
             lt = b.BoundLenOf(inits[0]);
         if (BCE::IntBaseVar(v)) {
             b.SetWrite(v, inits[0], true);
+        } else if (v->type && v->type->kind == TY_STRUCT && !v->isparam &&
+                   !v->captured && !v->isglobal && !b.addrof.count(v)) {
+            auto sl = Is<StructLit>(inits[0]);
+            if (sl && !sl->spread && sl->sinst && !b.HasKillEffects(inits[0])) {
+                auto &fields = sl->sinst->st->fields;
+                for (size_t fi = 0; fi < fields.size(); fi++) {
+                    if (!BCE::MachineInt(fields[fi].type)) continue;
+                    if (auto initv = sl->InitFor((int)fi))
+                        b.SetFieldWrite(v, (int)fi, fields[fi].type, initv, b.loopdepth == 0);
+                }
+            } else {
+                b.InvalidateStructFields(v);
+            }
+            if (b.loopdepth > 0) b.StorageWriteKill(BCE::UK_OWNED, v, v);
         } else if (b.loopdepth > 0 && v->type && IsRefOrSlice(v->type)) {
             b.RebindKill(v);   // Loop-repeated redeclaration rebinds.
         } else if (b.loopdepth > 0 && v->type && v->type->kind != TY_FLT &&
@@ -4602,7 +4987,7 @@ inline bool VarDecl::BceWalk(BCE &b) {
             if (pid >= 0) b.AddFactB(b.LenBase(pid), BCE::Zero(), cap);
         }
     } else {
-        for (auto d : defs) if (d) b.VarKillWrite(d);
+        for (auto d : defs) if (d) { b.VarKillWrite(d); b.InvalidateStructFields(d); }
     }
     return true;
 }
@@ -4662,13 +5047,33 @@ inline bool Assign::BceWalk(BCE &b) {
             fresh = Is<SliceExpr>(rhs) ? b.slicelen : b.BoundLenOf(rhs);
         // A slice variable is the slot that references to it measure too.
         if (t && t->kind == TY_SLICE) b.SlotWriteKill(BCE::UK_OWNED, v);
-        else if (t && t->kind != TY_FLT && t->kind != TY_BOOL && t->kind != TY_INT)
+        else if (t && t->kind != TY_FLT && t->kind != TY_BOOL && t->kind != TY_INT) {
+            b.InvalidateStructFields(v);
             b.StorageWriteKill(BCE::UK_OWNED, v, v);
+        }
         if (fresh.ok) {
             auto pid = b.PlaceOfVar(v);
             if (pid >= 0) b.ExactLenIs(pid, fresh);
         }
         return true;
+    }
+    if (auto d = Is<Dot>(lval)) {
+        VarDef *sv = nullptr;
+        int fi = -1;
+        TypeExpr *ft = nullptr;
+        if (b.TrackField(d, sv, fi, ft)) {
+            if (op == T_ASSIGN) b.SetFieldWrite(sv, fi, ft, rhs, false);
+            else {
+                auto fid = b.FieldId(sv, fi, ft);
+                if (b.mode == BCE::M_RECORD && (size_t)fid < b.fieldinvs.size()) {
+                    b.fieldinvs[fid].has = true;
+                    b.fieldinvs[fid].ge0 = false;
+                    b.fieldinvs[fid].has_ub = false;
+                }
+                b.BumpField(fid);
+            }
+            return true;
+        }
     }
     auto lt = lval->exprtype;
     // A value stored in or into an element changes a length only if it holds
@@ -4713,9 +5118,21 @@ inline bool IncDec::BceWalk(BCE &b) {
     }
     if (auto id = Is<Ident>(lval); id && id->vdef) {
         if (BCE::IntBaseVar(id->vdef)) b.ShiftWrite(id->vdef, op == T_INC ? 1 : -1);
-        else b.VarKillWrite(id->vdef);
+        else { b.VarKillWrite(id->vdef); b.InvalidateStructFields(id->vdef); }
+    } else if (auto d = Is<Dot>(lval)) {
+        VarDef *sv = nullptr;
+        int fi = -1;
+        TypeExpr *ft = nullptr;
+        if (b.TrackField(d, sv, fi, ft)) {
+            auto fid = b.FieldId(sv, fi, ft);
+            if (b.mode == BCE::M_RECORD && (size_t)fid < b.fieldinvs.size()) {
+                b.fieldinvs[fid].has = true;
+                b.fieldinvs[fid].ge0 = false;
+                b.fieldinvs[fid].has_ub = false;
+            }
+            b.BumpField(fid);
+        }
     }
-    // A field or element integer is not a tracked base.
     return true;
 }
 

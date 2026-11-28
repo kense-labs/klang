@@ -2532,12 +2532,22 @@ constructor the chosen entries join the initializer list, and in a `match`
 the chosen arms join the arm list, before the checks of §4.2 and §8.1. The
 design is section 11 of [the `const for` design](design/const_for.md).
 
-### 6.6 `defer`
+<a id="66-defer"></a>
+### 6.6 `defer`, `errdefer`, and `using`
 
 ```klang
 defer stmt;                  // an assignment, an increment, or an expression statement
 defer { … }                  // a block
+errdefer stmt;               // runs only when an error unwinds the block
+using let h = acquire();     // scoped binding whose cleanup runs at block exit
+using (let h = acquire()) { … }  // scoped block form
 ```
+
+`errdefer` shares `defer`'s exit ordering and static checks, except that it runs
+only along error unwinds (`return … from` or `exception::throw`), not normal
+returns or `break`. `using` binds a resource variable and schedules its scoped
+cleanup (`close` / `release` or the declared cleanup hook) via an implicit `defer`.
+See `docs/reference.md` §16.4 for the full forms and rules.
 
 A `defer` statement's body runs when the block the statement is written in
 ends, by any exit: the end of the block's text, `break`, `continue`,
@@ -4798,7 +4808,10 @@ it leaves the caller's own facts about `src` intact.
   binding that is not `const`. As for a comparison that relies on a `let`
   being non-negative (§6.1), this is an error in either order; declare it
   `const`, or bind the reference to a copy.
-* Entry point: `fn main() { }`, in the global namespace. Only the *root*
+* Entry point: `fn main() { }` or `async fn main() { }`, in the global namespace.
+  A root file without an explicit `main` may also contain top-level executable
+  statements (including top-level `await`), which the compiler lowers into an
+  implicit entry point (`async fn main` when top-level `await` is present). Only the *root*
   file's `main` is the entry; a `fn main` in an imported file is ignored:
   it is not an entry, it cannot be called, and it causes no name
   collision. A runnable file can therefore also serve as an importable
@@ -5452,14 +5465,15 @@ postfix     := "[" expr "]"                      // fixed array (const expr)
              | ".."                              // variable-mode ADT
              | "." ident                         // variant type
 
-stmt        := decl | assign | incdec | guardstmt | deferstmt | exprstmt | constfor | constif
+stmt        := decl | assign | incdec | guardstmt | deferstmt | usingstmt | exprstmt | constfor | constif
 decl        := ("reusable" ("[" "]")?)? ("let" | "var" | "const") identlist (":" type)?
                (("=" | ".=") exprlist)? ";"     // .= binds by reference (§3.8)
 assign      := lvalue assignop expr ";"          // = .= += -= *= /= %= &= |= ^= <<= >>=
 incdec      := lvalue ("++" | "--") ";"
 exprstmt    := expr ";"
 guardstmt   := "guard" expr ("else" blockexpr | ";")  // guards the rest of its block (§6.4)
-deferstmt   := "defer" (blockexpr | assign | incdec | exprstmt)  // runs at the block's exits (§6.6)
+deferstmt   := ("defer" | "errdefer") (blockexpr | assign | incdec | exprstmt)  // runs at block exits (§6.6)
+usingstmt   := "using" (decl | "(" decl ("," decl)* ")" blockexpr | expr (blockexpr | ";"))
 constfor    := "const" "for" "<" identlist ">" "in" source blockexpr   // §6.5; also an
 source      := ("fields" | "variants" | "types") tyargs                // initializer or arm
              | "[" exprlist? "]"                                       // list in those lists
@@ -5482,20 +5496,22 @@ blockexpr   := "{" stmt* expr? "}"
 
 binary      := (precedence climbing; tightest → loosest)
    postfixe := primary ( "(" args ")" trailingblock?
-             | "[" sliceargs "]" | "." ident (tyargs "(" args ")" trailingblock?)?
+             | "[" sliceargs "]" | ("?"? ".") ident (tyargs "(" args ")" trailingblock?)?
              | "as" "!"? type )*
-   unary    := ("-" | "!" | "~" | "&") unary
+   unary    := ("-" | "!" | "~" | "&" | "await") unary
    levels   := * / %  →  + -  →  << >>  →  &  →  ^  →  |
-             →  < <= > >=  →  == != .== .!=  →  &&  →  ||
+             →  < <= > >=  →  == != .== .!=  →  &&  →  ||  →  ??
 primary     := literal | qname | "null" | "self" | "(" expr ")"
              | arraylit | structlit | genericcall | qname tyargs "." ident
+             | "async" ("->" type)? blockexpr
 genericcall := qname tyargs "(" args ")" trailingblock?
 trailingblock := "{" (params "=>")? stmt* expr? "}"
 sliceargs   := expr | bound? ".." bound?         // bound := "^"? expr
-args        := (expr ("," expr)* ","?)?
+args        := (arg ("," arg)* ","?)?
+arg         := (ident ":")? expr
 arraylit    := "[" (exprlist ","? | expr ";" expr)? "]"
-structlit   := (qname tyargs? | varianttype) "{" (fieldinits | fieldinits? "..")? "}"
-fieldinits  := fieldinit ("," fieldinit)* ","?   // before "..": the "," required
+structlit   := (qname tyargs? | varianttype | "." ident) "{" (fieldinits | (fieldinits ",")? ".." expr?)? "}"
+fieldinits  := fieldinit ("," fieldinit)* ","?
 fieldinit   := (ident ":")? expr
 ```
 

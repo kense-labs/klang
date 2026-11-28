@@ -64,7 +64,7 @@ struct Builder {
         else {
             f.push_back(opts.opt_level >= 3 ? "-O3" : "-O2");
             if (opts.lto && !opts.wasi)
-                f.push_back(tc.name == "clang" ? "-flto=thin" : "-flto");
+                f.push_back(tc.name == "clang" && opts.opt_level < 3 ? "-flto=thin" : "-flto");
             if (opts.native_cpu && !opts.wasi) {
                 #if defined(__APPLE__) && defined(__aarch64__)
                     f.push_back("-mcpu=native");

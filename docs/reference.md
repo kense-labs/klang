@@ -4818,7 +4818,9 @@ varint i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`.
 
 **Contextual keywords**, which are ordinary names everywhere else: `from`
 (after a `return` value), `upto` (after an unsigned type in a type),
-`errdefer` (a cleanup statement or block that runs only on error unwind),
+`using` (for scoped cleanup bindings and blocks), `errdefer` (a cleanup
+statement or block that runs only on error unwind), `async` (`async fn`
+declarations and `async { … }` task blocks), `await` (suspending on a task),
 `inline` and `checkfree` (before `fn`, `recursive`, `simd` or `thread_fn`),
 `deprecated` (before the other function qualifiers, optionally followed by
 a string), `fields`, `variants` and `types` (in a `const for` header),

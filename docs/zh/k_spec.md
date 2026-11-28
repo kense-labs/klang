@@ -801,12 +801,17 @@ fn missing<T>(seen: bool[:]) {
 未被选中的分支会经过解析和名称绑定，但绝不会进行类型检查，正如空数据源上的 `const for` 主体一样：其中不存在的调用或字段类型禁止的写入都不会报错。在语句列表中，被选中的分支是一个具有自身作用域的嵌套块，而非展开边界，因此其中的 `break`、`continue` 和 `return` 保持其在 `if` 分支中的含义，且后续代码按生成后的分支进行检查。在构造器中，被选中的条目加入初始化器列表；在 `match` 中，被选中的分支加入分支列表，这些均在 §4.2 和 §8.1 的检查之前完成。其设计见 [`const for` 设计文档](design/const_for.md) 第 11 节。
 
 <a id="66-defer"></a>
-### 6.6 `defer`
+### 6.6 `defer`、`errdefer` 与 `using`
 
 ```klang
-defer stmt;                  // 赋值、自增或表达式语句
-defer { … }                  // 代码块
+defer stmt;                      // 赋值、自增或表达式语句
+defer { … }                      // 代码块
+errdefer stmt;                   // 仅在错误展开离开该块时执行
+using let h = acquire();         // 绑定资源并在块退出时自动清理
+using (let h = acquire()) { … }  // 限定块作用域的 using 语句
 ```
+
+`errdefer` 遵循与 `defer` 相同的块退出顺序与静态检查，但仅在错误展开路径（`return … from` 或 `exception::throw`）时执行，常规返回与 `break` 跳过它。`using` 绑定资源变量并通过隐式 `defer` 在作用域退出时调度其清理（`close` / `release` 等）。完整语法规则详见 `docs/zh/reference.md` §16.4。
 
 `defer` 语句的主体在其所在块结束时运行，无论通过何种退出方式：到达块文本末尾、`break`、`continue`、`return`、函数值的 `return`（§7.6）穿过正在运行它的调用，或 `return … from`（§7.9）穿过该函数。每次退出该块时运行一次，因此循环体中的 `defer` 在每次迭代结束时都会运行。一次退出会执行它在其所离开的各块中已经过的所有 `defer` 语句的主体，顺序为最内层块优先、同一块内后写先执行（LIFO），因此主体在它之前声明的存储被释放前运行并可读取这些存储。主体在退出时求值，而非在书写位置求值：它读取变量在退出时的当前值。遇到 `return` 时，返回值先在其目标处构造完毕（§7.3），随后执行 `defer` 主体，最后释放该块的存储。
 
@@ -1547,7 +1552,7 @@ K 是一个封闭世界（closed-world）、全程序编译器。函数按调用
   每个全局变量都有一个初始化器，但 `var g: T;` 会将其初值交由其类型决定：`g` 以 `T` 的默认值起始（§4.2），并在本应运行初始化器的位置进行设置。因此 `var log: i64[>..];` 等价于 `var log: i64[>..] = [];`，而没有默认值的 `T`（即引用）则是错误的。`let` 或 `const` 全局变量必须给出其值，因为它永远不能再取另一个值。
   具有编译期可求值初始化器的扁平固定大小类型的 `const` 全局变量（即 `const` 类型的 `let` 全局变量；此类类型的 `var` 仍可作为整体赋值，§4.4）会存储在静态数据区中。任何 `let` 或 `const` 全局变量的初始化器都是一个具名常量，只要没有同名的局部变量遮蔽它，编译期大小（`i64[N]`）就可以使用它（§3.3）。无类型的整数或浮点数具名常量在使用位置也会像字面量一样自动适配类型（§3.1、§6.3）。
   数组大小、填充计数（`[v; N]`）、`match` 模式（§8.1），或将无类型具名常量适配到另一类型的使用，都会按具名常量初始化器的值来取值。数组大小也会按初始化器所给出、且类型并未固定的 `.len` 取值（§3.3）。因此，如果此类使用直接或通过另一个具名常量的初始化器命名了某个 `let`，那么该 `let` 就不能同时在任何地方绑定到可写引用——否则它的值就可能通过该引用被改变（§4.4）。这涵盖通过 `&`、`.=`，或者通过非 `const` 的引用形参、字段或绑定进行的绑定。与依赖 `let` 非负的比较一样（§6.1），无论两者先后顺序如何这都是错误；请将其声明为 `const`，或者将引用绑定到它的副本上。
-* 入口点：全局命名空间中的 `fn main() { }`。只有*根*文件的 `main` 才是入口；被导入文件中的 `fn main` 会被忽略：它既不是入口，也无法被调用，也不会引发名称冲突。因此，一个可运行的文件也可以同时作为可导入的库：只需为它写一个 `fn main_x() { ... }` 外加一个包装函数 `fn main() { main_x(); }`，导入方即可直接调用 `main_x`。带命名空间的文件同样可以用 `fn ::main() { ns::main_x(); }` 实现这一点。
+* 入口点：全局命名空间中的 `fn main() { }` 或 `async fn main() { }`。不包含显式 `main` 的根文件也可以直接书写顶级可执行语句（包括顶级 `await`），编译器会自动为其生成隐式入口点（包含顶级 `await` 时生成 `async fn main`）。只有*根*文件的 `main` 才是入口；被导入文件中的 `fn main` 会被忽略：它既不是入口，也无法被调用，也不会引发名称冲突。因此，一个可运行的文件也可以同时作为可导入的库：只需为它写一个 `fn main_x() { ... }` 外加一个包装函数 `fn main() { main_x(); }`，导入方即可直接调用 `main_x`。带命名空间的文件同样可以用 `fn ::main() { ns::main_x(); }` 实现这一点。
 
 <a id="112-concurrency"></a>
 ### 11.2 并发
@@ -1872,14 +1877,15 @@ postfix     := "[" expr "]"                      // 固定数组（常量表达�
              | ".."                              // 变长模式 ADT
              | "." ident                         // 变体类型
 
-stmt        := decl | assign | incdec | guardstmt | deferstmt | exprstmt | constfor | constif
+stmt        := decl | assign | incdec | guardstmt | deferstmt | usingstmt | exprstmt | constfor | constif
 decl        := ("reusable" ("[" "]")?)? ("let" | "var" | "const") identlist (":" type)?
                (("=" | ".=") exprlist)? ";"     // .= 按引用绑定（§3.8）
 assign      := lvalue assignop expr ";"          // = .= += -= *= /= %= &= |= ^= <<= >>=
 incdec      := lvalue ("++" | "--") ";"
 exprstmt    := expr ";"
 guardstmt   := "guard" expr ("else" blockexpr | ";")  // 守卫其所在块的其余部分（§6.4）
-deferstmt   := "defer" (blockexpr | assign | incdec | exprstmt)  // 在块退出处执行（§6.6）
+deferstmt   := ("defer" | "errdefer") (blockexpr | assign | incdec | exprstmt)  // 在块退出处执行（§6.6）
+usingstmt   := "using" (decl | "(" decl ("," decl)* ")" blockexpr | expr (blockexpr | ";"))
 constfor    := "const" "for" "<" identlist ">" "in" source blockexpr   // §6.5；也可作为
 source      := ("fields" | "variants" | "types") tyargs                // 初始化器或分支
              | "[" exprlist? "]"                                       // 这些列表中的列表项
@@ -1902,20 +1908,22 @@ blockexpr   := "{" stmt* expr? "}"
 
 binary      := (precedence climbing; tightest → loosest)  // 优先级爬山法；最紧 → 最松
    postfixe := primary ( "(" args ")" trailingblock?
-             | "[" sliceargs "]" | "." ident (tyargs "(" args ")" trailingblock?)?
+             | "[" sliceargs "]" | ("?"? ".") ident (tyargs "(" args ")" trailingblock?)?
              | "as" "!"? type )*
-   unary    := ("-" | "!" | "~" | "&") unary
+   unary    := ("-" | "!" | "~" | "&" | "await") unary
    levels   := * / %  →  + -  →  << >>  →  &  →  ^  →  |
-             →  < <= > >=  →  == != .== .!=  →  &&  →  ||
+             →  < <= > >=  →  == != .== .!=  →  &&  →  ||  →  ??
 primary     := literal | qname | "null" | "self" | "(" expr ")"
              | arraylit | structlit | genericcall | qname tyargs "." ident
+             | "async" ("->" type)? blockexpr
 genericcall := qname tyargs "(" args ")" trailingblock?
 trailingblock := "{" (params "=>")? stmt* expr? "}"
 sliceargs   := expr | bound? ".." bound?         // bound := "^"? expr
-args        := (expr ("," expr)* ","?)?
+args        := (arg ("," arg)* ","?)?
+arg         := (ident ":")? expr
 arraylit    := "[" (exprlist ","? | expr ";" expr)? "]"
-structlit   := (qname tyargs? | varianttype) "{" (fieldinits | fieldinits? "..")? "}"
-fieldinits  := fieldinit ("," fieldinit)* ","?   // 在 ".." 之前：必须有 ","
+structlit   := (qname tyargs? | varianttype | "." ident) "{" (fieldinits | (fieldinits ",")? ".." expr?)? "}"
+fieldinits  := fieldinit ("," fieldinit)* ","?
 fieldinit   := (ident ":")? expr
 ```
 

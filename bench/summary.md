@@ -1,3 +1,20 @@
+**2026-11-28 Apple M6 paired update (`k -O3 --lto --cpu=native` vs extreme Rust `rustc 1.98.1`, `opt-level=3`, `lto="fat"`, `codegen-units=1`, `panic="abort"`, `-C target-cpu=native`; 7 measured pairs after 2 warmups):**
+
+- **Aggregates (`Rust / K`, >1.0 means K is faster):** overall `1.169 [1.158, 1.181]`, matched score `1.004 [0.986, 1.022]`, matched holdout `1.010 [0.989, 1.034]`, idiomatic holdout `1.334 [1.324, 1.346]`, idiomatic score `1.849 [1.820, 1.881]`.
+- **Per-workload medians (`K ms / Rust ms`, `Rust / K`):**
+  - `sum`: `3.545 / 4.316 ms` (`1.083`, 1M); `31.707 / 32.953 ms` (`1.019`, 16M)
+  - `calc`: `26.421 / 23.817 ms` (`0.920`, 100k); `99.000 / 90.018 ms` (`0.912`, 400k)
+  - `graph-csr`: `10.101 / 11.143 ms` (`1.084`, 100k); `56.697 / 60.959 ms` (`1.053`, 500k)
+  - `logscan`: `2.630 / 2.507 ms` (`0.997`, 100k); `11.920 / 11.640 ms` (`0.981`, 2M)
+  - `blur-rows`: `4.132 / 4.269 ms` (`1.005`, 1024); `12.418 / 12.830 ms` (`1.020`, 2048)
+  - `sexp-owned`: `67.019 / 88.945 ms` (`1.332`, 20k); `325.598 / 432.391 ms` (`1.336`, 100k)
+  - `lru-open`: `27.027 / 27.391 ms` (`1.017`, 2M); `131.147 / 131.264 ms` (`0.991`, 8M)
+  - `file-copy`: `2.713 / 2.349 ms` (`1.000`, 1M); `2.552 / 2.592 ms` (`1.025`, 8M)
+  - `respond-dto`: `28.144 / 57.175 ms` (`1.987`, 100k); `108.774 / 221.812 ms` (`2.041`, 400k)
+  - `word-count`: `15.431 / 24.163 ms` (`1.571`, 500k); `123.512 / 222.972 ms` (`1.836`, 4M)
+
+---
+
 **The October 16, 2026 run puts K at 3.51x / 3.54x the speed of
 idiomatic C++, 1.24x / 1.26x the speed of expert C++, and 1.13x / 1.19x the
 speed of the best safe Rust rows**, under MSVC / clang respectively. These

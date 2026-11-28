@@ -448,7 +448,7 @@ static size_t k_os_page_size(void) {
 
 /* Installed by main as the runtime starts, before any worker can. */
 static void k_regions_init(void) {
-    k_page_size = k_os_page_size();
+    k_page_size = k_region_page ? k_region_page : k_os_page_size();
     k_fault_handle = AddVectoredExceptionHandler(1, k_fault_filter);
     if (!k_fault_handle)
         k_panic("cannot install data stack fault handler");
@@ -538,6 +538,8 @@ static K_TLS uintptr_t k_native_lo, k_native_hi;
 /* The alternate signal stack k_native_stack_init allocated, if it did. */
 static K_TLS void *k_sigstack;
 #define K_SIGSTACK_MIN (64u << 10)
+static uint8_t k_main_sigstack_buf[131072];
+static int k_main_sigstack_used = 0;
 /* What the fault handler replaced, for the faults that are not its own,
    and which of them it did (1: SIGSEGV, 2: SIGBUS), for k_fault_uninstall. */
 static struct sigaction k_prev_segv, k_prev_bus;
@@ -574,7 +576,7 @@ static size_t k_os_page_size(void) {
 }
 
 static void k_regions_init(void) {
-    k_page_size = k_os_page_size();
+    k_page_size = k_region_page ? k_region_page : k_os_page_size();
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = k_fault_handler;
@@ -608,10 +610,18 @@ static void k_native_stack_init(void) {
     uintptr_t lo = 0, hi = 0;
     if (!sigaltstack(NULL, &ss) && (ss.ss_flags & SS_DISABLE)) {
         ss.ss_size = k_sigstack_size();
-        ss.ss_sp = malloc(ss.ss_size);
-        ss.ss_flags = 0;
-        if (ss.ss_sp && !sigaltstack(&ss, NULL)) k_sigstack = ss.ss_sp;
-        else free(ss.ss_sp);
+        if (ss.ss_size <= sizeof(k_main_sigstack_buf) &&
+            __sync_bool_compare_and_swap(&k_main_sigstack_used, 0, 1)) {
+            ss.ss_sp = k_main_sigstack_buf;
+            ss.ss_flags = 0;
+            if (!sigaltstack(&ss, NULL)) k_sigstack = ss.ss_sp;
+            else __sync_lock_release(&k_main_sigstack_used);
+        } else {
+            ss.ss_sp = malloc(ss.ss_size);
+            ss.ss_flags = 0;
+            if (ss.ss_sp && !sigaltstack(&ss, NULL)) k_sigstack = ss.ss_sp;
+            else free(ss.ss_sp);
+        }
     }
     #if defined(__APPLE__)
         hi = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
@@ -643,7 +653,8 @@ static void k_native_stack_free(void) {
     ss.ss_flags = SS_DISABLE;
     ss.ss_size = k_sigstack_size();
     sigaltstack(&ss, NULL);
-    free(k_sigstack);
+    if (k_sigstack == k_main_sigstack_buf) __sync_lock_release(&k_main_sigstack_used);
+    else free(k_sigstack);
     k_sigstack = NULL;
 }
 

@@ -773,6 +773,13 @@ inline string CodeGen::TopW(const string &stk) {
             else if (block < 0 && loopcons[*it] == BLOCKREGION) block = *it;
         }
         growth.push_back({ TopIdx(stk), loop >= 0 ? loop : block });
+        if (loop >= 0) {
+            for (auto it = loopstack.rbegin(); it != loopstack.rend(); ++it)
+                if (loopcons[*it] == stk) {
+                    growth.push_back({ TopIdx(stk), *it });
+                    break;
+                }
+        }
     } else if (markers) {
         for (auto it = loopstack.rbegin(); it != loopstack.rend(); ++it)
             if (loopcons[*it] == stk) {
@@ -815,7 +822,7 @@ inline void CodeGen::MarkLoopEnd(int id) {
 // meanwhile, and a call among the fields' initializers syncs it whatever
 // the call reaches.
 inline int CodeGen::MarkConsBegin(const string &stk) {
-    if (!markers || CacheableStk(stk) || InConsOf(stk)) return -1;
+    if (!markers || InConsOf(stk) || (CacheableStk(stk) && !refstkexprs.count(stk))) return -1;
     return OpenRegion(stk);
 }
 
@@ -831,9 +838,26 @@ inline CodeGen::TopCachePlan CodeGen::PlanTopCaches() {
         if (g.loop < 0) fnwide[g.stk] = 1;
         else if (!plan.IsRegion(g.stk, g.loop)) plan.regions.push_back(g);
     }
+    auto flushed_in_loop = [&](int stk, int loop) {
+        if (loop < 0 || !refstkexprs.count(toporder[stk])) return false;
+        for (auto &f : loopflushes) {
+            if (f.loop != loop) continue;
+            if (f.reach == "*" || f.reach.find(toporder[stk]) != string::npos)
+                return true;
+        }
+        return false;
+    };
     for (size_t i = 0; i < plan.regions.size();) {
         auto r = plan.regions[i];
-        auto drop = fnwide[r.stk] != 0;
+        if (fnwide[r.stk] || flushed_in_loop(r.stk, r.loop)) {
+            plan.regions.erase(plan.regions.begin() + i);
+            continue;
+        }
+        i++;
+    }
+    for (size_t i = 0; i < plan.regions.size();) {
+        auto r = plan.regions[i];
+        auto drop = false;
         for (auto p = loopparent[r.loop]; !drop && p >= 0; p = loopparent[p])
             drop = plan.IsRegion(r.stk, p);
         if (!drop) { i++; continue; }
@@ -1038,7 +1062,8 @@ inline string CodeGen::ExpandTopMarkers1(const string &b, TopCachePlan &plan,
                 if (active[k].empty()) continue;
                 // A stack cached only for a construction syncs at every call:
                 // the call may reach it under a name of its own.
-                if (reach != "*" && CacheableStk(toporder[k]) &&
+                auto iscons = !open.empty() && loopcons[open.back()] == toporder[k];
+                if (!iscons && reach != "*" && CacheableStk(toporder[k]) &&
                     reach.find(toporder[k]) == string_view::npos)
                     continue;
                 if (isflush) store(out, ind0, (int)k);

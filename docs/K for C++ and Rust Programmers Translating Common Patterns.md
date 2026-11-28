@@ -40,7 +40,8 @@ On top of that, the type system is closed-world: no inheritance, no traits, no v
 | `shared_ptr`, `Rc<RefCell<T>>`, object pool | `slot_pool<T>` from the standard library + `alloc_ref` / `free` | Non-nested lifetimes |
 | Struct owning three `Vec`s | A `root struct` whose three fields grow independently | Structs that own several vectors |
 | `Result<T, E>`, `?`, `throw` | Trailing `bool`, `T?`, `return E from f`, `exception::try` | Errors |
-| RAII destructor | Scope exit (memory); explicit `release` (external handles) | RAII |
+| Optional chaining / default | `x?.field`, `opt ?? fallback` | Smaller habits |
+| RAII destructor | Scope exit (memory); `defer`, `errdefer`, `using` + `own` / `release` (external handles) | RAII |
 | `Arc<Mutex<T>>`, `std::thread` + shared data | `thread_fn` + typed queues of flat values | Threads |
 | serde, protobuf | `to_bytes` / `from_bytes<T>` / `bytes_of` | Serialization |
 | `std::optional<T&>`, `Option<&T>`, `nullptr` | `T?`, narrowed by `if` / `guard` | Smaller habits |
@@ -776,9 +777,14 @@ What RAII also does in C++ and Rust is release *non-memory* resources: files, GP
 | Mutex guard | `lock_guard`, `MutexGuard` | Not needed: threads share no memory |
 | Scoped timer, "undo on exit" | Guard object | Do the work at the end of the block yourself |
 
-Library handles carry a generation, so using one after release is reported as a misuse rather than a crash. A pattern that keeps release calls from drifting: create the handle in the function that owns its lifetime and release it at the end of that same function, as you would with a C API.
+Library handles carry a generation, so using one after release is reported as a misuse rather than a crash. For deterministic cleanup across every exit path, K provides `defer` (runs at scope exit LIFO), `errdefer` (runs only when an error unwinds the scope via `return ... from` or `exception::throw`), and C#-style `using`:
 
-The standard library has **no `defer` or `finally`**. A cleanup callback can't be guaranteed to run on every exit, because a block's `return` or a `return … from` skips it. A design note proposes scope-exit cleanup; it is not implemented. Until then, put cleanup on each exit path, or structure the function so there is one exit.
+```klang
+using let res = open_handle();        // calls res.close() or release_handle(res) at block exit
+using (let tmp = acquire()) { ... }   // block-scoped using
+```
+
+Coupled with `own Handle` linear wrappers (`reference.md#owning-c-handles`), non-memory resource cleanup is verified at compile time alongside data-stack reclamation.
 
 ## Threads: no shared memory, only typed queues
 
@@ -858,6 +864,10 @@ These trip people up in the first afternoon.
 | Signed overflow is UB / panics in debug | Aborts in debug, wraps in release. Unsigned always wraps |
 | `for (auto& x : v) x *= 2;` | `for &x in xs { x *= 2; }`. Plain `for x in xs` gives a read-only copy for fixed-size elements |
 | `printf("%d %s", …)` | `print("n=", n, " s=", s)`; `format_int` / `format_flt` for padding and precision |
+| `std::optional<T&>`, `Option::map`, `unwrap_or` | `T?` narrowed by `if`/`guard`, optional chaining `x?.field`, null coalescing `opt ?? fallback` |
+| Rust `Foo { a: 1, ..base }`, struct destructuring | `Foo { a: 1, ..base }`, `let { a, b } = foo;`, leading-dot enum `.Variant` |
+| Named function arguments | `f(x, flag: true)` (names must match parameter declarations) |
+| `fn main()` / `async fn main()` / scripts | Explicit `fn main()`, `async fn main()`, or mainless top-level statements and top-level `await` |
 | Labelled `break 'outer` | No labels in v1. Use a `block`, a nested function with `return`, or a flag |
 | Recursion "just works" | Mark the cycle `recursive fn`, write full signatures, keep growable locals out of the recursive path |
 | Separate compilation, `.so` plugins | Whole-program compilation to C. K libraries come as source packages (`k build`) |

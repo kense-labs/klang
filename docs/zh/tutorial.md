@@ -87,6 +87,8 @@ fn main() {
 }
 ```
 
+短小脚本也可以省略 `fn main()` 直接编写顶级语句（包括顶级 `await`）；显式入口点也可以写为 `async fn main()`（详见[语言参考 §17.9、§21](reference.md#21-program-structure)）。
+
 `print` 接收任意数量、任意类型的参数，将每个参数渲染为文本并作为单行输出。它使用单次 `write` 调用，因此两个线程的输出绝不会交错。没有格式字符串，也没有 `<<`。
 
 ```klang
@@ -116,9 +118,13 @@ count++;              // 一条语句，而非表达式
 struct Unit { kind: i32, hp: i32 = 100, x: f32, y: f32, name: u8[] }
 
 let scout = Unit { kind: 2, x: 1.5, .. };   // hp 为 100，y 为 0，name 为 ""
+let elite = Unit { hp: 200, ..scout };      // 从 scout 复制其余定长字段
+let { kind, hp } = elite;                   // 结构体字段解构绑定
 var selected: Unit;                         // kind 为 0，hp 为 100，x 为 0，y 为 0，name 为 ""
 var log: u8[][>..];                         // 空数组
 ```
+
+函数调用也支持具名实参（`limit(250, hi: 200)`），可选值支持可选链 `?.` 与空合并 `??`（`node?.parent?.tag ?? 0`），且在目标枚举类型已知时支持前导点变体简写 `.Variant`。
 
 函数都是自由函数。没有方法，也没有 `impl` 块，但 `x.f(a)` 会调用 `f(x, a)`，因此只要读起来更顺畅，你就可以使用类似方法调用的语法：
 
@@ -154,7 +160,7 @@ guard gfx::open("demo", 640, 480, 0) else { return; }
 defer gfx::close();                 // 从此处起离开本块的所有路径都会执行
 ```
 
-循环体中的 `defer` 会在每次迭代结束时执行，而退出时只会执行已经历过的 `defer`，按后进先出（最晚注册的先执行）的顺序运行。`defer` 代码块内部不能向外跳转，也不能使用长距离返回（`return … from`），因为它可能正是在另一次长距离返回经过时执行的。
+循环体中的 `defer` 会在每次迭代结束时执行，而退出时只会执行已经历过的 `defer`，按后进先出（最晚注册的先执行）的顺序运行。`defer` 代码块内部不能向外跳转，也不能使用长距离返回（`return … from`），因为它可能正是在另一次长距离返回经过时执行的。仅在错误展开路径清理时可使用 `errdefer`，搭配 `using let h = ...;` 或 `using (let h = ...) { ... }` 可在作用域结束时自动调用 `.close()` / `release()`（详见[语言参考 §16.4](reference.md#16-expressions-and-control-flow)）。
 
 循环包括 `for x in range_or_array`、`while` 和 `loop`：
 
@@ -866,7 +872,7 @@ error: line 1: bad age
 
 因此在成功路径上，唯一的开销只是返回时每层栈帧一次标志位检查。这也是为什么示例中的解析器会把这一机制用于*每一个*语法错误，而不是只留给灾难性错误（[`17_calc`](../../samples/17_calc.k)、[`18_json`](../../samples/18_json.k)：非法词法单元、缺失括号和错误转义都只需一行）。
 
-[`exception` 模块](stdlib.md#exception) 将这一机制封装为 `exception::try<E>(body) { error => ... }` 和 `exception::throw(value)`。它可以捕获所有权文本或应用自定义的错误值，而无需在每个抛出点点名应用的外层函数。有关所有权与递归限制，请参阅该模块的参考文档。它的 `finally` 就是 `defer`。
+[`exception` 模块](stdlib.md#exception) 将这一机制封装为 `exception::try<E>(body) { error => ... }` 和 `exception::throw(value)`。它可以捕获所有权文本或应用自定义的错误值，而无需在每个抛出点点名应用的外层函数。有关所有权与递归限制，请参阅该模块的参考文档。它的 `finally` 对应 `defer`，而 `errdefer` 则仅在通过 `return … from` 或 `exception::throw` 错误展开时执行清理、正常返回时跳过。
 
 同一套机制还允许代码块从其外围函数 `return`，而不是从调用它的高阶函数（HOF）返回（[第 13 节](#13-generics-and-blocks-that-disappear)）。那是你会遇到它的另一处地方。
 

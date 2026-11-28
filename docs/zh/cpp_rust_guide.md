@@ -43,7 +43,8 @@ K 没有 `malloc`，没有 `free`，没有 GC，没有引用计数，也没有�
 | `shared_ptr`, `Rc<RefCell<T>>`, 对象池 | 标准库 `slot_pool<T>` + `alloc_ref` / `free` | 非嵌套生命周期 |
 | 拥有三个 `Vec` 的结构体 | `root struct`，其三个字段可独立增长 | 拥有多个动态数组的结构体 |
 | `Result<T, E>`, `?`, `throw` | 末尾 `bool`、`T?`、`return E from f`、`exception::try` | 错误处理 |
-| RAII 析构函数 | 离开作用域（内存）；显式调用 `release`（外部句柄） | RAII 与析构函数 |
+| 可选链与空合并 | `x?.field`、`opt ?? fallback` | 日常习惯的变化 |
+| RAII 析构函数 | 离开作用域（内存）；`defer`、`errdefer`、`using` + `own` / `release`（外部句柄） | RAII 与析构函数 |
 | `Arc<Mutex<T>>`, `std::thread` + 共享数据 | `thread_fn` + 扁平值的类型化队列 | 线程 |
 | serde, protobuf | `to_bytes` / `from_bytes<T>` / `bytes_of` | 序列化 |
 | `std::optional<T&>`, `Option<&T>`, `nullptr` | `T?`，通过 `if` / `guard` 收窄 | 日常习惯的变化 |
@@ -830,9 +831,14 @@ RAII 在 C++ 和 Rust 中还负责释放*非内存*资源：文件、GPU 缓冲�
 | 互斥锁守卫 | `lock_guard`, `MutexGuard` | 不需要：线程不共享内存 |
 | 作用域计时器、“退出时撤销” | 守卫对象 | 自己在代码块末尾执行对应操作 |
 
-库句柄携带代际号，因此在释放后继续使用会报告为误用，而不会崩溃。一个让释放调用不容易漏掉的模式是：在拥有资源生命周期的函数里创建句柄，并在同一个函数的末尾释放它，就像使用 C API 一样。
+库句柄携带代际号，因此在释放后继续使用会报告为误用，而不会崩溃。为了在所有退出路径上都能确定性地完成清理，K 提供了 `defer`（按 LIFO 顺序在块退出时执行）、`errdefer`（仅在通过 `return ... from` 或 `exception::throw` 错误展开时执行）以及类 C# 的 `using` 语法：
 
-标准库**没有 `defer` 或 `finally`**。无法保证某个清理回调会在所有退出路径上运行，因为代码块里的 `return` 或 `return … from` 会跳过它。有一篇设计笔记提议了作用域退出清理，但尚未实现。在此之前，请在每条退出路径上写好清理代码，或者把函数组织成单出口形式。
+```klang
+using let res = open_handle();        // 退出作用域时自动调用 close() / release()
+using (let tmp = acquire()) { ... }   // 仅在语句块作用域内有效
+```
+
+配合 `own Handle` 线性包装类型（详见 `reference.md` 中的 C 句柄所有权章节），外部资源释放可与数据栈回收一起在编译期得到静态验证。
 
 <a id="threads-no-shared-memory-only-typed-queues"></a>
 ## 线程：没有共享内存，只有类型化队列
@@ -915,6 +921,10 @@ var loaded, ok = from_bytes<Node[>..]>(image);      // 经过校验的加载
 | 有符号溢出是 UB / 调试时 panic | 调试模式直接中止（abort），发布模式回绕（wrap）。无符号始终回绕 |
 | `for (auto& x : v) x *= 2;` | `for &x in xs { x *= 2; }`。普通的 `for x in xs` 对固定大小元素给出只读拷贝 |
 | `printf("%d %s", …)` | `print("n=", n, " s=", s)`；需要填充和精度时用 `format_int` / `format_flt` |
+| `std::optional<T&>`, `Option::map`, `unwrap_or` | `T?` 通过 `if`/`guard` 收窄，支持可选链 `x?.field` 与空合并 `opt ?? fallback` |
+| Rust `Foo { a: 1, ..base }` 与结构体解构 | `Foo { a: 1, ..base }`、`let { a, b } = foo;`、前导点枚举简写 `.Variant` |
+| 具名函数实参 | `f(x, flag: true)`（参数名需与函数声明一致） |
+| `fn main()` / `async fn main()` / 无 main 脚本 | 支持显式 `fn main()`、`async fn main()`，以及无 `main` 的顶级语句和顶级 `await` |
 | 带标签的 `break 'outer` | v1 不支持标签。改用 `block`、带 `return` 的嵌套函数，或标志位 |
 | 递归“直接写就行” | 将递归环标记为 `recursive fn`，写出完整签名，不要在递归路径上保留可增长局部变量 |
 | 独立编译、`.so` 插件 | 全程序编译为 C。K 的库以源码包形式提供（`k build`） |

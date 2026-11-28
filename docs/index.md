@@ -11,7 +11,7 @@ specification. The other documents cover the library, tools, and compiler.
 |---|---|---|
 | [README](../README.md) | Project overview and a quick start. | You want to build the compiler and run your first program. |
 | [Tutorial](tutorial.md) | The language by example, concentrating on what is different about K: where values live, the array family, references that survive growth, enums in two sizes, `return … from`, threads. | You are new to K. It takes about an afternoon to read. |
-| [Language reference](reference.md) | Every feature, topic by topic, with a compiling example for each. It covers the whole language in a form meant for reading, and points into the specification for every rule. | You know the basics and want all of it, or want to look something up. |
+| [Language reference](reference.md) | Every feature, topic by topic, with a compiling example for each (including `using`, `errdefer`, `?.` / `??`, `.Variant`, `..base`, destructuring, named arguments, `async`/`await`, and mainless scripts). It covers the whole language in a form meant for reading, and points into the specification for every rule. | You know the basics and want all of it, or want to look something up. |
 | [Specification](k_spec.md) | The exact rules, in the language an implementor needs: size classes, construction, the lifetime and shrink rules, the compilation model, the representation. | You want to know why something did not compile, or are writing an implementation. |
 
 ## Library and tools

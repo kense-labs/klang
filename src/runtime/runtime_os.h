@@ -161,6 +161,13 @@ static int k_os_read_fd(int fd, k_rref out) {
     enum { block = 65536, initial = 2 * block };
     size_t room = k_os_read_room(out);
     size_t chunk = room >= initial ? initial : block;
+    struct stat st;
+    int check_bulk = 1;
+    if (room >= block && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+        uintmax_t sz = (uintmax_t)st.st_size;
+        chunk = sz < (uintmax_t)INT_MAX ? (size_t)sz : (size_t)INT_MAX;
+        check_bulk = 0;
+    }
     int first = 1;
     while (room >= block) {
         ssize_t n = k_os_read_retry(fd, out.stk->top, room < chunk ? room : chunk);
@@ -174,8 +181,7 @@ static int k_os_read_fd(int fd, k_rref out) {
         if (first) {
             first = 0;
             chunk = block;
-            struct stat st;
-            if (n == initial && room > block && fstat(fd, &st) == 0 &&
+            if (check_bulk && n == initial && room > block && fstat(fd, &st) == 0 &&
                 S_ISREG(st.st_mode) && st.st_size > initial + block) {
                 uintmax_t left = (uintmax_t)st.st_size - initial;
                 chunk = left < INT_MAX ? (size_t)left : (size_t)INT_MAX;
@@ -286,12 +292,38 @@ K_API void k_os_reader_close(uint64_t id) {
 static uint8_t k_os_put_file(sl_u8 path, sl_u8 data, int append) {
     k_os_char p[K_OS_PATH_MAX];
     if (k_os_native(path, p) < 0) return 0;
+#ifdef _WIN32
     FILE *f = append ? k_os_fopen(p, "ab") : k_os_fopen(p, "wb");
     if (!f) return 0;
     size_t n = (size_t)(data.len < 0 ? 0 : data.len);
     int ok = fwrite(data.data, 1, n, f) == n;
     if (fclose(f) != 0) ok = 0;
     return ok ? 1 : 0;
+#else
+    int flags = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
+    int fd = open(p, flags, 0666);
+    if (fd < 0) return 0;
+    const uint8_t *src = data.data;
+    size_t left = (size_t)(data.len < 0 ? 0 : data.len);
+    int ok = 1;
+    while (left > 0) {
+        size_t chunk = left < (size_t)INT_MAX ? left : (size_t)INT_MAX;
+        ssize_t w = write(fd, src, chunk);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            ok = 0;
+            break;
+        }
+        if (w == 0) {
+            ok = 0;
+            break;
+        }
+        src += w;
+        left -= (size_t)w;
+    }
+    if (close(fd) != 0) ok = 0;
+    return ok ? 1 : 0;
+#endif
 }
 
 K_API uint8_t k_os_write_file(sl_u8 path, sl_u8 data) { return k_os_put_file(path, data, 0); }

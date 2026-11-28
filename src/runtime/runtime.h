@@ -1214,6 +1214,15 @@ static K_NOINLINE int64_t k_uleb_write_slow(uint8_t *p, uint64_t v) {
 }
 
 static inline int64_t k_uleb_write(uint8_t *p, uint64_t v) {
+#if !defined(__SANITIZE_ADDRESS__) && !defined(K_DEBUG)
+    if (K_LIKELY(v < 0x4000)) {
+        uint64_t two = (v >= 0x80);
+        p[0] = (uint8_t)(v | (two << 7));
+        p[1] = (uint8_t)(v >> 7);
+        return 1 + (int64_t)two;
+    }
+    return k_uleb_write_slow(p, v);
+#else
     if (K_LIKELY(v < 128)) {
         p[0] = (uint8_t)v;
         return 1;
@@ -1224,11 +1233,24 @@ static inline int64_t k_uleb_write(uint8_t *p, uint64_t v) {
         return 2;
     }
     return k_uleb_write_slow(p, v);
+#endif
 }
 
 static inline int64_t k_zig_read(const uint8_t *p) {
     uint64_t u;
     uint8_t b0 = p[0];
+#if !defined(__SANITIZE_ADDRESS__) && !defined(K_DEBUG)
+    if (K_LIKELY(((uintptr_t)p & 0xfffu) != 0xfffu)) {
+        uint8_t b1 = p[1];
+        if (K_LIKELY(!((b0 & 0x80) && (b1 & 0x80)))) {
+            u = (b0 & 0x80) ? ((uint64_t)(b0 & 0x7f) | ((uint64_t)b1 << 7))
+                            : (uint64_t)b0;
+            return (int64_t)((u >> 1) ^ (0u - (u & 1)));
+        }
+        u = (uint64_t)k_uleb_read_slow(p);
+        return (int64_t)((u >> 1) ^ (0u - (u & 1)));
+    }
+#endif
     if (K_LIKELY(!(b0 & 0x80))) {
         u = b0;
     } else {

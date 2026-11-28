@@ -115,6 +115,11 @@ fn main() {
 }
 ```
 
+Short scripts can also run top-level statements directly without `fn main()`,
+including top-level `await`, and an explicit entry point can be declared as
+`async fn main()` when the root uses asynchronous tasks directly
+([reference §17.9, §21](reference.md#21-program-structure)).
+
 `print` takes any number of arguments of any type, renders each as text and
 writes them all as a single line. It uses a single `write`, so the output of
 two threads never interleaves. There is no format string and no `<<`.
@@ -154,9 +159,15 @@ defaults:
 struct Unit { kind: i32, hp: i32 = 100, x: f32, y: f32, name: u8[] }
 
 let scout = Unit { kind: 2, x: 1.5, .. };   // hp 100, y 0, name ""
+let elite = Unit { hp: 200, ..scout };      // copies remaining fixed fields from scout
+let { kind, hp } = elite;                   // struct field destructuring
 var selected: Unit;                         // kind 0, hp 100, x 0, y 0, name ""
 var log: u8[][>..];                         // empty
 ```
+
+Calls also support named arguments (`limit(250, hi: 200)`), optional references
+support `?.` chaining and `??` fallback (`node?.parent?.tag ?? 0`), and enum
+expressions with a known enum type can use `.Variant` shorthand.
 
 Functions are free functions. There are no methods and no `impl` blocks, but
 `x.f(a)` calls `f(x, a)`, so you can write method-call syntax
@@ -207,7 +218,11 @@ defer gfx::close();                 // every way out of this block from here on
 A `defer` in a loop body runs at the end of each iteration, and an exit runs
 only the defers it has run past, latest first. The body cannot jump out, and
 it cannot use long-distance returns, since it may run while one is in
-flight.
+flight. Use `errdefer` for cleanup that runs only when an error return
+(`return … from` or `exception::throw`) unwinds the scope, and `using let h = ...;`
+or `using (let h = ...) { ... }` to pair a resource binding with automatic
+`.close()` / `release()` at scope exit
+([reference §16.4](reference.md#16-expressions-and-control-flow)).
 
 Loops are `for x in range_or_array`, `while`, and `loop`:
 
@@ -1204,7 +1219,9 @@ The [`exception` module](stdlib.md#exception) packages this mechanism as
 `exception::try<E>(body) { error => ... }` and `exception::throw(value)`.
 It can catch owned text or application-defined error values without naming
 the application's outer function at each throw site. See its reference for
-the ownership and recursion restrictions. Its `finally` is a `defer`.
+the ownership and recursion restrictions. Its `finally` is `defer`, and
+`errdefer` runs cleanup only along error unwinds (`return … from` or
+`exception::throw`) rather than normal returns.
 
 The same machinery lets a block `return` from its enclosing function rather
 than from the HOF that calls it

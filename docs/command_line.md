@@ -75,8 +75,11 @@ process. There is no build step and no file is written. On Windows nothing
 else is needed. On Linux the C library's headers are needed (`libc6-dev` or
 `glibc-devel`), and on macOS the SDK of the Xcode command line tools.
 
-The arguments after `--` are the program's. The `os` module gives them to
-the program, with argument 0 being the root file's path as it was given:
+The arguments after `--` are the program's. A program may define
+`fn main()` or `async fn main()`, or run top-level statements (including
+top-level `await`) directly in a mainless file. The `os` module gives
+the program its arguments, with argument 0 being the root file's path as
+it was given:
 
 <!-- check-only -->
 ```klang

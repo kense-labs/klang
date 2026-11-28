@@ -23,7 +23,9 @@ where these options go.
 The server's semantic tokens color names by what they resolve to
 (functions, types, fields, variants, parameters, variables). They do not
 cover keywords, strings or comments, and the TextMate grammar is only part
-of the VS Code extension.
+of the VS Code extension (including highlighting for `using`, `errdefer`,
+`async`/`await`, `?.`/`??`, destructuring, `.Variant` shorthand, and mainless
+top-level files).
 
 ## Neovim
 

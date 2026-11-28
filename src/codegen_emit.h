@@ -384,6 +384,7 @@ inline void CodeGen::ResetFnState() {
     loopparent.clear();
     loopcons.clear();
     loopstack.clear();
+    loopflushes.clear();
     markers = false;
     refstkexprs.clear();
     capstkexprs.clear();

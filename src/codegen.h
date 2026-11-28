@@ -524,6 +524,8 @@ struct CodeGen {
     map<string, vector<FnSpec *>> callable_targets;
     map<pair<FnSpec *, bool>, string> callable_thunks;
     string callable_code;
+    map<vector<FnSpec *>, string> dispwrappers;
+    string dispcode;
 
     // Data stack accounting (codegen_stacks.h). What each emitted function
     // asks for: the calls it hands a stack index, with that index relative
@@ -761,6 +763,8 @@ struct CodeGen {
     // -1 meaning the whole body.
     struct TopRegion { int stk, loop; };
     vector<TopRegion> growth;                // Every growth or shrink.
+    struct LoopFlush { int loop; string reach; };
+    vector<LoopFlush> loopflushes;           // Flushes emitted while inside loopstack regions.
     vector<int> loopparent;                   // Loop -> enclosing loop, or -1.
     vector<int> loopstack;                    // Loops open at this point of the emission.
     // Planning produces a value consumed only while finishing this body;
@@ -817,7 +821,11 @@ struct CodeGen {
     // the whole body is emitted and every cached stack is known. The mark
     // carries what the call can reach, so expansion can sync just those --
     // "*" means everything, which is what a function exit needs.
-    void MarkFlush(const string &reach = "*")  { if (markers) L(FLUSHMARK, reach); }
+    void MarkFlush(const string &reach = "*") {
+        if (!markers) return;
+        L(FLUSHMARK, reach);
+        for (auto id : loopstack) loopflushes.push_back({ id, reach });
+    }
     void MarkReload(const string &reach = "*") { if (markers) L(RELOADMARK, reach); }
 
     bool markers = false;                // A specialization's body: markers are expanded.
@@ -1835,7 +1843,7 @@ struct CodeGen {
         Append(head, "\n/* ---- types ---- */\n#pragma pack(push, 1)\n", tdecls, pdata,
                "#pragma pack(pop)\n\n/* ---- data ---- */\n", data);
         Append(result, "\n/* ---- extern prototypes ---- */\n", externs,
-               "\n/* ---- prototypes ---- */\n", protos, "\n/* ---- code ---- */\n", callable_code, task_holder_code, code);
+               "\n/* ---- prototypes ---- */\n", protos, "\n/* ---- code ---- */\n", callable_code, dispcode, task_holder_code, code);
     }
 };
 

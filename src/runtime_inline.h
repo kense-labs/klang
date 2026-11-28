@@ -1331,6 +1331,15 @@ R"KRT(static K_NOINLINE int64_t k_uleb_write_slow(uint8_t *p, uint64_t v) {
 
 )KRT"
 R"KRT(static inline int64_t k_uleb_write(uint8_t *p, uint64_t v) {
+#if !defined(__SANITIZE_ADDRESS__) && !defined(K_DEBUG)
+    if (K_LIKELY(v < 0x4000)) {
+        uint64_t two = (v >= 0x80);
+        p[0] = (uint8_t)(v | (two << 7));
+        p[1] = (uint8_t)(v >> 7);
+        return 1 + (int64_t)two;
+    }
+    return k_uleb_write_slow(p, v);
+#else
     if (K_LIKELY(v < 128)) {
         p[0] = (uint8_t)v;
         return 1;
@@ -1341,12 +1350,25 @@ R"KRT(static inline int64_t k_uleb_write(uint8_t *p, uint64_t v) {
         return 2;
     }
     return k_uleb_write_slow(p, v);
+#endif
 }
 
 )KRT"
 R"KRT(static inline int64_t k_zig_read(const uint8_t *p) {
     uint64_t u;
     uint8_t b0 = p[0];
+#if !defined(__SANITIZE_ADDRESS__) && !defined(K_DEBUG)
+    if (K_LIKELY(((uintptr_t)p & 0xfffu) != 0xfffu)) {
+        uint8_t b1 = p[1];
+        if (K_LIKELY(!((b0 & 0x80) && (b1 & 0x80)))) {
+            u = (b0 & 0x80) ? ((uint64_t)(b0 & 0x7f) | ((uint64_t)b1 << 7))
+                            : (uint64_t)b0;
+            return (int64_t)((u >> 1) ^ (0u - (u & 1)));
+        }
+        u = (uint64_t)k_uleb_read_slow(p);
+        return (int64_t)((u >> 1) ^ (0u - (u & 1)));
+    }
+#endif
     if (K_LIKELY(!(b0 & 0x80))) {
         u = b0;
     } else {
@@ -1950,7 +1972,7 @@ static size_t k_os_page_size(void) {
 )KRT"
 R"KRT(/* Installed by main as the runtime starts, before any worker can. */
 static void k_regions_init(void) {
-    k_page_size = k_os_page_size();
+    k_page_size = k_region_page ? k_region_page : k_os_page_size();
     k_fault_handle = AddVectoredExceptionHandler(1, k_fault_filter);
     if (!k_fault_handle)
         k_panic("cannot install data stack fault handler");
@@ -2051,6 +2073,8 @@ static K_TLS uintptr_t k_native_lo, k_native_hi;
 /* The alternate signal stack k_native_stack_init allocated, if it did. */
 static K_TLS void *k_sigstack;
 #define K_SIGSTACK_MIN (64u << 10)
+static uint8_t k_main_sigstack_buf[131072];
+static int k_main_sigstack_used = 0;
 /* What the fault handler replaced, for the faults that are not its own,
    and which of them it did (1: SIGSEGV, 2: SIGBUS), for k_fault_uninstall. */
 static struct sigaction k_prev_segv, k_prev_bus;
@@ -2091,7 +2115,7 @@ static size_t k_os_page_size(void) {
 
 )KRT"
 R"KRT(static void k_regions_init(void) {
-    k_page_size = k_os_page_size();
+    k_page_size = k_region_page ? k_region_page : k_os_page_size();
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = k_fault_handler;
@@ -2128,10 +2152,18 @@ static void k_native_stack_init(void) {
     uintptr_t lo = 0, hi = 0;
     if (!sigaltstack(NULL, &ss) && (ss.ss_flags & SS_DISABLE)) {
         ss.ss_size = k_sigstack_size();
-        ss.ss_sp = malloc(ss.ss_size);
-        ss.ss_flags = 0;
-        if (ss.ss_sp && !sigaltstack(&ss, NULL)) k_sigstack = ss.ss_sp;
-        else free(ss.ss_sp);
+        if (ss.ss_size <= sizeof(k_main_sigstack_buf) &&
+            __sync_bool_compare_and_swap(&k_main_sigstack_used, 0, 1)) {
+            ss.ss_sp = k_main_sigstack_buf;
+            ss.ss_flags = 0;
+            if (!sigaltstack(&ss, NULL)) k_sigstack = ss.ss_sp;
+            else __sync_lock_release(&k_main_sigstack_used);
+        } else {
+            ss.ss_sp = malloc(ss.ss_size);
+            ss.ss_flags = 0;
+            if (ss.ss_sp && !sigaltstack(&ss, NULL)) k_sigstack = ss.ss_sp;
+            else free(ss.ss_sp);
+        }
     }
     #if defined(__APPLE__)
         hi = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
@@ -2164,7 +2196,8 @@ static void k_native_stack_free(void) {
     ss.ss_flags = SS_DISABLE;
     ss.ss_size = k_sigstack_size();
     sigaltstack(&ss, NULL);
-    free(k_sigstack);
+    if (k_sigstack == k_main_sigstack_buf) __sync_lock_release(&k_main_sigstack_used);
+    else free(k_sigstack);
     k_sigstack = NULL;
 }
 
@@ -4906,6 +4939,13 @@ R"KRT(static int k_os_read_fd(int fd, k_rref out) {
     enum { block = 65536, initial = 2 * block };
     size_t room = k_os_read_room(out);
     size_t chunk = room >= initial ? initial : block;
+    struct stat st;
+    int check_bulk = 1;
+    if (room >= block && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && st.st_size > 0) {
+        uintmax_t sz = (uintmax_t)st.st_size;
+        chunk = sz < (uintmax_t)INT_MAX ? (size_t)sz : (size_t)INT_MAX;
+        check_bulk = 0;
+    }
     int first = 1;
     while (room >= block) {
         ssize_t n = k_os_read_retry(fd, out.stk->top, room < chunk ? room : chunk);
@@ -4920,8 +4960,7 @@ R"KRT(        /* Probe for a bulk transfer size after the larger first request
         if (first) {
             first = 0;
             chunk = block;
-            struct stat st;
-            if (n == initial && room > block && fstat(fd, &st) == 0 &&
+            if (check_bulk && n == initial && room > block && fstat(fd, &st) == 0 &&
                 S_ISREG(st.st_mode) && st.st_size > initial + block) {
                 uintmax_t left = (uintmax_t)st.st_size - initial;
                 chunk = left < INT_MAX ? (size_t)left : (size_t)INT_MAX;
@@ -5041,12 +5080,38 @@ R"KRT(/* write_file and append_file. */
 static uint8_t k_os_put_file(sl_u8 path, sl_u8 data, int append) {
     k_os_char p[K_OS_PATH_MAX];
     if (k_os_native(path, p) < 0) return 0;
+#ifdef _WIN32
     FILE *f = append ? k_os_fopen(p, "ab") : k_os_fopen(p, "wb");
     if (!f) return 0;
     size_t n = (size_t)(data.len < 0 ? 0 : data.len);
     int ok = fwrite(data.data, 1, n, f) == n;
     if (fclose(f) != 0) ok = 0;
     return ok ? 1 : 0;
+#else
+    int flags = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
+    int fd = open(p, flags, 0666);
+    if (fd < 0) return 0;
+    const uint8_t *src = data.data;
+    size_t left = (size_t)(data.len < 0 ? 0 : data.len);
+    int ok = 1;
+    while (left > 0) {
+        size_t chunk = left < (size_t)INT_MAX ? left : (size_t)INT_MAX;
+        ssize_t w = write(fd, src, chunk);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            ok = 0;
+            break;
+        }
+        if (w == 0) {
+            ok = 0;
+            break;
+        }
+        src += w;
+        left -= (size_t)w;
+    }
+    if (close(fd) != 0) ok = 0;
+    return ok ? 1 : 0;
+#endif
 }
 
 )KRT"

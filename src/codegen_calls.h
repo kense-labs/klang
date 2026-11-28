@@ -1271,6 +1271,82 @@ inline vector<string> CodeGen::EmitDispatch(Call *c, Dst d0, vector<Dst> *alldst
     auto varmode = enumtype->enu->varmode;
     auto ei = EIOf(enumtype);
     auto ts = TagSize(ei->en);
+
+    // Emit one shared dispatcher for single-argument pointer-based recursive
+    // tag dispatch, avoiding replicating multi-way switches inside every arm.
+    if (varmode && isref && an.size() == 1 && !c->fvbody && !sp0->sf->isextern &&
+        c->rettypes.size() <= 1 &&
+        (sp0->rets.empty() || (IsFix(sp0->rets[0]) && !NeedsResultLocation(sp0->rets[0])))) {
+        bool shared_ok = true;
+        bool any_rec = false, any_rf = false, any_caught = false;
+        FnSpec *rf_sp = nullptr;
+        for (size_t vi = 0; vi < ei->en->variants.size(); vi++) {
+            auto sp = c->dispatch[vi];
+            auto &ki = sinfo[sp];
+            if (sp->argtypes[pos]->kind != TY_REF || IsFatRef(sp->argtypes[pos]) ||
+                IsPoolParam(sp, pos) || ki.needssp || ki.located ||
+                !ki.freevars.empty()) {
+                shared_ok = false;
+                break;
+            }
+            any_rec |= sp->sf->isrec || sp->incycle;
+            if (ki.hasrf) {
+                any_rf = true;
+                bool caught = curspec && sp->needs.count(curspec);
+                if (!rf_sp || (caught && !any_caught)) rf_sp = sp;
+                if (caught) any_caught = true;
+            }
+        }
+        if (shared_ok && any_rec) {
+            auto &dname = dispwrappers[c->dispatch];
+            auto ret = sp0->rets.empty() ? string("void") : CT(sp0->rets[0]);
+            if (dname.empty()) {
+                dname = Unique("k_disp");
+                auto pt_ct = CT(st);
+                Append(protos, "static ", ret, " ", dname, "(", pt_ct, " p);\n");
+                Append(dispcode, "static ", ret, " ", dname, "(", pt_ct, " p) {\n");
+                Append(dispcode, "    switch (*(", IntCT(TagStore(ei->en)), " *)p) {\n");
+                for (size_t vi = 0; vi < ei->en->variants.size(); vi++) {
+                    auto sp = c->dispatch[vi];
+                    auto &ki = sinfo[sp];
+                    auto vt = VariantType(enumtype, (int)vi);
+                    auto p_expr = cat("((uint8_t *)p + ", ts, ")");
+                    auto call_expr = IsBytesT(vt)
+                        ? cat(ki.cname, "(", p_expr, ")")
+                        : cat(ki.cname, "((", CT(vt), " *)", p_expr, ")");
+                    Append(dispcode, "    case ", TagConst(ei, (int)vi), ": ",
+                           ret == "void" ? cat(call_expr, "; return;") : cat("return ", call_expr, ";"),
+                           "\n");
+                }
+                Append(dispcode, "    default: K_UNREACHABLE(", LocArgs(c->line), ");\n");
+                Append(dispcode, "    }\n");
+                Append(dispcode, "}\n\n");
+            }
+            auto pval = GenX(sn);
+            vector<string> p_args = { pval };
+            string reach;
+            for (size_t vi = 0; vi < ei->en->variants.size(); vi++) {
+                auto r = SyncReach(c->dispatch[vi], p_args, an);
+                if (r == "*") { reach = "*"; break; }
+                Append(reach, r, " ");
+            }
+            vector<string> retex(sp0->rets.size());
+            MarkFlush(reach);
+            if (ret == "void") {
+                L(dname, "(", pval, ");");
+            } else {
+                auto tv = T();
+                FixedLocal(sp0->rets[0], tv);
+                retex[0] = tv;
+                L(tv, " = ", dname, "(", pval, ");");
+            }
+            MarkReload(reach);
+            bool skip_rf = is_tail_rf && !c->fvbody && !any_caught &&
+                           c->rettypes.size() == 1 && TEq(c->rettypes[0], curspec->rets[0]);
+            if (any_rf && !skip_rf) EmitRfCheck(rf_sp);
+            return retex;
+        }
+    }
     string p, copied, sv, tag;
     vector<string> snap(ei->en->variants.size());
     auto scrutinee = [&]() {

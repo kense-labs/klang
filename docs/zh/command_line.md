@@ -62,7 +62,7 @@ k run hello.k -- input.txt --verbose
 
 `k run` 会将程序编译为 C 代码，使用内置在 `k` 中的 TinyCC 编译器在内存中编译该 C 代码，并在编译器自身的进程中运行它。这无需构建步骤，也不会写入任何文件。在 Windows 上无需其他额外依赖；在 Linux 上需要 C 库头文件（`libc6-dev` 或 `glibc-devel`）；在 macOS 上则需要 Xcode 命令行工具的 SDK。
 
-`--` 之后的参数归程序本身所有。`os` 模块会将这些参数传递给程序，其中第 0 个参数为传入时的根文件路径：
+`--` 之后的参数归程序本身所有。程序可以定义 `fn main()` 或 `async fn main()`，也可以在无 `main` 的源文件中直接执行顶级语句（包括顶级 `await`）。`os` 模块会将这些参数传递给程序，其中第 0 个参数为传入时的根文件路径：
 
 <!-- check-only -->
 ```klang

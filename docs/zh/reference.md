@@ -3487,7 +3487,8 @@ varint i8 i16 i32 i64 u8 u16 u32 u64 f32 f64`。
 
 **上下文关键字**（在其它任何地方均为普通标识符）：`from`
 （位于 `return` 值之后）、`upto`（位于类型中的无符号整数类型之后）、
-`errdefer`（仅在错误展开时执行的清理语句或代码块）、
+`using`（作用域资源绑定与清理块）、`errdefer`（仅在错误展开时执行的清理语句或代码块）、
+`async`（`async fn` 声明与 `async { … }` 任务块）、`await`（等待并恢复异步任务）、
 `inline` 与 `checkfree`（位于 `fn`、`recursive`、`simd` 或 `thread_fn` 之前）、
 `deprecated`（位于其他函数限定符之前，可选地后接一个字符串）、
 `fields`、`variants` 与 `types`（位于 `const for` 头部中）、

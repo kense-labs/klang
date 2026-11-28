@@ -821,7 +821,12 @@ inline Node *Optimizer::TryInline(Call *c) {
     }
     // Never into a recursive cycle: the inlined body's locals would become
     // the cycle function's own, upsetting the §7.8 stack-assignment rule.
-    if (curspec && (curspec->incycle || curspec->sf->isrec)) return nullptr;
+    if (curspec && (curspec->incycle || curspec->sf->isrec)) {
+        if (!K->outofline && !K->sf->issimd && !K->incycle && !K->sf->isrec &&
+            small && (!info.noinline || info.c_inlinable))
+            K->cinline = true;
+        return nullptr;
+    }
     if (!small && K->uses == 1 && colddepth > 0) {
         K->outofline = true;
         return nullptr;

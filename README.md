@@ -189,12 +189,16 @@ build inputs described by `.build` files.
 
 ## Project status
 
-K supports generics, tagged enums and pattern matching, concrete closures and
-specialized higher-order functions, checked dynamic callables, typed decorators,
-`async fn`, and structured task scopes. Hosted TCP and CPU inference workloads
-are reference deployments. WASI command programs run in Wasmtime. The roadmap
-tracks freestanding boot, wider Node.js compatibility, and production operating
-system, cloud, and AI targets.
+K supports generics, tagged enums and pattern matching (including `.Variant`
+shorthand), struct update syntax (`..base`), destructuring bindings, optional
+chaining (`?.`) and null coalescing (`??`), named call arguments, concrete
+closures and specialized higher-order functions, checked dynamic callables,
+typed decorators, `defer` / `errdefer` / `using` deterministic cleanup,
+mainless top-level scripts with `async fn main()` / top-level `await` /
+`async { ... }` blocks, and structured task scopes. Hosted TCP and CPU inference
+workloads are reference deployments. WASI command programs run in Wasmtime. The
+roadmap tracks freestanding boot, wider Node.js compatibility, and production
+operating system, cloud, and AI targets.
 [Development roadmap](docs/roadmap.md#milestones)
 
 ## Build from source
@@ -258,7 +262,7 @@ lock with the `k` from the archive.
 
 ## Run a program
 
-Save this program as `hello.k`.
+Save this program as `hello.k` (small scripts can also run top-level statements directly without `fn main()`):
 
 ```klang
 import std;

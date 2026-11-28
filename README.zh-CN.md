@@ -6,7 +6,7 @@
 <a id="the-k-programming-language"></a>
 # K 编程语言
 
-[English](README.zh-CN.md) · 简体中文
+[English](README.md) · 简体中文
 
 [架构](#核心架构) · [模块](#模块架构) · [构建](#从源码构建) · [运行程序](#运行程序) ·
 [WebAssembly](#构建-webassembly-可执行程序) ·
@@ -177,9 +177,7 @@ Node.js API 和 npm 项目兼容性仍是可选 Cordis 配置的路线图工作�
 <a id="project-status"></a>
 ## 项目状态
 
-K 支持泛型、带标签的枚举与模式匹配、具体闭包、特化高阶函数、受检查的动态可调用值、
-类型化装饰器、`async fn` 和结构化任务作用域。TCP 与 CPU 推理是当前的宿主参考工作负载。
-WASI 命令模块已在 Wasmtime 上验证。
+K 支持泛型、带标签的枚举与模式匹配（含 `.Variant` 前导点简写）、结构体更新（`..base`）、解构绑定、可选链（`?.`）与空合并（`??`）、具名函数实参、具体闭包、特化高阶函数、受检查的动态可调用值、类型化装饰器、`defer` / `errdefer` / `using` 确定性资源清理、无 `main` 直接执行的顶层脚本（含 `async fn main()`、顶级 `await` 与 `async { ... }` 任务块）以及结构化任务作用域。TCP 与 CPU 推理是当前的宿主参考工作负载。WASI 命令模块已在 Wasmtime 上验证。
 后续里程碑包括裸机启动、更广泛的 Node.js 兼容，以及操作系统、云和 AI 生产目标。
 [开发路线图](docs/zh/roadmap.md#milestones)
 
@@ -244,7 +242,7 @@ Linux 的 `cloud` 压缩包包含预构建的 Cordis 推理网关和 ONNX Runtim
 <a id="run-a-program"></a>
 ## 运行程序
 
-将以下程序保存为 `hello.k`。
+将以下程序保存为 `hello.k`（短小脚本也可省略 `fn main()` 直接编写顶级语句与 `await`）：
 
 ```klang
 import std;
