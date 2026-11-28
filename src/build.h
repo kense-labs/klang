@@ -249,7 +249,8 @@ inline filesystem::path RuntimeEntryPath(const Builder &b) {
     static const auto source = Sha256(RuntimeObjectSource());
     auto input = source + '\0';
     AppendToolchainIdentity(input, b);
-    return filesystem::path(KlangHome()) / "build/runtime" / cat(RuntimeCachePrefix, Sha256(input));
+    return (filesystem::path(KlangHome()) / "build" / "runtime" /
+            cat(RuntimeCachePrefix, Sha256(input))).lexically_normal().make_preferred();
 }
 
 // The macOS release can supply the optimized runtime for its Apple Clang
@@ -347,7 +348,8 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
     if (!opts.standalone) {
         auto entry = RuntimeEntryPath(b);
         runtime = (entry / (opts.debug ? "debug" : "release") /
-                   (tc.style == "msvc" ? "k_runtime.obj" : "k_runtime.o")).string();
+                   (tc.style == "msvc" ? "k_runtime.obj" : "k_runtime.o"))
+                      .lexically_normal().make_preferred().string();
         if (!opts.dryrun) {
             std::error_code ec;
             filesystem::create_directories(entry.parent_path(), ec);

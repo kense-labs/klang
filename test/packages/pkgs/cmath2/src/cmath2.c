@@ -1,10 +1,18 @@
 #include "cmath2.h"
 #include <stddef.h>
 
-_Static_assert(offsetof(cmath2_ints, len) == sizeof(void *), "K slices are packed");
-_Static_assert(sizeof(cmath2_ints) == sizeof(void *) + sizeof(int64_t), "K slice size");
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define CMATH2_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#else
+#define CMATH2_SA_CAT(a, b) a##b
+#define CMATH2_SA_NAME(line) CMATH2_SA_CAT(cmath2_sa_, line)
+#define CMATH2_STATIC_ASSERT(cond, msg) typedef char CMATH2_SA_NAME(__LINE__)[(cond) ? 1 : -1]
+#endif
+
+CMATH2_STATIC_ASSERT(offsetof(cmath2_ints, len) == sizeof(void *), "K slices are packed");
+CMATH2_STATIC_ASSERT(sizeof(cmath2_ints) == sizeof(void *) + sizeof(int64_t), "K slice size");
 #ifdef __wasi__
-_Static_assert(sizeof(void *) == 4, "the WASI fixture uses 32-bit pointers");
+CMATH2_STATIC_ASSERT(sizeof(void *) == 4, "the WASI fixture uses 32-bit pointers");
 #endif
 
 int32_t cmath2_square(int32_t x) { return x * x; }

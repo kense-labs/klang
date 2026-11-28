@@ -66,7 +66,8 @@ def check_native_toolchain(exe, base, *, jit):
         runtimes = [p for p in runtimes if p.suffix in (".o", ".obj")]
         require(packages == want, f"k build used {sorted(packages)}, k toolchain reports {sorted(want)}")
         code, out, err = run([exe, "build", "--dry-run", "--cc", info["cc"]["path"], "-o", app, source])
-        require(code == 0 and len(runtimes) == 1 and str(runtimes[0]) in out + err,
+        require(code == 0 and len(runtimes) == 1 and
+                runtimes[0].as_posix() in (out + err).replace("\\", "/"),
                 f"the reported compiler did not select the same runtime object:\n{out}{err}")
         app_opt = root / ("app-opt" + tc.EXE_SUFFIX)
         code, out, err = run([exe, "build", "-O3", "--lto", "--cpu=native", "-o", app_opt, source])
